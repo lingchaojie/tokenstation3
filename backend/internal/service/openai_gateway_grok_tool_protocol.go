@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -23,15 +22,28 @@ const (
 
 const grokResponsesClientToolMappingContextKey = "grok_responses_client_tool_mapping"
 
-func adaptGrokResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+func adaptResponsesClientToolsForFunctionUpstream(body []byte, upstream string) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	return adaptResponsesClientToolsForFunctionUpstreamWithMapping(
+		body,
+		upstream,
+		apicompat.ResponsesClientToolMapping{},
+	)
+}
+
+func adaptResponsesClientToolsForFunctionUpstreamWithMapping(
+	body []byte,
+	upstream string,
+	inherited apicompat.ResponsesClientToolMapping,
+	inheritedLoweredTools ...[]any,
+) ([]byte, apicompat.ResponsesClientToolMapping, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var requestBody map[string]any
 	if err := decoder.Decode(&requestBody); err != nil {
-		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("decode Grok Responses client tools: %w", err)
+		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("decode %s Responses client tools: %w", upstream, err)
 	}
 
-	mapping, changed, err := apicompat.AdaptResponsesClientTools(requestBody)
+	mapping, changed, err := apicompat.AdaptResponsesClientToolsWithInheritedMapping(requestBody, inherited, inheritedLoweredTools...)
 	if err != nil {
 		return body, apicompat.ResponsesClientToolMapping{}, err
 	}
@@ -40,13 +52,21 @@ func adaptGrokResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesClie
 	}
 	rebuilt, err := marshalOpenAIUpstreamJSON(requestBody)
 	if err != nil {
-		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("encode Grok Responses client tools: %w", err)
+		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("encode %s Responses client tools: %w", upstream, err)
 	}
 	return rebuilt, mapping, nil
 }
 
-func hasGrokResponsesClientToolMapping(mapping apicompat.ResponsesClientToolMapping) bool {
+func adaptGrokResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	return adaptResponsesClientToolsForFunctionUpstream(body, "Grok")
+}
+
+func hasResponsesClientToolMapping(mapping apicompat.ResponsesClientToolMapping) bool {
 	return len(mapping.CustomTools) > 0 || mapping.ToolSearch || len(mapping.NamespaceTools) > 0
+}
+
+func hasGrokResponsesClientToolMapping(mapping apicompat.ResponsesClientToolMapping) bool {
+	return hasResponsesClientToolMapping(mapping)
 }
 
 func setGrokResponsesClientToolMapping(c *gin.Context, mapping apicompat.ResponsesClientToolMapping) {
@@ -187,6 +207,16 @@ func newGrokResponsesClientToolStreamBody(
 	return body
 }
 
+// newResponsesClientToolStreamBody applies the same protocol restoration to
+// any function-only Responses upstream while retaining capture lifecycle hooks.
+func newResponsesClientToolStreamBody(
+	source io.ReadCloser,
+	mapping apicompat.ResponsesClientToolMapping,
+	maxLineSize int,
+) io.ReadCloser {
+	return newGrokResponsesClientToolStreamBody(source, mapping, maxLineSize)
+}
+
 func transformGrokResponsesClientToolStream(
 	source io.ReadCloser,
 	destination *io.PipeWriter,
@@ -204,8 +234,6 @@ func transformGrokResponsesClientToolStream(
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 	documents := newOpenAISSEJSONDocumentScanner(scanner)
 	restorer := apicompat.NewResponsesClientToolStreamRestorer(mapping)
-	rawProviderState := openAIResponsesSSEAttemptState{}
-	rawProviderTerminal := false
 	buffered := bufio.NewWriterSize(destination, 4*1024)
 	pendingFields := make([]string, 0, 2)
 	pendingFieldBytes := 0
@@ -267,15 +295,6 @@ func transformGrokResponsesClientToolStream(
 		}
 		return buffered.Flush()
 	}
-	declaredEventType := func() string {
-		for index := len(pendingFields) - 1; index >= 0; index-- {
-			if eventType, ok := extractOpenAISSEEventLine(pendingFields[index]); ok {
-				return eventType
-			}
-		}
-		return ""
-	}
-
 	for documents.Scan() {
 		line := documents.Text()
 		data, isData := extractOpenAISSEDataLine(line)
@@ -283,19 +302,6 @@ func transformGrokResponsesClientToolStream(
 			payload := []byte(data)
 			payloads := [][]byte{payload}
 			if json.Valid(payload) {
-				if rawProviderTerminal {
-					fail(errors.New("Grok Responses data arrived after a terminal event")) //nolint:staticcheck // Protocol name is intentionally capitalized.
-					return
-				}
-				validatedType, validateErr := validateOpenAIResponsesSSEPayload(payload, declaredEventType())
-				if validateErr == nil {
-					validateErr = rawProviderState.observe(payload, validatedType)
-				}
-				if validateErr != nil {
-					fail(fmt.Errorf("validate raw Grok Responses event: %w", validateErr))
-					return
-				}
-				rawProviderTerminal = isOpenAICompatResponsesTerminalEvent(validatedType)
 				var err error
 				payloads, _, err = restorer.RestoreEvent(payload)
 				if err != nil {

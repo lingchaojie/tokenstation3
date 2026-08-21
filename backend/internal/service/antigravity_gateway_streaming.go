@@ -150,7 +150,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	semanticOutput := false
 	terminalObserved := false
 	validProviderPayloadObserved := false
-	var providerState geminiProviderStreamState
 
 	type scanEvent struct {
 		line string
@@ -258,20 +257,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 		case ev, ok := <-events:
 			if !ok {
 				providerScanFinished = true
-				if !terminalObserved && providerState.applicationTerminalObserved() {
-					terminalObserved = true
-				}
 				if stagedErr != nil && !staged.committed {
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity gemini pre-output stage exceeded limit")
-				}
-				if !terminalObserved {
-					if !staged.committed && !cw.Disconnected() {
-						return nil, newIncompleteProviderStreamFailover(resp, "antigravity gemini stream ended before semantic output")
-					}
-					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: true}, fmt.Errorf("stream usage incomplete: missing terminal event")
-				}
-				if !validProviderPayloadObserved {
-					return nil, newIncompleteProviderStreamFailover(resp, "antigravity gemini stream ended without a valid provider payload")
 				}
 				if !staged.committed && !cw.Disconnected() {
 					if !writeStaged("", true) {
@@ -281,9 +268,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
 			}
 			if ev.err != nil {
-				if !terminalObserved && providerState.applicationTerminalObserved() {
-					terminalObserved = true
-				}
 				if terminalObserved {
 					result := &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}
 					if staged.committed || cw.Disconnected() || semanticOutput {
@@ -321,12 +305,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 					continue
 				}
 				if payload == "[DONE]" {
-					if err := providerState.observeDone(); err != nil {
-						if !staged.committed {
-							return nil, newIncompleteProviderStreamFailover(resp, err.Error())
-						}
-						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, err
-					}
 					terminalObserved = true
 					writeStaged(line+"\n", validProviderPayloadObserved)
 					continue
@@ -340,23 +318,16 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 					}
 					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, errors.New("invalid wrapped Antigravity Gemini payload")
 				}
-				providerPayload, stateErr := providerState.observePayload(inner)
-				if stateErr != nil {
-					if !staged.committed {
-						return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-					}
-					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, stateErr
-				}
 				payload = string(inner)
 
 				// 解析 usage
 				if u := extractGeminiUsage(inner); u != nil {
 					usage = u
 				}
-				if providerPayload {
-					validProviderPayloadObserved = true
+				validProviderPayloadObserved = gjson.ValidBytes(inner)
+				if strings.TrimSpace(gjson.GetBytes(inner, "candidates.0.finishReason").String()) != "" {
+					terminalObserved = true
 				}
-				terminalObserved = providerState.terminalObserved()
 				if geminiPayloadHasSemanticOutput(inner) {
 					semanticOutput = true
 				}
@@ -440,9 +411,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	var firstTokenMs *int
 	var last map[string]any
 	var lastWithParts map[string]any
-	terminalObserved := false
-	validProviderPayloadObserved := false
-	var providerState geminiProviderStreamState
 	var collectedImageParts []map[string]any // 收集所有包含图片的 parts
 	var collectedTextParts []string          // 收集所有文本片段
 
@@ -467,10 +435,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 
 		payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 		if payload == "[DONE]" {
-			if err := providerState.observeDone(); err != nil {
-				return nil, newIncompleteProviderStreamFailover(resp, err.Error())
-			}
-			terminalObserved = true
 			continue
 		}
 		if payload == "" {
@@ -482,19 +446,10 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 		if parseErr != nil || inner == nil {
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Antigravity Gemini payload")
 		}
-		providerPayload, stateErr := providerState.observePayload(inner)
-		if stateErr != nil {
-			return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-		}
-
 		parsed, err := decodeGeminiCompatResponse(inner)
 		if err != nil {
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid Antigravity Gemini JSON payload")
 		}
-		if providerPayload {
-			validProviderPayloadObserved = true
-		}
-
 		// 记录首 token 时间
 		if firstTokenMs == nil {
 			ms := int(time.Since(startTime).Milliseconds())
@@ -502,8 +457,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 		}
 
 		last = parsed
-		terminalObserved = providerState.terminalObserved()
-
 		// 提取 usage
 		if u := extractGeminiUsage(inner); u != nil {
 			usage = u
@@ -534,15 +487,6 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	}
 
 returnResponse:
-	if !terminalObserved && providerState.applicationTerminalObserved() {
-		terminalObserved = true
-	}
-	if !terminalObserved {
-		return nil, newIncompleteProviderStreamFailover(resp, "antigravity gemini aggregate stream ended before terminal event")
-	}
-	if !validProviderPayloadObserved {
-		return nil, newIncompleteProviderStreamFailover(resp, "antigravity gemini aggregate stream ended without a valid provider payload")
-	}
 	// 选择最后一个有效响应
 	finalResponse := pickGeminiCollectResult(last, lastWithParts)
 
@@ -866,9 +810,6 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 	var lastWithParts map[string]any
 	var collectedParts []map[string]any // 收集所有 parts（包括 text、thinking、functionCall、inlineData 等）
 	var meaningfulResponse bool
-	var validProviderPayloadObserved bool
-	terminalObserved := false
-	var providerState geminiProviderStreamState
 
 	for {
 		line, ok, err := lineReader.Next()
@@ -890,10 +831,6 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 
 		payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 		if payload == "[DONE]" {
-			if err := providerState.observeDone(); err != nil {
-				return nil, nil, newIncompleteProviderStreamFailover(resp, err.Error())
-			}
-			terminalObserved = true
 			continue
 		}
 		if payload == "" {
@@ -905,22 +842,13 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 		if parseErr != nil || inner == nil {
 			return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Antigravity Gemini payload")
 		}
-		providerPayload, stateErr := providerState.observePayload(inner)
-		if stateErr != nil {
-			return nil, nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-		}
 		upstreamResponseModelObserverFromContext(c).ObserveGemini(inner)
 
 		parsed, err := decodeGeminiCompatResponse(inner)
 		if err != nil {
 			return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid Antigravity Gemini JSON payload")
 		}
-		if providerPayload {
-			validProviderPayloadObserved = true
-		}
-
 		last = parsed
-		terminalObserved = providerState.terminalObserved()
 
 		// 保留最后一个有 parts 的响应，并收集所有 parts
 		parts := extractGeminiParts(parsed)
@@ -942,15 +870,6 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 	}
 
 returnResponse:
-	if !terminalObserved && providerState.applicationTerminalObserved() {
-		terminalObserved = true
-	}
-	if !terminalObserved {
-		return nil, nil, newIncompleteProviderStreamFailover(resp, "antigravity claude aggregate stream ended before terminal event")
-	}
-	if !validProviderPayloadObserved {
-		return nil, nil, newIncompleteProviderStreamFailover(resp, "antigravity claude aggregate stream ended without a valid provider payload")
-	}
 	// 处理空响应情况 — 触发同账号重试 + failover 切换账号
 	if !meaningfulResponse {
 		logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] warning: empty stream response (claude non-stream), triggering failover")
@@ -1036,7 +955,6 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 	semanticOutput := false
 	terminalObserved := false
 	validProviderPayloadObserved := false
-	var providerState geminiProviderStreamState
 	// 使用 Scanner 并限制单行大小，避免 ReadString 无上限导致 OOM
 	readActivity := newProviderBodyReadActivity(resp.Body)
 	scanner := bufio.NewScanner(readActivity)
@@ -1171,46 +1089,27 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 		case ev, ok := <-events:
 			if !ok {
 				providerScanFinished = true
-				if !terminalObserved && providerState.applicationTerminalObserved() {
-					terminalObserved = true
-				}
 				if stagedErr != nil && !staged.committed {
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity claude pre-output stage exceeded limit")
 				}
-				if !terminalObserved {
-					if !staged.committed && !cw.Disconnected() {
-						return nil, newIncompleteProviderStreamFailover(resp, "antigravity claude stream ended before semantic output")
-					}
-					return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("stream usage incomplete: missing terminal event")
-				}
-				if !validProviderPayloadObserved {
-					if staged.committed || semanticOutput {
-						return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, fmt.Errorf("stream usage incomplete: terminal event arrived before a valid provider payload")
-					}
-					return nil, newIncompleteProviderStreamFailover(resp, "antigravity claude stream ended without a valid provider payload")
-				}
 				// 上游完成，发送结束事件
 				finalEvents, agUsage := processor.Finish()
+				convertedUsage := convertUsage(agUsage)
+				if !semanticOutput && len(finalEvents) == 0 && convertedUsage.InputTokens == 0 && convertedUsage.OutputTokens == 0 && convertedUsage.CacheCreationInputTokens == 0 && convertedUsage.CacheReadInputTokens == 0 {
+					return nil, newIncompleteProviderStreamFailover(resp, "empty Antigravity Claude stream response")
+				}
 				if len(finalEvents) > 0 {
 					writeStaged(finalEvents, true)
 					if stagedErr != nil {
 						if !staged.committed {
 							return nil, newIncompleteProviderStreamFailover(resp, "antigravity claude pre-output stage exceeded limit")
 						}
-						return &antigravityStreamResult{usage: convertUsage(agUsage), firstTokenMs: firstTokenMs, semanticOutput: true}, stagedErr
+						return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, semanticOutput: true}, stagedErr
 					}
-				} else if !processor.MessageStartSent() && !cw.Disconnected() {
-					// 整个流未收到任何可解析的上游数据（全部 SSE 行均无法被 JSON 解析），
-					// 触发 failover 在同账号重试，避免向客户端发出缺少 message_start 的残缺流
-					logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Claude-Stream] empty stream response (no valid events parsed), triggering failover")
-					return nil, newIncompleteProviderStreamFailover(resp, "empty stream response from upstream")
 				}
-				return &antigravityStreamResult{usage: convertUsage(agUsage), firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
+				return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
 			}
 			if ev.err != nil {
-				if !terminalObserved && providerState.applicationTerminalObserved() {
-					terminalObserved = true
-				}
 				if terminalObserved {
 					result := &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}
 					if staged.committed || cw.Disconnected() || semanticOutput {
@@ -1241,12 +1140,6 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 				switch payload {
 				case "":
 				case "[DONE]":
-					if err := providerState.observeDone(); err != nil {
-						if !staged.committed {
-							return nil, newIncompleteProviderStreamFailover(resp, err.Error())
-						}
-						return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, err
-					}
 					terminalObserved = true
 				default:
 					inner, unwrapErr := s.unwrapV1InternalResponse([]byte(payload))
@@ -1256,17 +1149,12 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 						}
 						return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, errors.New("invalid wrapped Antigravity Gemini payload")
 					}
-					providerPayload, stateErr := providerState.observePayload(inner)
-					if stateErr != nil {
-						if !staged.committed {
-							return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-						}
-						return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}, stateErr
-					}
-					if providerPayload && (geminiPayloadHasSemanticOutput(inner) || strings.TrimSpace(gjson.GetBytes(inner, "promptFeedback.blockReason").String()) != "") {
+					if gjson.ValidBytes(inner) && (geminiPayloadHasSemanticOutput(inner) || strings.TrimSpace(gjson.GetBytes(inner, "promptFeedback.blockReason").String()) != "") {
 						validProviderPayloadObserved = true
 					}
-					terminalObserved = providerState.terminalObserved()
+					if strings.TrimSpace(gjson.GetBytes(inner, "candidates.0.finishReason").String()) != "" {
+						terminalObserved = true
+					}
 				}
 			}
 

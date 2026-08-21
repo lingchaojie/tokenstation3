@@ -589,6 +589,10 @@ func (r *userSubscriptionRepository) ClearScheduledPlanChange(ctx context.Contex
 
 func (r *userSubscriptionRepository) ApplyScheduledPlanChange(ctx context.Context, id int64, now time.Time) (*service.UserSubscription, bool, error) {
 	client := clientFromContext(ctx, r.client)
+	// SQLite stores timestamps as text in unit/simple-mode databases. Normalize
+	// the comparison parameter so equal absolute instants never compare by their
+	// local wall-clock representation (for example UTC versus UTC-04:00).
+	now = now.UTC()
 	const updateSQL = `
 		UPDATE user_subscriptions
 		SET

@@ -79,7 +79,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(apiMocks.getPlatformQuotas).toHaveBeenCalledWith(99)
   })
 
-  it('空数据渲染 6 个 platform 行', async () => {
+  it('空数据渲染全部 9 个 platform 行', async () => {
     const w = await mountAndOpen()
     const html = w.html()
     expect(html).toContain('anthropic')
@@ -88,6 +88,9 @@ describe('UserPlatformQuotaModal', () => {
     expect(html).toContain('gemini')
     expect(html).toContain('antigravity')
     expect(html).toContain('grok')
+    expect(html).toContain('kimi')
+    expect(html).toContain('zhipu')
+    expect(html).toContain('deepseek')
   })
 
   it('已有数据正确填充 limit input', async () => {
@@ -99,17 +102,23 @@ describe('UserPlatformQuotaModal', () => {
     })
     const w = await mountAndOpen()
     const inputs = w.findAll('input[type=number]')
-    // 6 platforms × 3 windows = 18 inputs
-    expect(inputs.length).toBe(18)
+    // 9 platforms × 3 windows = 27 inputs
+    expect(inputs.length).toBe(27)
     // 第一个 input 是 anthropic.daily = 10
     expect((inputs[0].element as HTMLInputElement).value).toBe('10')
   })
 
-  it('保存提交完整 6 platform payload', async () => {
+  it('保存提交完整 9 platform payload，并保留国产平台现有值', async () => {
     apiMocks.getPlatformQuotas.mockResolvedValueOnce({
       platform_quotas: [
         { platform: 'openai', daily_limit_usd: null, weekly_limit_usd: 20, monthly_limit_usd: null,
           daily_usage_usd: 0, weekly_usage_usd: 0, monthly_usage_usd: 0 },
+        { platform: 'kimi', daily_limit_usd: 3, weekly_limit_usd: 12, monthly_limit_usd: 40,
+          daily_usage_usd: 1, weekly_usage_usd: 2, monthly_usage_usd: 3 },
+        { platform: 'zhipu', daily_limit_usd: 4, weekly_limit_usd: 16, monthly_limit_usd: 50,
+          daily_usage_usd: 1, weekly_usage_usd: 2, monthly_usage_usd: 3 },
+        { platform: 'deepseek', daily_limit_usd: 5, weekly_limit_usd: 20, monthly_limit_usd: 60,
+          daily_usage_usd: 1, weekly_usage_usd: 2, monthly_usage_usd: 3 },
       ],
     })
     const w = await mountAndOpen()
@@ -122,9 +131,18 @@ describe('UserPlatformQuotaModal', () => {
     expect(apiMocks.updatePlatformQuotas).toHaveBeenCalledTimes(1)
     const [uid, payload] = apiMocks.updatePlatformQuotas.mock.calls[0]
     expect(uid).toBe(99)
-    expect(payload).toHaveLength(6) // 6 platforms always submitted
+    expect(payload).toHaveLength(9)
     const openai = payload.find((p: any) => p.platform === 'openai')
     expect(openai.weekly_limit_usd).toBe(20)
+    expect(payload.find((p: any) => p.platform === 'kimi')).toMatchObject({
+      daily_limit_usd: 3, weekly_limit_usd: 12, monthly_limit_usd: 40,
+    })
+    expect(payload.find((p: any) => p.platform === 'zhipu')).toMatchObject({
+      daily_limit_usd: 4, weekly_limit_usd: 16, monthly_limit_usd: 50,
+    })
+    expect(payload.find((p: any) => p.platform === 'deepseek')).toMatchObject({
+      daily_limit_usd: 5, weekly_limit_usd: 20, monthly_limit_usd: 60,
+    })
   })
 
   it('全部清空把所有 limit 置 null（确认通过）', async () => {

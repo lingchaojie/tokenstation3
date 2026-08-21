@@ -38,12 +38,6 @@ var openaiCCRawAllowedHeaders = map[string]bool{
 	"user-agent":      true,
 }
 
-const (
-	maxOpenAIChatChoicesPerAttempt       = 1024
-	maxOpenAIChatToolCallsPerChoice      = 1024
-	maxOpenAIChatRetainedIdentifierBytes = 1024
-)
-
 func gjsonCollectionHasValues(value gjson.Result) bool {
 	hasValues := false
 	value.ForEach(func(_, _ gjson.Result) bool {
@@ -123,6 +117,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, policyErr
 	}
 	upstreamBody = updatedBody
+	if account.Platform == PlatformGrok {
+		strippedBody, stripErr := stripRedundantGrokChatViewImageTool(upstreamBody)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip redundant Grok Chat view_image tool: %w", stripErr)
+		}
+		upstreamBody = strippedBody
+	}
 
 	// Grok Composer does not accept image_url parts directly, but Grok Build
 	// can describe the images first. Bridge only this exact failure mode.
@@ -210,7 +211,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				Kind:               kind,
 				Message:            upstreamMsg,
 			})
-			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.StatusCode, resp.Header, respBody)
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 				return nil, &UpstreamFailoverError{
 					StatusCode:                resp.StatusCode,
@@ -233,7 +234,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 
 	if account.Platform == PlatformGrok {
-		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
+		s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.Header, resp.StatusCode)
 	}
 
 	// 8. Forward response
@@ -242,7 +243,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if clientStream {
 		result, forwardErr = s.streamRawChatCompletions(ctx, c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, len(body))
 	} else {
-		result, forwardErr = s.bufferRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.bufferRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	finishOpenAIHTTPCapture(resp)
 	var failoverErr *UpstreamFailoverError
@@ -312,10 +313,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	clientDisconnected := false
 	clientOutputStarted := false
 	semanticOutput := false
-	terminalObserved := false
-	applicationTerminalObserved := false
-	providerPayloadObserved := false
-	choiceState := openAIChatChoiceStreamState{}
 	var staged stagedConvertedStream
 	var stagedErr error
 	defer func() { _ = staged.close() }()
@@ -325,11 +322,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		if clientDisconnected {
 			return
 		}
-		commit := semanticOutput || (applicationTerminalObserved && providerPayloadObserved)
-		if refusalDetector.Enabled() {
-			commit = (refusalDetector.ShouldReleaseClientOutput() && semanticOutput) ||
-				(terminalObserved && applicationTerminalObserved && providerPayloadObserved)
-		}
+		commit := refusalDetector.ShouldReleaseClientOutput()
 		if err := staged.write(c, writeStreamHeaders, line+"\n", commit); err != nil {
 			var clientWriteErr *stagedConvertedClientWriteError
 			if !errors.As(err, &clientWriteErr) {
@@ -418,52 +411,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		idleTimer.Reset(delay)
 	}
 	resetIdleTimer := func() { resetIdleTimerAfter(streamIdleTimeout) }
-	drainCaptureBeforeParserReturn := func() {
-		if !captureResponseNeedsDrain(resp.Body) {
-			return
-		}
-		drainIdle := streamIdleTimeout
-		if drainIdle <= 0 {
-			drainIdle = captureOverflowDrainTimeout
-		}
-		timer := time.NewTimer(drainIdle)
-		defer timer.Stop()
-		requestCtx := ginRequestContext(c)
-		abortAndJoin := func() {
-			markCaptureResponseTruncated(resp.Body)
-			closeCaptureResponseUnderlying(resp)
-			for range events {
-			}
-			<-scannerDone
-		}
-		for captureResponseNeedsDrain(resp.Body) {
-			select {
-			case _, ok := <-events:
-				if !ok {
-					return
-				}
-			case <-requestCtx.Done():
-				abortAndJoin()
-				return
-			case <-timer.C:
-				remaining := drainIdle - time.Since(readActivity.LastReadTime())
-				if remaining > 0 {
-					timer.Reset(remaining)
-					continue
-				}
-				abortAndJoin()
-				return
-			}
-		}
-	}
-	providerProtocolFailure := func(protocolErr error) (*OpenAIForwardResult, error) {
-		drainCaptureBeforeParserReturn()
-		if staged.committed || clientDisconnected {
-			return result(), protocolErr
-		}
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, protocolErr.Error())
-	}
-
 	var scanErr error
 scanLoop:
 	for {
@@ -492,43 +439,12 @@ scanLoop:
 		}
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
-			if terminalObserved && trimmedPayload != "" {
-				protocolErr := errors.New("OpenAI chat_completions data arrived after [DONE]")
-				return providerProtocolFailure(protocolErr)
-			}
 			if trimmedPayload == "[DONE]" {
-				if !choiceState.complete() {
-					protocolErr := errors.New("OpenAI chat_completions [DONE] arrived before all choices had a finish_reason")
-					return providerProtocolFailure(protocolErr)
-				}
-				terminalObserved = true
 				if refusalDetector.IsSilentRefusal() {
 					continue
 				}
 			} else {
-				if !gjson.Valid(payload) {
-					protocolErr := errors.New("OpenAI chat_completions returned malformed JSON data")
-					return providerProtocolFailure(protocolErr)
-				}
-				providerPayload, protocolErr := classifyOpenAIChatStreamPayload(payload)
-				if protocolErr != nil {
-					return providerProtocolFailure(protocolErr)
-				}
-				if providerPayload {
-					providerPayloadObserved = true
-				}
-				// Observe only after the strict per-frame shape/cap check above, but
-				// before lifecycle validation so the intentional large-request empty
-				// stop signal retains its dedicated failover classification.
 				refusalDetector.ObservePayload([]byte(payload))
-				applicationTerminalObserved, protocolErr = choiceState.observe(payload)
-				if protocolErr != nil {
-					if refusalDetector.IsSilentRefusal() && !clientDisconnected {
-						drainCaptureBeforeParserReturn()
-						return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
-					}
-					return providerProtocolFailure(protocolErr)
-				}
 				observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 				if openAIChatPayloadHasSemanticOutput(payload) {
 					semanticOutput = true
@@ -575,28 +491,9 @@ scanLoop:
 		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions stream read failed before semantic output")
 	}
 
-	if !terminalObserved || !applicationTerminalObserved {
-		if staged.committed || clientDisconnected {
-			return result(), errors.New("OpenAI chat_completions stream ended before [DONE]")
-		}
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions stream ended before semantic output")
-	}
-	// A large-request empty completion with finish_reason=stop is the
-	// provider's recognizable silent-refusal signal. Preserve its dedicated
-	// failover classification even though it deliberately contains no valid
-	// provider payload/semantic output.
-	if refusalDetector.IsSilentRefusal() && !clientDisconnected {
-		return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
-	}
-	if !providerPayloadObserved {
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions stream ended without a valid provider payload")
-	}
-
 	if !clientOutputStarted && !clientDisconnected {
 		if refusalDetector.IsSilentRefusal() {
-			if !clientDisconnected {
-				return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
-			}
+			return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
 		} else if err := staged.write(c, writeStreamHeaders, "", true); err != nil {
 			return result(), err
 		}
@@ -657,507 +554,6 @@ func openAIChatDeltaHasSemanticOutput(delta gjson.Result) bool {
 		strings.TrimSpace(audio.Get("id").String()) != "")
 }
 
-func validateOpenAIChatDeltaShape(delta gjson.Result) error {
-	if !delta.IsObject() {
-		return nil
-	}
-	if role := delta.Get("role"); role.Exists() && (role.Type != gjson.String || role.String() != "assistant") {
-		return errors.New("OpenAI chat_completions role was not assistant")
-	}
-	for _, path := range []string{"content", "refusal", "reasoning", "reasoning_content", "reasoning_summary"} {
-		value := delta.Get(path)
-		if value.Exists() && value.Type != gjson.String && value.Type != gjson.Null {
-			return fmt.Errorf("OpenAI chat_completions %s was not a string", path)
-		}
-	}
-	toolCalls := delta.Get("tool_calls")
-	if toolCalls.Exists() {
-		if !toolCalls.IsArray() {
-			return errors.New("OpenAI chat_completions tool_calls was not an array")
-		}
-		seenIndexes := make(map[int64]struct{})
-		seenIDs := make(map[string]struct{})
-		position := 0
-		var shapeErr error
-		toolCalls.ForEach(func(_, call gjson.Result) bool {
-			if position >= maxOpenAIChatToolCallsPerChoice {
-				shapeErr = errors.New("OpenAI chat_completions contained too many tool calls")
-				return false
-			}
-			if !call.IsObject() || !call.Get("function").IsObject() {
-				shapeErr = errors.New("OpenAI chat_completions tool call was malformed")
-				return false
-			}
-			if index := call.Get("index"); index.Exists() && !nonNegativeIntegerGJSON(index) {
-				shapeErr = errors.New("OpenAI chat_completions tool call index was not a non-negative integer")
-				return false
-			}
-			index := int64(position)
-			if explicit := call.Get("index"); explicit.Exists() {
-				index = explicit.Int()
-			}
-			if _, duplicate := seenIndexes[index]; duplicate {
-				shapeErr = fmt.Errorf("OpenAI chat_completions duplicated tool call index %d", index)
-				return false
-			}
-			seenIndexes[index] = struct{}{}
-			if id := call.Get("id"); id.Exists() && (id.Type != gjson.String || strings.TrimSpace(id.String()) == "") {
-				shapeErr = errors.New("OpenAI chat_completions tool call id was not a non-empty string")
-				return false
-			}
-			if id := call.Get("id"); id.Type == gjson.String && len(id.String()) > maxOpenAIChatRetainedIdentifierBytes {
-				shapeErr = errors.New("OpenAI chat_completions tool call id was too long")
-				return false
-			}
-			if id := strings.TrimSpace(call.Get("id").String()); id != "" {
-				if _, duplicate := seenIDs[id]; duplicate {
-					shapeErr = fmt.Errorf("OpenAI chat_completions duplicated tool call id %q", id)
-					return false
-				}
-				seenIDs[id] = struct{}{}
-			}
-			if callType := call.Get("type"); callType.Exists() && (callType.Type != gjson.String || callType.String() != "function") {
-				shapeErr = errors.New("OpenAI chat_completions tool call type was not function")
-				return false
-			}
-			for _, path := range []string{"function.name", "function.arguments"} {
-				value := call.Get(path)
-				if value.Exists() && value.Type != gjson.String {
-					shapeErr = fmt.Errorf("OpenAI chat_completions tool call %s was not a string", path)
-					return false
-				}
-			}
-			if name := call.Get("function.name"); name.Type == gjson.String && len(name.String()) > maxOpenAIChatRetainedIdentifierBytes {
-				shapeErr = errors.New("OpenAI chat_completions tool call function.name was too long")
-				return false
-			}
-			position++
-			return true
-		})
-		if shapeErr != nil {
-			return shapeErr
-		}
-	}
-	for _, objectPath := range []string{"function_call", "audio"} {
-		object := delta.Get(objectPath)
-		if object.Exists() && !object.IsObject() {
-			return fmt.Errorf("OpenAI chat_completions %s was not an object", objectPath)
-		}
-	}
-	if audio := delta.Get("audio"); audio.Exists() {
-		if !nonEmptyGJSONString(audio.Get("id")) || !nonEmptyGJSONString(audio.Get("data")) || !nonEmptyGJSONString(audio.Get("transcript")) ||
-			!nonNegativeIntegerGJSON(audio.Get("expires_at")) {
-			return errors.New("OpenAI chat_completions audio was incomplete")
-		}
-	}
-	for _, path := range []string{"function_call.name", "function_call.arguments", "audio.data", "audio.transcript", "audio.id"} {
-		value := delta.Get(path)
-		if value.Exists() && value.Type != gjson.String {
-			return fmt.Errorf("OpenAI chat_completions %s was not a string", path)
-		}
-	}
-	if name := delta.Get("function_call.name"); name.Type == gjson.String && len(name.String()) > maxOpenAIChatRetainedIdentifierBytes {
-		return errors.New("OpenAI chat_completions function_call name was too long")
-	}
-	return nil
-}
-
-func validateOpenAIChatBufferedMessageShape(message gjson.Result) error {
-	if !message.IsObject() {
-		return errors.New("OpenAI chat_completions terminal message was not an object")
-	}
-	if role := message.Get("role"); role.Type != gjson.String || role.String() != "assistant" {
-		return errors.New("OpenAI chat_completions terminal message role was not assistant")
-	}
-	if err := validateOpenAIChatDeltaShape(message); err != nil {
-		return err
-	}
-	toolCalls := message.Get("tool_calls")
-	if toolCalls.Exists() {
-		if !toolCalls.IsArray() || !gjsonCollectionHasValues(toolCalls) {
-			return errors.New("OpenAI chat_completions terminal tool_calls was empty or malformed")
-		}
-		seenIDs := make(map[string]struct{})
-		seenIndexes := make(map[int64]struct{})
-		position := 0
-		var shapeErr error
-		toolCalls.ForEach(func(_, call gjson.Result) bool {
-			if position >= maxOpenAIChatToolCallsPerChoice {
-				shapeErr = errors.New("OpenAI chat_completions terminal contained too many tool calls")
-				return false
-			}
-			if !nonEmptyGJSONString(call.Get("id")) || call.Get("type").Type != gjson.String || call.Get("type").String() != "function" ||
-				!nonEmptyGJSONString(call.Get("function.name")) || call.Get("function.arguments").Type != gjson.String {
-				shapeErr = errors.New("OpenAI chat_completions terminal tool call was incomplete")
-				return false
-			}
-			id := call.Get("id").String()
-			if _, duplicate := seenIDs[id]; duplicate {
-				shapeErr = errors.New("OpenAI chat_completions terminal tool call id was duplicated")
-				return false
-			}
-			seenIDs[id] = struct{}{}
-			index := int64(position)
-			if explicit := call.Get("index"); explicit.Exists() {
-				index = explicit.Int()
-			}
-			if _, duplicate := seenIndexes[index]; duplicate {
-				shapeErr = errors.New("OpenAI chat_completions terminal tool call index was duplicated")
-				return false
-			}
-			seenIndexes[index] = struct{}{}
-			position++
-			return true
-		})
-		if shapeErr != nil {
-			return shapeErr
-		}
-	}
-	if functionCall := message.Get("function_call"); functionCall.Exists() &&
-		(!nonEmptyGJSONString(functionCall.Get("name")) || functionCall.Get("arguments").Type != gjson.String) {
-		return errors.New("OpenAI chat_completions terminal function_call was incomplete")
-	}
-	if name := message.Get("function_call.name"); name.Type == gjson.String && len(name.String()) > maxOpenAIChatRetainedIdentifierBytes {
-		return errors.New("OpenAI chat_completions terminal function_call name was too long")
-	}
-	return nil
-}
-
-func openAIChatPayloadIsValidProviderPayload(payload string) bool {
-	recognized, err := classifyOpenAIChatStreamPayload(payload)
-	return err == nil && recognized
-}
-
-type openAIChatChoiceStreamState struct {
-	seen         map[int64]struct{}
-	finished     map[int64]struct{}
-	semantic     map[int64]bool
-	tools        map[int64]map[int64]*openAIChatToolCallStreamState
-	legacy       map[int64]*openAIChatLegacyFunctionStreamState
-	toolIDOwner  map[string]openAIChatToolCallOwner
-	identity     map[string]openAIResponsesDoneFieldDigest
-	trackedTools int
-}
-
-type openAIChatToolCallOwner struct {
-	choiceIndex int64
-	toolIndex   int64
-}
-
-type openAIChatToolCallStreamState struct {
-	id            string
-	callType      string
-	name          string
-	argumentsSeen bool
-}
-
-type openAIChatLegacyFunctionStreamState struct {
-	name          string
-	argumentsSeen bool
-}
-
-func (s *openAIChatChoiceStreamState) observe(payload string) (bool, error) {
-	root := gjson.Parse(payload)
-	if err := s.observeIdentity(root); err != nil {
-		return false, err
-	}
-	choices := gjson.Get(payload, "choices")
-	if !choices.IsArray() || !gjsonCollectionHasValues(choices) {
-		return s.complete(), nil
-	}
-	if s.seen == nil {
-		s.seen = make(map[int64]struct{})
-		s.finished = make(map[int64]struct{})
-		s.semantic = make(map[int64]bool)
-		s.tools = make(map[int64]map[int64]*openAIChatToolCallStreamState)
-		s.legacy = make(map[int64]*openAIChatLegacyFunctionStreamState)
-		s.toolIDOwner = make(map[string]openAIChatToolCallOwner)
-	}
-	frameChoices := make(map[int64]struct{})
-	position := 0
-	var observeErr error
-	choices.ForEach(func(_, choice gjson.Result) bool {
-		if position >= maxOpenAIChatChoicesPerAttempt {
-			observeErr = errors.New("OpenAI chat_completions contained too many choices")
-			return false
-		}
-		index := int64(position)
-		if explicit := choice.Get("index"); explicit.Exists() {
-			index = explicit.Int()
-		}
-		if _, duplicate := frameChoices[index]; duplicate {
-			observeErr = fmt.Errorf("OpenAI chat_completions duplicated choice index %d", index)
-			return false
-		}
-		frameChoices[index] = struct{}{}
-		finishReason := choice.Get("finish_reason")
-		if _, alreadyFinished := s.finished[index]; alreadyFinished {
-			annotation, err := validateOpenAIChatFilterAnnotation(choice)
-			if err != nil {
-				observeErr = err
-				return false
-			}
-			if !annotation || choiceHasOpenAIChatSemanticOutput(choice) ||
-				(finishReason.Type == gjson.String && strings.TrimSpace(finishReason.String()) != "") {
-				observeErr = fmt.Errorf("OpenAI chat_completions choice %d emitted non-annotation data after finish_reason", index)
-				return false
-			}
-			position++
-			return true
-		}
-		if _, exists := s.seen[index]; !exists && len(s.seen) >= maxOpenAIChatChoicesPerAttempt {
-			observeErr = errors.New("OpenAI chat_completions contained too many choices")
-			return false
-		}
-		s.seen[index] = struct{}{}
-		if choiceHasOpenAIChatSemanticOutput(choice) {
-			s.semantic[index] = true
-		}
-		if err := s.observeToolCallDeltas(index, choice.Get("delta.tool_calls")); err != nil {
-			observeErr = err
-			return false
-		}
-		if err := s.observeLegacyFunctionDelta(index, choice.Get("delta.function_call")); err != nil {
-			observeErr = err
-			return false
-		}
-		if finishReason.Type == gjson.String && strings.TrimSpace(finishReason.String()) != "" {
-			reason := strings.TrimSpace(finishReason.String())
-			if (reason == "stop" || reason == "length") && !s.semantic[index] {
-				observeErr = fmt.Errorf("OpenAI chat_completions choice %d finished %s without semantic output", index, reason)
-				return false
-			}
-			if err := s.validateFinishedToolCalls(index, reason); err != nil {
-				observeErr = err
-				return false
-			}
-			s.finished[index] = struct{}{}
-		}
-		position++
-		return true
-	})
-	if observeErr != nil {
-		return false, observeErr
-	}
-	return s.complete(), nil
-}
-
-func (s *openAIChatChoiceStreamState) observeIdentity(root gjson.Result) error {
-	for _, field := range []string{"id", "object", "model", "created"} {
-		value := root.Get(field)
-		if !value.Exists() {
-			continue
-		}
-		canonical := value.String()
-		if value.Type == gjson.Number {
-			canonical = strconv.FormatInt(value.Int(), 10)
-		}
-		digest := openAIResponsesDoneField(canonical)
-		if s.identity == nil {
-			s.identity = make(map[string]openAIResponsesDoneFieldDigest, 4)
-		}
-		if expected, seen := s.identity[field]; seen {
-			if expected != digest {
-				return fmt.Errorf("OpenAI chat_completions response identity changed %s across frames", field)
-			}
-			continue
-		}
-		s.identity[field] = digest
-	}
-	return nil
-}
-
-func (s *openAIChatChoiceStreamState) observeLegacyFunctionDelta(choiceIndex int64, call gjson.Result) error {
-	if !call.Exists() {
-		return nil
-	}
-	state := s.legacy[choiceIndex]
-	if state == nil {
-		state = &openAIChatLegacyFunctionStreamState{}
-		s.legacy[choiceIndex] = state
-	}
-	if name := call.Get("name"); name.Exists() && name.String() != "" {
-		if len(name.String()) > maxOpenAIChatRetainedIdentifierBytes {
-			return fmt.Errorf("OpenAI chat_completions choice %d legacy function_call name was too long", choiceIndex)
-		}
-		if state.name != "" && state.name != name.String() {
-			return fmt.Errorf("OpenAI chat_completions choice %d changed legacy function_call name", choiceIndex)
-		}
-		state.name = name.String()
-	}
-	if call.Get("arguments").Exists() {
-		state.argumentsSeen = true
-	}
-	return nil
-}
-
-func (s *openAIChatChoiceStreamState) observeToolCallDeltas(choiceIndex int64, calls gjson.Result) error {
-	if !calls.Exists() {
-		return nil
-	}
-	choiceTools := s.tools[choiceIndex]
-	if choiceTools == nil {
-		choiceTools = make(map[int64]*openAIChatToolCallStreamState)
-		s.tools[choiceIndex] = choiceTools
-	}
-	frameIndexes := make(map[int64]struct{})
-	position := 0
-	var observeErr error
-	calls.ForEach(func(_, call gjson.Result) bool {
-		if position >= maxOpenAIChatToolCallsPerChoice {
-			observeErr = errors.New("OpenAI chat_completions contained too many tool calls")
-			return false
-		}
-		toolIndex := int64(position)
-		if explicit := call.Get("index"); explicit.Exists() {
-			toolIndex = explicit.Int()
-		}
-		if _, duplicate := frameIndexes[toolIndex]; duplicate {
-			observeErr = fmt.Errorf("OpenAI chat_completions duplicated tool call index %d", toolIndex)
-			return false
-		}
-		frameIndexes[toolIndex] = struct{}{}
-		state := choiceTools[toolIndex]
-		if state == nil {
-			if s.trackedTools >= maxOpenAIChatToolCallsPerChoice {
-				observeErr = errors.New("OpenAI chat_completions contained too many tool calls")
-				return false
-			}
-			state = &openAIChatToolCallStreamState{}
-			choiceTools[toolIndex] = state
-			s.trackedTools++
-		}
-		for field, destination := range map[string]*string{"id": &state.id, "type": &state.callType, "function.name": &state.name} {
-			value := call.Get(field)
-			if !value.Exists() || value.String() == "" {
-				continue
-			}
-			if (field == "id" || field == "function.name") && len(value.String()) > maxOpenAIChatRetainedIdentifierBytes {
-				observeErr = fmt.Errorf("OpenAI chat_completions tool call %d %s was too long", toolIndex, field)
-				return false
-			}
-			if *destination != "" && *destination != value.String() {
-				observeErr = fmt.Errorf("OpenAI chat_completions tool call %d changed %s", toolIndex, field)
-				return false
-			}
-			*destination = value.String()
-		}
-		if state.id != "" {
-			owner := openAIChatToolCallOwner{choiceIndex: choiceIndex, toolIndex: toolIndex}
-			if prior, exists := s.toolIDOwner[state.id]; exists && prior != owner {
-				observeErr = fmt.Errorf("OpenAI chat_completions tool call id %q was reused across indexes", state.id)
-				return false
-			}
-			s.toolIDOwner[state.id] = owner
-		}
-		if call.Get("function.arguments").Exists() {
-			state.argumentsSeen = true
-		}
-		position++
-		return true
-	})
-	if observeErr != nil {
-		return observeErr
-	}
-	return nil
-}
-
-func (s *openAIChatChoiceStreamState) validateFinishedToolCalls(choiceIndex int64, finishReason string) error {
-	tools := s.tools[choiceIndex]
-	if finishReason == "tool_calls" && len(tools) == 0 {
-		return fmt.Errorf("OpenAI chat_completions choice %d finished tool_calls without a tool call", choiceIndex)
-	}
-	if len(tools) > 0 && finishReason != "tool_calls" {
-		return fmt.Errorf("OpenAI chat_completions choice %d emitted tool calls but finished with %s", choiceIndex, finishReason)
-	}
-	for toolIndex, tool := range tools {
-		if strings.TrimSpace(tool.id) == "" || tool.callType != "function" || strings.TrimSpace(tool.name) == "" || !tool.argumentsSeen {
-			return fmt.Errorf("OpenAI chat_completions choice %d tool call %d was incomplete at finish_reason", choiceIndex, toolIndex)
-		}
-	}
-	legacy := s.legacy[choiceIndex]
-	if finishReason == "function_call" && legacy == nil {
-		return fmt.Errorf("OpenAI chat_completions choice %d finished function_call without a function call", choiceIndex)
-	}
-	if legacy != nil && finishReason != "function_call" {
-		return fmt.Errorf("OpenAI chat_completions choice %d emitted legacy function_call but finished with %s", choiceIndex, finishReason)
-	}
-	if legacy != nil && (strings.TrimSpace(legacy.name) == "" || !legacy.argumentsSeen) {
-		return fmt.Errorf("OpenAI chat_completions choice %d legacy function_call was incomplete at finish_reason", choiceIndex)
-	}
-	return nil
-}
-
-func choiceHasOpenAIChatSemanticOutput(choice gjson.Result) bool {
-	return openAIChatDeltaHasSemanticOutput(choice.Get("delta")) ||
-		openAIChatDeltaHasSemanticOutput(choice.Get("message")) ||
-		(choice.Get("text").Type == gjson.String && strings.TrimSpace(choice.Get("text").String()) != "")
-}
-
-// Azure asynchronous content filtering emits annotation-only choices without
-// delta/message/text. These frames are ancillary, not semantic or terminal,
-// and may legitimately arrive after the choice's finish_reason.
-func validateOpenAIChatFilterAnnotation(choice gjson.Result) (bool, error) {
-	results := choice.Get("content_filter_results")
-	offsets := choice.Get("content_filter_offsets")
-	if !results.Exists() && !offsets.Exists() {
-		return false, nil
-	}
-	if results.Exists() && !results.IsObject() {
-		return false, errors.New("OpenAI chat_completions content_filter_results was not an object")
-	}
-	if offsets.Exists() {
-		if !offsets.IsObject() {
-			return false, errors.New("OpenAI chat_completions content_filter_offsets was not an object")
-		}
-		for _, field := range []string{"check_offset", "start_offset", "end_offset"} {
-			if value := offsets.Get(field); value.Exists() && !nonNegativeIntegerGJSON(value) {
-				return false, fmt.Errorf("OpenAI chat_completions content_filter_offsets.%s was not a non-negative integer", field)
-			}
-		}
-	}
-	return true, nil
-}
-
-func (s *openAIChatChoiceStreamState) complete() bool {
-	return len(s.seen) > 0 && len(s.finished) == len(s.seen)
-}
-
-func openAIChatBufferedChoicesComplete(payload []byte) bool {
-	choices := gjson.GetBytes(payload, "choices")
-	if !choices.IsArray() || !gjsonCollectionHasValues(choices) {
-		return false
-	}
-	complete := true
-	count := 0
-	choices.ForEach(func(_, choice gjson.Result) bool {
-		if count >= maxOpenAIChatChoicesPerAttempt {
-			complete = false
-			return false
-		}
-		count++
-		finishReason := choice.Get("finish_reason")
-		if finishReason.Type != gjson.String || strings.TrimSpace(finishReason.String()) == "" {
-			complete = false
-			return false
-		}
-		message := choice.Get("message")
-		reason := strings.TrimSpace(finishReason.String())
-		if (reason == "stop" || reason == "length") && !choiceHasOpenAIChatSemanticOutput(choice) {
-			complete = false
-			return false
-		}
-		hasTools := message.Get("tool_calls").Exists()
-		hasLegacy := message.Get("function_call").Exists()
-		if (finishReason.String() == "tool_calls") != hasTools || (finishReason.String() == "function_call") != hasLegacy {
-			complete = false
-			return false
-		}
-		return true
-	})
-	return complete
-}
-
 func openAIChatPayloadContainsAudio(payload []byte) bool {
 	choices := gjson.GetBytes(payload, "choices")
 	if !choices.IsArray() {
@@ -1172,198 +568,6 @@ func openAIChatPayloadContainsAudio(payload []byte) bool {
 		return true
 	})
 	return containsAudio
-}
-
-// classifyOpenAIChatStreamPayload distinguishes a valid non-semantic preamble
-// from a malformed provider envelope. A later valid chunk must never wash an
-// empty/structurally-invalid choice into a successful attempt.
-func classifyOpenAIChatStreamPayload(payload string) (bool, error) {
-	if !gjson.Valid(payload) || !gjson.Parse(payload).IsObject() {
-		return false, errors.New("OpenAI chat_completions returned malformed JSON data")
-	}
-	if err := validateOpenAIResponsesNoDuplicateKnownFields([]byte(payload), providerJSONOpenAIChatRoot); err != nil {
-		return false, fmt.Errorf("OpenAI chat_completions returned ambiguous JSON data: %w", err)
-	}
-	root := gjson.Parse(payload)
-	for _, field := range []string{"id", "object", "model"} {
-		if value := root.Get(field); value.Exists() && (value.Type != gjson.String || len(value.String()) > maxOpenAIChatRetainedIdentifierBytes) {
-			return false, fmt.Errorf("OpenAI chat_completions %s was not a bounded string", field)
-		}
-	}
-	for _, field := range []string{"system_fingerprint", "service_tier"} {
-		if value := root.Get(field); value.Exists() && value.Type != gjson.Null && (value.Type != gjson.String || len(value.String()) > maxOpenAIChatRetainedIdentifierBytes) {
-			return false, fmt.Errorf("OpenAI chat_completions %s was not a bounded string or null", field)
-		}
-	}
-	if created := root.Get("created"); created.Exists() && !nonNegativeIntegerGJSON(created) {
-		return false, errors.New("OpenAI chat_completions created was not a non-negative integer")
-	}
-	if providerError := root.Get("error"); providerError.Exists() && providerError.Type != gjson.Null {
-		return false, errors.New("OpenAI chat_completions returned an explicit provider error")
-	}
-	promptAnnotation, err := validateOpenAIChatPromptAnnotations(root)
-	if err != nil {
-		return false, err
-	}
-	if usage := gjson.Get(payload, "usage"); usage.Exists() && usage.Type != gjson.Null && !validOpenAIChatUsageShape(usage) {
-		return false, errors.New("OpenAI chat_completions usage was malformed")
-	}
-	choices := gjson.Get(payload, "choices")
-	if !choices.Exists() {
-		if gjson.Get(payload, "usage").IsObject() {
-			return false, nil
-		}
-		return false, errors.New("OpenAI chat_completions provider event omitted choices")
-	}
-	if !choices.IsArray() {
-		return false, errors.New("OpenAI chat_completions choices was not an array")
-	}
-	if !gjsonCollectionHasValues(choices) {
-		if gjson.Get(payload, "usage").IsObject() || promptAnnotation {
-			return false, nil
-		}
-		return false, errors.New("OpenAI chat_completions provider event contained empty choices")
-	}
-	recognized := false
-	seenChoiceIndexes := make(map[int64]struct{})
-	position := 0
-	var classifyErr error
-	choices.ForEach(func(_, choice gjson.Result) bool {
-		if position >= maxOpenAIChatChoicesPerAttempt {
-			classifyErr = errors.New("OpenAI chat_completions contained too many choices")
-			return false
-		}
-		if !choice.IsObject() {
-			classifyErr = errors.New("OpenAI chat_completions choice was not an object")
-			return false
-		}
-		index := choice.Get("index")
-		if index.Exists() && !nonNegativeIntegerGJSON(index) {
-			classifyErr = errors.New("OpenAI chat_completions choice index was not a non-negative integer")
-			return false
-		}
-		choiceIndex := int64(position)
-		if index.Exists() {
-			choiceIndex = index.Int()
-		}
-		if _, duplicate := seenChoiceIndexes[choiceIndex]; duplicate {
-			classifyErr = fmt.Errorf("OpenAI chat_completions duplicated choice index %d", choiceIndex)
-			return false
-		}
-		seenChoiceIndexes[choiceIndex] = struct{}{}
-		delta := choice.Get("delta")
-		message := choice.Get("message")
-		text := choice.Get("text")
-		annotation, err := validateOpenAIChatFilterAnnotation(choice)
-		if err != nil {
-			classifyErr = err
-			return false
-		}
-		if delta.Exists() && !delta.IsObject() {
-			classifyErr = errors.New("OpenAI chat_completions delta was not an object")
-			return false
-		}
-		if message.Exists() && !message.IsObject() {
-			classifyErr = errors.New("OpenAI chat_completions message was not an object")
-			return false
-		}
-		if text.Exists() && text.Type != gjson.String {
-			classifyErr = errors.New("OpenAI chat_completions text was not a string")
-			return false
-		}
-		if logprobs := choice.Get("logprobs"); logprobs.Exists() && logprobs.Type != gjson.Null && !logprobs.IsObject() {
-			classifyErr = errors.New("OpenAI chat_completions logprobs was not an object or null")
-			return false
-		}
-		if err := validateOpenAIChatDeltaShape(delta); err != nil {
-			classifyErr = err
-			return false
-		}
-		if err := validateOpenAIChatDeltaShape(message); err != nil {
-			classifyErr = err
-			return false
-		}
-		if message.IsObject() {
-			if err := validateOpenAIChatBufferedMessageShape(message); err != nil {
-				classifyErr = err
-				return false
-			}
-		}
-		if !delta.IsObject() && !message.IsObject() && text.Type != gjson.String && !annotation {
-			classifyErr = errors.New("OpenAI chat_completions choice omitted delta/message/text")
-			return false
-		}
-		finishReasonValue := choice.Get("finish_reason")
-		if finishReasonValue.Exists() && finishReasonValue.Type != gjson.String && finishReasonValue.Type != gjson.Null {
-			classifyErr = errors.New("OpenAI chat_completions finish_reason was not a string")
-			return false
-		}
-		finishReason := strings.TrimSpace(finishReasonValue.String())
-		if delta.IsObject() && !gjsonCollectionHasValues(delta) && finishReason == "" && !message.IsObject() && text.Type != gjson.String && !annotation {
-			classifyErr = errors.New("OpenAI chat_completions choice contained an empty delta")
-			return false
-		}
-		if message.IsObject() && !gjsonCollectionHasValues(message) && !delta.IsObject() && text.Type != gjson.String && !annotation {
-			classifyErr = errors.New("OpenAI chat_completions choice contained an empty message")
-			return false
-		}
-		if choiceHasOpenAIChatSemanticOutput(choice) {
-			recognized = true
-		}
-		// A non-empty finish_reason is itself a recognizable provider terminal.
-		// Azure/OpenAI content filtering can legitimately return no content with
-		// finish_reason=content_filter. The large-request empty-stop refusal path
-		// remains handled separately by the silent-refusal detector.
-		if finishReason != "" {
-			recognized = true
-		}
-		position++
-		return true
-	})
-	if classifyErr != nil {
-		return false, classifyErr
-	}
-	return recognized, nil
-}
-
-func validateOpenAIChatPromptAnnotations(root gjson.Result) (bool, error) {
-	found := false
-	for _, field := range []string{"prompt_annotations", "prompt_filter_results"} {
-		annotations := root.Get(field)
-		if !annotations.Exists() {
-			continue
-		}
-		found = true
-		if !annotations.IsArray() {
-			return false, fmt.Errorf("OpenAI chat_completions %s was not an array", field)
-		}
-		annotationCount := 0
-		var shapeErr error
-		annotations.ForEach(func(_, annotation gjson.Result) bool {
-			if annotationCount >= maxOpenAIChatChoicesPerAttempt {
-				shapeErr = fmt.Errorf("OpenAI chat_completions %s contained too many items", field)
-				return false
-			}
-			annotationCount++
-			if !annotation.IsObject() {
-				shapeErr = fmt.Errorf("OpenAI chat_completions %s item was not an object", field)
-				return false
-			}
-			if index := annotation.Get("prompt_index"); index.Exists() && !nonNegativeIntegerGJSON(index) {
-				shapeErr = fmt.Errorf("OpenAI chat_completions %s prompt_index was not a non-negative integer", field)
-				return false
-			}
-			if results := annotation.Get("content_filter_results"); results.Exists() && !results.IsObject() {
-				shapeErr = fmt.Errorf("OpenAI chat_completions %s content_filter_results was not an object", field)
-				return false
-			}
-			return true
-		})
-		if shapeErr != nil {
-			return false, shapeErr
-		}
-	}
-	return found, nil
 }
 
 func newOpenAIIncompleteChatStreamFailover(resp *http.Response, message string) *UpstreamFailoverError {
@@ -1686,6 +890,7 @@ func nonNegativeFirstValidGJSONFloat(values ...gjson.Result) (float64, bool) {
 func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -1704,13 +909,18 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
-	if !gjson.ValidBytes(respBody) || !openAIChatPayloadIsValidProviderPayload(string(respBody)) || !openAIChatBufferedChoicesComplete(respBody) {
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions returned an invalid terminal JSON response")
+	if !gjson.ValidBytes(respBody) {
+		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions returned invalid JSON")
 	}
 
 	var usage OpenAIUsage
 	if parsedUsage, ok := extractCCUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
+	}
+	responseModel := gjson.GetBytes(respBody, "model").String()
+	if requiresBillableGrokChatUsage(account, billingModel, upstreamModel, responseModel) && !hasBillableGrokChatUsage(usage) {
+		upstreamRequestID := firstNonEmpty(requestID, resp.Header.Get("xai-request-id"))
+		return nil, newGrokMissingUsageFailoverError(c, account, upstreamRequestID)
 	}
 
 	if s.responseHeaderFilter != nil {

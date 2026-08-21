@@ -24,520 +24,6 @@ import (
 // 编译期接口断言
 var _ AccountRepository = (*stubOpenAIAccountRepo)(nil)
 
-func TestValidateOpenAIResponsesSSEPayloadRejectsMalformedKnownIntermediateFields(t *testing.T) {
-	t.Parallel()
-	for name, payload := range map[string]string{
-		"nonstring content part type":   `{"type":"response.content_part.added","part":{"type":123}}`,
-		"nonstring error message":       `{"type":"error","code":"server_error","message":123}`,
-		"nonstring output index":        `{"type":"response.output_text.delta","output_index":"bad","content_index":0,"delta":"x"}`,
-		"negative content index":        `{"type":"response.output_text.delta","output_index":0,"content_index":-1,"delta":"x"}`,
-		"fractional sequence number":    `{"type":"response.output_text.delta","sequence_number":1.5,"delta":"x"}`,
-		"nonstring item id":             `{"type":"response.output_text.delta","item_id":123,"delta":"x"}`,
-		"malformed root usage":          `{"type":"response.output_text.delta","delta":"x","usage":"bad"}`,
-		"malformed response usage":      `{"type":"response.created","response":{"id":"r","status":"in_progress","usage":{"input_tokens":-1}}}`,
-		"malformed response output":     `{"type":"response.created","response":{"id":"r","status":"in_progress","output":[{}]}}`,
-		"nonstring response status":     `{"type":"response.created","response":{"id":"r","status":123}}`,
-		"malformed hosted image usage":  `{"type":"response.completed","response":{"id":"r","status":"completed","output":[],"tool_usage":{"image_gen":{"output_tokens_details":{"image_tokens":"bad"}}}}}`,
-		"nonstring image result":        `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"image_generation_call","result":{}}]}}`,
-		"nonstring image format":        `{"type":"response.output_item.added","output_index":0,"item":{"id":"ig","type":"image_generation_call","output_format":false}}`,
-		"nonstring output item id":      `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"id":123,"type":"image_generation_call","result":"image"}]}}`,
-		"nonstring reasoning encrypted": `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"reasoning","encrypted_content":{},"summary":[{"type":"summary_text","text":"ok"}]}]}}`,
-		"malformed failed output":       `{"type":"response.failed","response":{"id":"r","status":"failed","output":[{}]}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesSSEAttemptStateRejectsMismatchedItemReference(t *testing.T) {
-	var state openAIResponsesSSEAttemptState
-	added := []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`)
-	require.NoError(t, state.observe(added, "response.output_item.added"))
-
-	delta := []byte(`{"type":"response.function_call_arguments.delta","output_index":1,"item_id":"item-b","delta":"{}"}`)
-	require.Error(t, state.observe(delta, "response.function_call_arguments.delta"))
-}
-
-func TestValidateOpenAIResponsesRejectsDuplicateKnownJSONKeys(t *testing.T) {
-	for name, payload := range map[string]string{
-		"event type": `{"type":"response.output_text.delta","type":"response.output_item.done","delta":"safe","item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`,
-		"tool name":  `{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"safe","name":"danger","arguments":""}}`,
-		"web action": `{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","action":{"type":"search","type":"open_page","query":"safe"}}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.ErrorContains(t, err, "repeated known field")
-		})
-	}
-
-	_, err := validateOpenAIResponsesSSEPayload([]byte(`{"type":"response.output_text.delta","delta":"safe","opaque":{"type":"future-a","type":"future-b"}}`), "")
-	require.NoError(t, err, "duplicate fields inside an unknown extension remain forward-compatible")
-
-	for name, payload := range map[string]string{
-		"usage alias": `{"type":"response.completed","response":{"status":"completed","output":[],"usage":{"prompt_tokens":1,"prompt_tokens":999}}}`,
-		"tool usage":  `{"type":"response.completed","response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"input_tokens":1},"image_gen":{"input_tokens":999}}}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.ErrorContains(t, err, "repeated known field")
-		})
-	}
-
-	require.False(t, validOpenAIResponsesJSON([]byte(`{"id":"resp-a","status":"completed","status":"failed","output":[]}`)))
-}
-
-func TestOpenAIResponsesRejectsWrongTypedKnownResponseMetadata(t *testing.T) {
-	for name, field := range map[string]string{
-		"model":               `"model":123`,
-		"object":              `"object":false`,
-		"created_at":          `"created_at":"now"`,
-		"parallel_tool_calls": `"parallel_tool_calls":"yes"`,
-		"temperature":         `"temperature":"hot"`,
-		"top_p":               `"top_p":{}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			payload := []byte(`{"type":"response.completed","response":{"status":"completed","output":[],` + field + `}}`)
-			_, err := validateOpenAIResponsesSSEPayload(payload, "")
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesRejectsMalformedAndChangedWebSearchAction(t *testing.T) {
-	for name, action := range map[string]string{
-		"non object":           `"bad"`,
-		"missing type":         `{"query":"safe"}`,
-		"search missing query": `{"type":"search"}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			payload := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","status":"completed","action":` + action + `}}`)
-			_, err := validateOpenAIResponsesSSEPayload(payload, "")
-			require.Error(t, err)
-		})
-	}
-
-	var state openAIResponsesSSEAttemptState
-	done := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","status":"completed","action":{"type":"search","query":"safe"}}}`)
-	require.NoError(t, state.observe(done, "response.output_item.done"))
-	terminal := []byte(`{"type":"response.completed","response":{"status":"completed","output":[{"id":"web-a","type":"web_search_call","status":"completed","action":{"type":"search","query":"danger"}}]}}`)
-	require.ErrorContains(t, state.observe(terminal, "response.completed"), "action.query")
-
-	for name, action := range map[string]string{
-		"open page url type":   `{"type":"open_page","url":123}`,
-		"find missing pattern": `{"type":"find_in_page","url":"https://example.test"}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			payload := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-a","type":"web_search_call","status":"completed","action":` + action + `}}`)
-			_, err := validateOpenAIResponsesSSEPayload(payload, "")
-			require.Error(t, err)
-		})
-	}
-
-	var navigationState openAIResponsesSSEAttemptState
-	navigationDone := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"web-b","type":"web_search_call","status":"completed","action":{"type":"find_in_page","url":"https://safe.test","pattern":"safe"}}}`)
-	require.NoError(t, navigationState.observe(navigationDone, "response.output_item.done"))
-	navigationTerminal := []byte(`{"type":"response.completed","response":{"status":"completed","output":[{"id":"web-b","type":"web_search_call","status":"completed","action":{"type":"find_in_page","url":"https://danger.test","pattern":"danger"}}]}}`)
-	require.ErrorContains(t, navigationState.observe(navigationTerminal, "response.completed"), "action.")
-}
-
-func TestOpenAIResponsesRejectsWrongTypedKnownContentPartMetadata(t *testing.T) {
-	for name, payload := range map[string]string{
-		"content id":         `{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"id":123,"type":"output_text","text":""}}`,
-		"annotations object": `{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"","annotations":{}}}`,
-		"logprobs string":    `{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"","logprobs":"bad"}}`,
-		"reasoning part id":  `{"type":"response.reasoning_summary_part.added","output_index":0,"summary_index":0,"item_id":"reason-a","part":{"id":false,"type":"summary_text","text":""}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesRejectsWrongOrChangedFunctionEventMetadata(t *testing.T) {
-	for name, field := range map[string]string{
-		"call id": `"call_id":123`,
-		"name":    `"name":false`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			payload := []byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"",` + field + `}`)
-			_, err := validateOpenAIResponsesSSEPayload(payload, "")
-			require.Error(t, err)
-		})
-	}
-
-	for name, field := range map[string]string{
-		"changed call id": `"call_id":"call-danger"`,
-		"changed name":    `"name":"danger"`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			var state openAIResponsesSSEAttemptState
-			require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-safe","name":"safe","arguments":""}}`), "response.output_item.added"))
-			payload := []byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"",` + field + `}`)
-			require.Error(t, state.observe(payload, "response.function_call_arguments.done"))
-		})
-	}
-}
-
-func TestOpenAIResponsesRejectsWrongTypedErrorAndIncompleteMetadata(t *testing.T) {
-	for name, fields := range map[string]string{
-		"error scalar":           `"error":"bad"`,
-		"error code type":        `"error":{"code":123}`,
-		"error message type":     `"error":{"message":false}`,
-		"incomplete scalar":      `"incomplete_details":"bad"`,
-		"incomplete reason type": `"incomplete_details":{"reason":123}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			payload := []byte(`{"type":"response.completed","response":{"status":"completed","output":[],` + fields + `}}`)
-			_, err := validateOpenAIResponsesSSEPayload(payload, "")
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesRejectsContradictoryCompletedMetadata(t *testing.T) {
-	for name, payload := range map[string]string{
-		"response error":      `{"type":"response.completed","response":{"status":"completed","output":[],"error":{"code":"bad","message":"failed"}}}`,
-		"response incomplete": `{"type":"response.completed","response":{"status":"completed","output":[],"incomplete_details":{"reason":"max_output_tokens"}}}`,
-		"root error":          `{"type":"response.completed","error":{"code":"bad","message":"failed"},"response":{"status":"completed","output":[]}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.Error(t, err)
-		})
-	}
-
-	_, err := validateOpenAIResponsesSSEPayload([]byte(`{"type":"response.completed","error":null,"response":{"status":"completed","output":[],"error":null,"incomplete_details":null}}`), "")
-	require.NoError(t, err)
-}
-
-func TestOpenAIResponsesRejectsWrongOrDuplicateHostedImageCount(t *testing.T) {
-	for name, payload := range map[string]string{
-		"wrong type": `{"type":"response.completed","response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"images":"many"}}}}`,
-		"duplicate":  `{"type":"response.completed","response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"images":1,"images":999}}}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesRejectsConflictingRootAndNestedUsage(t *testing.T) {
-	for name, payload := range map[string]string{
-		"base usage": `{"type":"response.completed","usage":{"prompt_tokens":1,"completion_tokens":2},"response":{"status":"completed","output":[],"usage":{"input_tokens":999,"output_tokens":2}}}`,
-		"tool usage": `{"type":"response.completed","usage":{"input_tokens":1,"output_tokens":1},"tool_usage":{"image_gen":{"input_tokens":1,"images":1}},"response":{"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1},"tool_usage":{"image_gen":{"input_tokens":4,"images":1}}}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.Error(t, err)
-		})
-	}
-
-	_, err := validateOpenAIResponsesSSEPayload([]byte(`{"type":"response.completed","usage":{"prompt_tokens":3,"completion_tokens":2},"response":{"status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}}`), "")
-	require.NoError(t, err, "equivalent usage aliases should normalize to the same counters")
-}
-
-func TestOpenAIResponsesUsageMergesComplementaryHostedToolUsageSource(t *testing.T) {
-	for name, payload := range map[string]string{
-		"root usage nested tool usage": `{"type":"response.completed","usage":{"input_tokens":3,"output_tokens":2},"response":{"status":"completed","output":[],"tool_usage":{"image_gen":{"input_tokens":2,"output_tokens":1,"input_tokens_details":{"image_tokens":2},"output_tokens_details":{"image_tokens":1}}}}}`,
-		"nested usage root tool usage": `{"type":"response.completed","tool_usage":{"image_gen":{"input_tokens":2,"output_tokens":1,"input_tokens_details":{"image_tokens":2},"output_tokens_details":{"image_tokens":1}}},"response":{"status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			usage, ok := extractOpenAIUsageFromJSONBytes([]byte(payload))
-			require.True(t, ok)
-			require.Equal(t, 3, usage.InputTokens)
-			require.Equal(t, 2, usage.OutputTokens)
-			require.Equal(t, 2, usage.ImageInputTokens)
-			require.Equal(t, 1, usage.ImageOutputTokens)
-		})
-	}
-}
-
-func TestOpenAIResponsesRejectsConflictingUsageAliasesAndTotal(t *testing.T) {
-	for name, usage := range map[string]string{
-		"input alias":  `{"input_tokens":1,"prompt_tokens":999,"output_tokens":2}`,
-		"output alias": `{"input_tokens":1,"output_tokens":2,"completion_tokens":999}`,
-		"total":        `{"input_tokens":1,"output_tokens":2,"total_tokens":999}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			payload := []byte(`{"type":"response.completed","response":{"status":"completed","output":[],"usage":` + usage + `}}`)
-			_, err := validateOpenAIResponsesSSEPayload(payload, "")
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesRejectsMalformedFailureMetadata(t *testing.T) {
-	for name, payload := range map[string]string{
-		"failed error scalar":         `{"type":"response.failed","response":{"status":"failed","error":"bad"}}`,
-		"failed error code":           `{"type":"response.failed","response":{"status":"failed","error":{"code":123}}}`,
-		"failed model":                `{"type":"response.failed","response":{"status":"failed","model":123,"error":{"message":"failed"}}}`,
-		"incomplete details":          `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":"bad"}}`,
-		"incomplete reason":           `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":123}}}`,
-		"failed completed status":     `{"type":"response.failed","response":{"status":"completed","output":[]}}`,
-		"incomplete completed status": `{"type":"response.incomplete","response":{"status":"completed","output":[]}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := validateOpenAIResponsesSSEPayload([]byte(payload), "")
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesAllowsCompletedEnvelopeWithFailureStatus(t *testing.T) {
-	for _, eventType := range []string{"response.completed", "response.done"} {
-		t.Run(eventType, func(t *testing.T) {
-			payload := []byte(`{"type":"` + eventType + `","response":{"status":"failed","output":[],"error":{"code":"bad","message":"failed"}}}`)
-			_, err := validateOpenAIResponsesSSEPayload(payload, "")
-			require.NoError(t, err)
-		})
-	}
-}
-
-func TestOpenAIResponsesSSEAttemptStateRejectsChangedResponseIdentity(t *testing.T) {
-	var state openAIResponsesSSEAttemptState
-	require.NoError(t, state.observe([]byte(`{"type":"response.created","response":{"id":"resp-a","object":"response","model":"gpt-a","created_at":1}}`), "response.created"))
-	err := state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-b","object":"response","model":"gpt-b","created_at":2,"status":"completed","output":[]}}`), "response.completed")
-	require.ErrorContains(t, err, "response identity changed")
-}
-
-func TestExtractOpenAIResponseIDPrefersNestedEnvelopeIdentity(t *testing.T) {
-	require.Equal(t, "authoritative", extractOpenAIResponseIDFromJSONBytes([]byte(`{"type":"response.completed","id":"spoofed","response":{"id":"authoritative"}}`)))
-	require.Equal(t, "direct", extractOpenAIResponseIDFromJSONBytes([]byte(`{"id":"direct","object":"response"}`)))
-}
-
-func TestOpenAIResponsesSSEAttemptStateRejectsPartialCorrelationAndInvalidLifecycle(t *testing.T) {
-	t.Run("partial item correlation", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		err := state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}`), "response.output_item.added")
-		require.Error(t, err)
-	})
-
-	t.Run("unknown explicit reference without tracked item", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		err := state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"item-a","delta":"x"}`), "response.output_text.delta")
-		require.Error(t, err)
-	})
-
-	t.Run("content part index mismatch", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"item-a","part":{"type":"output_text","text":""}}`), "response.content_part.added"))
-		err := state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":1,"item_id":"item-a","delta":"x"}`), "response.output_text.delta")
-		require.Error(t, err)
-	})
-
-	t.Run("delta after item done", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"item-a","arguments":"{}"}`), "response.function_call_arguments.done"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":"{}"}}`), "response.output_item.done"))
-		err := state.observe([]byte(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item-a","delta":"{}"}`), "response.function_call_arguments.delta")
-		require.Error(t, err)
-	})
-
-	t.Run("terminal with active item", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		err := state.observe([]byte(`{"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}`), "response.completed")
-		require.Error(t, err)
-	})
-
-	t.Run("function item done before arguments done", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
-		err := state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"item-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":"{}"}}`), "response.output_item.done")
-		require.Error(t, err)
-	})
-
-	t.Run("reasoning summary index mismatch", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":""}}`), "response.reasoning_summary_part.added"))
-		err := state.observe([]byte(`{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"reason-a","summary_index":1,"delta":"x"}`), "response.reasoning_summary_text.delta")
-		require.Error(t, err)
-	})
-
-	t.Run("reasoning summary delta after done", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":""}}`), "response.reasoning_summary_part.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_text.done","output_index":0,"item_id":"reason-a","summary_index":0,"text":"x"}`), "response.reasoning_summary_text.done"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.done","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":"x"}}`), "response.reasoning_summary_part.done"))
-		err := state.observe([]byte(`{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"reason-a","summary_index":0,"delta":"late"}`), "response.reasoning_summary_text.delta")
-		require.Error(t, err)
-	})
-
-	t.Run("reasoning summary done changed part type", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"summary_text","text":""}}`), "response.reasoning_summary_part.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.reasoning_summary_text.done","output_index":0,"item_id":"reason-a","summary_index":0,"text":"x"}`), "response.reasoning_summary_text.done"))
-		err := state.observe([]byte(`{"type":"response.reasoning_summary_part.done","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":"future_summary","text":"x"}}`), "response.reasoning_summary_part.done")
-		require.Error(t, err)
-	})
-}
-
-func TestOpenAIResponsesSSEAttemptStateRejectsAggregateMismatch(t *testing.T) {
-	t.Run("function delta and done", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"tool-a","delta":"{\"safe\":true}"}`), "response.function_call_arguments.delta"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"{\"danger\":true}"}`), "response.function_call_arguments.done"), "did not match accumulated deltas")
-	})
-
-	t.Run("text delta and done", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":""}}`), "response.content_part.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg-a","delta":"safe"}`), "response.output_text.delta"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg-a","text":"danger"}`), "response.output_text.done"), "did not match accumulated deltas")
-	})
-}
-
-func TestOpenAIResponsesSSEAttemptStateRejectsAddedMetadataMismatch(t *testing.T) {
-	t.Run("tool identity", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-safe","name":"safe","arguments":""}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":""}`), "response.function_call_arguments.done"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-danger","name":"danger","arguments":""}}`), "response.output_item.done"), "changed tool call_id/name")
-	})
-
-	t.Run("content part id", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"id":"part-safe","type":"output_text","text":""}}`), "response.content_part.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg-a","text":"safe"}`), "response.output_text.done"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"id":"part-danger","type":"output_text","text":"safe"}}`), "response.content_part.done"), "changed part id")
-	})
-}
-
-func TestOpenAIResponsesSSEAttemptStateRejectsIntermediateAndTerminalAggregateMismatch(t *testing.T) {
-	newTextState := func(t *testing.T) openAIResponsesSSEAttemptState {
-		t.Helper()
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":""}}`), "response.content_part.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg-a","delta":"safe"}`), "response.output_text.delta"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg-a","text":"safe"}`), "response.output_text.done"))
-		return state
-	}
-
-	t.Run("content part done", func(t *testing.T) {
-		state := newTextState(t)
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"danger"}}`), "response.content_part.done"), "changed after its done event")
-	})
-
-	t.Run("output item done", func(t *testing.T) {
-		state := newTextState(t)
-		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"safe"}}`), "response.content_part.done"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"danger"}]}}`), "response.output_item.done"), "changed after its done event")
-	})
-
-	t.Run("tool output item done", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":""}}`), "response.output_item.added"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"tool-a","delta":"{\"safe\":true}"}`), "response.function_call_arguments.delta"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"tool-a","arguments":"{\"safe\":true}"}`), "response.function_call_arguments.done"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"tool-a","type":"function_call","call_id":"call-a","name":"lookup","arguments":"{\"danger\":true}","status":"completed"}}`), "response.output_item.done"), "changed after its done event")
-	})
-
-	t.Run("terminal output", func(t *testing.T) {
-		state := newTextState(t)
-		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"safe"}}`), "response.content_part.done"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"safe"}]}}`), "response.output_item.done"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-a","status":"completed","output":[{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"danger"}]}]}}`), "response.completed"), "differed from output_item.done")
-	})
-
-	t.Run("matching terminal output", func(t *testing.T) {
-		state := newTextState(t)
-		require.NoError(t, state.observe([]byte(`{"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg-a","part":{"type":"output_text","text":"safe"}}`), "response.content_part.done"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"safe"}]}}`), "response.output_item.done"))
-		require.NoError(t, state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-a","status":"completed","output":[{"id":"msg-a","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"safe"}]}]}}`), "response.completed"))
-	})
-
-	t.Run("image metadata", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"img-a","type":"image_generation_call","status":"completed","result":"image","revised_prompt":"safe","output_format":"png","size":"1024x1024","quality":"high","background":"opaque"}}`), "response.output_item.done"))
-		require.ErrorContains(t, state.observe([]byte(`{"type":"response.completed","response":{"id":"resp-a","status":"completed","output":[{"id":"img-a","type":"image_generation_call","status":"completed","result":"image","revised_prompt":"danger","output_format":"jpeg","size":"512x512","quality":"low","background":"transparent"}]}}`), "response.completed"), "after output_item.done")
-	})
-}
-
-func TestOpenAIResponsesSSEAttemptStateBoundsTrackedCorrelationState(t *testing.T) {
-	t.Run("output items", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		for i := 0; i < maxOpenAIResponsesTrackedStateEntries; i++ {
-			payload := []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":%d,"item":{"id":"item-%d","type":"message","role":"assistant","content":[]}}`, i, i))
-			require.NoError(t, state.observe(payload, "response.output_item.added"))
-		}
-		payload := []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":%d,"item":{"id":"item-overflow","type":"message","role":"assistant","content":[]}}`, maxOpenAIResponsesTrackedStateEntries))
-		require.ErrorContains(t, state.observe(payload, "response.output_item.added"), "state limit")
-	})
-
-	t.Run("content parts share the attempt budget", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		for i := 0; i < maxOpenAIResponsesTrackedStateEntries-1; i++ {
-			payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":%d,"item_id":"item-a","part":{"id":"part-%d","type":"output_text","text":""}}`, i, i))
-			require.NoError(t, state.observe(payload, "response.content_part.added"))
-		}
-		payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":%d,"item_id":"item-a","part":{"id":"part-overflow","type":"output_text","text":""}}`, maxOpenAIResponsesTrackedStateEntries))
-		require.ErrorContains(t, state.observe(payload, "response.content_part.added"), "state limit")
-	})
-
-	t.Run("reasoning indexes share the attempt budget", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
-		for i := 0; i < maxOpenAIResponsesTrackedStateEntries-1; i++ {
-			payload := []byte(fmt.Sprintf(`{"type":"response.reasoning_text.delta","output_index":0,"content_index":%d,"item_id":"reason-a","delta":"x"}`, i))
-			require.NoError(t, state.observe(payload, "response.reasoning_text.delta"))
-		}
-		payload := []byte(fmt.Sprintf(`{"type":"response.reasoning_text.delta","output_index":0,"content_index":%d,"item_id":"reason-a","delta":"x"}`, maxOpenAIResponsesTrackedStateEntries))
-		require.ErrorContains(t, state.observe(payload, "response.reasoning_text.delta"), "state limit")
-	})
-}
-
-func TestOpenAIResponsesSSEAttemptStateBoundsRetainedProviderStrings(t *testing.T) {
-	tooLong := strings.Repeat("x", maxOpenAIResponsesRetainedStringBytes+1)
-
-	tests := map[string][]byte{
-		"item id":   []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":0,"item":{"id":%q,"type":"message","role":"assistant","content":[]}}`, tooLong)),
-		"item type": []byte(fmt.Sprintf(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":%q}}`, tooLong)),
-	}
-	for name, payload := range tests {
-		t.Run(name, func(t *testing.T) {
-			var state openAIResponsesSSEAttemptState
-			require.ErrorContains(t, state.observe(payload, "response.output_item.added"), "retained string limit")
-		})
-	}
-
-	t.Run("content part id", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"item-a","part":{"id":%q,"type":"output_text","text":""}}`, tooLong))
-		require.ErrorContains(t, state.observe(payload, "response.content_part.added"), "retained string limit")
-	})
-
-	t.Run("content part type", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"item-a","type":"message","role":"assistant","content":[]}}`), "response.output_item.added"))
-		payload := []byte(fmt.Sprintf(`{"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"item-a","part":{"type":%q}}`, tooLong))
-		require.ErrorContains(t, state.observe(payload, "response.content_part.added"), "retained string limit")
-	})
-
-	t.Run("reasoning summary type", func(t *testing.T) {
-		var state openAIResponsesSSEAttemptState
-		require.NoError(t, state.observe([]byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"reason-a","type":"reasoning","summary":[]}}`), "response.output_item.added"))
-		payload := []byte(fmt.Sprintf(`{"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"reason-a","summary_index":0,"part":{"type":%q}}`, tooLong))
-		require.ErrorContains(t, state.observe(payload, "response.reasoning_summary_part.added"), "retained string limit")
-	})
-}
-
-var _ GatewayCache = (*stubGatewayCache)(nil)
-
 type stubOpenAIAccountRepo struct {
 	AccountRepository
 	accounts []Account
@@ -707,8 +193,10 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_TempUnschedulableReturnsFailove
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
 	require.True(t, failoverErr.ShouldRetryNextAccount())
-	require.Equal(t, account.ID, repo.modelRateLimitAccountID, "temporary unschedulability should exclude this account from reselection")
-	require.Equal(t, "gpt-5.4", repo.modelRateLimitKey)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.RequestScopedTransient)
+	require.Zero(t, repo.modelRateLimitAccountID, "request-scoped capacity shedding must not change account health")
+	require.Empty(t, repo.modelRateLimitKey)
 	require.False(t, IsResponseCommitted(c))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Empty(t, rec.Body.String())
@@ -738,17 +226,17 @@ func TestFailoverOpenAIUpstreamHTTPError_NilContextSkipsTempUnschedulablePolicy(
 			"temp_unschedulable_enabled": true,
 			"temp_unschedulable_rules": []any{map[string]any{
 				"error_code":       float64(http.StatusBadRequest),
-				"keywords":         []any{"servers are currently overloaded"},
+				"keywords":         []any{"custom temporary outage"},
 				"duration_minutes": float64(1),
 			}},
 		},
 	}
-	body := []byte(`{"error":{"message":"Our servers are currently overloaded."}}`)
+	body := []byte(`{"error":{"message":"Custom temporary outage."}}`)
 	resp := &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}}
 
 	got := svc.failoverOpenAIUpstreamHTTPError(
 		context.Background(), nil, account, resp, body,
-		"Our servers are currently overloaded.", "gpt-5.4",
+		"Custom temporary outage.", "gpt-5.4",
 	)
 
 	require.Nil(t, got)
@@ -1242,6 +730,14 @@ func (c *stubGatewayCache) ClaimGrokVideoBilled(_ context.Context, _ string, _ t
 
 func (c *stubGatewayCache) ReleaseGrokVideoBilled(_ context.Context, _ string) error {
 	return nil
+}
+
+func (c *stubGatewayCache) SetReasoningContent(_ context.Context, _ string, _ string, _ time.Duration) error {
+	return nil
+}
+
+func (c *stubGatewayCache) GetReasoningContent(_ context.Context, _ string) (string, error) {
+	return "", ErrReasoningContentNotFound
 }
 
 func TestOpenAISelectAccountWithLoadAwareness_FiltersUnschedulable(t *testing.T) {
@@ -2556,7 +2052,7 @@ func TestOpenAIStreamingContextWindowResponseFailedBeforeOutputAppliesPassthroug
 	require.NotEmpty(t, opsEvents)
 }
 
-func TestOpenAIStreamingPreambleOnlyMissingTerminalReturnsFailover(t *testing.T) {
+func TestOpenAIStreamingPreambleOnlyMissingTerminalIsForwarded(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
@@ -2584,12 +2080,11 @@ func TestOpenAIStreamingPreambleOnlyMissingTerminalReturnsFailover(t *testing.T)
 		Header: http.Header{"X-Request-Id": []string{"rid-missing-terminal"}},
 	}
 
-	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, time.Now(), "model", "model")
-	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.False(t, c.Writer.Written())
-	require.Empty(t, rec.Body.String())
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, time.Now(), "model", "model")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), "response.created")
+	require.Contains(t, rec.Body.String(), "response.in_progress")
 }
 
 func TestOpenAIStreamingPreambleKeepaliveUsesDownstreamIdle(t *testing.T) {
@@ -2798,7 +2293,7 @@ func TestOpenAIStreamingClientDisconnectDrainsUpstreamUsage(t *testing.T) {
 	}
 }
 
-func TestOpenAIStreamingMissingTerminalEventReturnsIncompleteError(t *testing.T) {
+func TestOpenAIStreamingMissingTerminalEventIsForwarded(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
@@ -2825,14 +2320,14 @@ func TestOpenAIStreamingMissingTerminalEventReturnsIncompleteError(t *testing.T)
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"},\"output_index\":0}\n\n"))
 	}()
 
-	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
 	_ = pr.Close()
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Empty(t, rec.Body.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), "response.output_item.added")
 }
 
-func TestOpenAIStreamingPassthroughMissingTerminalEventReturnsIncompleteError(t *testing.T) {
+func TestOpenAIStreamingPassthroughMissingTerminalEventIsForwarded(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
@@ -2857,11 +2352,11 @@ func TestOpenAIStreamingPassthroughMissingTerminalEventReturnsIncompleteError(t 
 		_, _ = pw.Write([]byte("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"},\"output_index\":0}\n\n"))
 	}()
 
-	_, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "", "")
+	result, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "", "")
 	_ = pr.Close()
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Empty(t, rec.Body.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), "response.output_item.added")
 }
 
 func TestOpenAIStreamingPassthroughPostOutputDisconnectQuarantinesSharedProxy(t *testing.T) {

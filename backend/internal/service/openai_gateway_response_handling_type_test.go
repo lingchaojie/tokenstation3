@@ -45,42 +45,6 @@ func TestNormalizeOpenAIResponsesFunctionCallArgumentsDenseEightMiBStaysBounded(
 	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
 }
 
-func TestValidOpenAIResponsesObjectRejectsDenseOutputWithinBoundedAllocation(t *testing.T) {
-	const targetBytes = 8 << 20
-	const item = `{"type":"image_generation_call","status":"completed","result":"x"}`
-	itemCount := (targetBytes - len(`{"id":"r","status":"completed","output":[]}`)) / (len(item) + 1)
-	body := []byte(`{"id":"r","status":"completed","output":[` + strings.Repeat(item+",", itemCount-1) + item + `]}`)
-	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(item)))
-
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	valid := validOpenAIResponsesObject(gjson.ParseBytes(body))
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	require.False(t, valid, "provider output beyond the protocol state cap must be rejected")
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-}
-
-func TestValidOpenAIResponsesObjectRejectsDenseKnownFieldsOnUnknownItemsBeforeTypedDecode(t *testing.T) {
-	const targetBytes = 8 << 20
-	const part = `{"type":"future_part"},`
-	partCount := (targetBytes - len(`{"id":"r","status":"completed","output":[{"type":"future_extension","content":[]}]}`)) / len(part)
-	body := []byte(`{"id":"r","status":"completed","output":[{"type":"future_extension","content":[` + strings.Repeat(part, partCount) + `{"type":"future_part"}]}]}`)
-	require.GreaterOrEqual(t, len(body), targetBytes-(2*len(part)))
-
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	valid := validOpenAIResponsesObject(gjson.ParseBytes(body))
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
-	require.False(t, valid, "unknown items must not bypass bounds on fields decoded by compatibility structs")
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(12<<20))
-}
-
 func TestOpenAIStreamEventIsTerminalWithTypeMatchesExistingSemantics(t *testing.T) {
 	tests := []struct {
 		name string

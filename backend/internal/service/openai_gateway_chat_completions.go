@@ -44,11 +44,11 @@ var cursorResponsesUnsupportedFields = []string{
 // 正确的，但 sub2api 接入 DeepSeek/Kimi/GLM 等第三方 OpenAI 兼容上游后假设破裂：
 // 这些上游普遍只支持 /v1/chat/completions，无 /v1/responses 端点。
 //
-// 当前路由策略（基于账号覆盖模式/探测标记，详见 openai_compat.ShouldUseResponsesAPI）：
-//   - APIKey 账号 + 强制或探测确认不支持 Responses → 走 forwardAsRawChatCompletions
-//     直转上游 /v1/chat/completions，不做协议转换
-//   - 其他所有情况（OAuth、APIKey 强制/探测确认支持、未探测）→ 走原有 CC→Responses
-//     转换路径（保留旧行为，存量未探测账号零兼容破坏）
+// 当前路由策略：
+//   - CN 账号以 credentials.api_protocol 为权威；adaptive/chat_completions 入站 Chat
+//     直转原生 CC，anthropic 走原生 Anthropic，responses 走 Responses
+//   - 其他 APIKey 账号仍按覆盖模式/探测标记分流（详见
+//     openai_compat.ShouldUseResponsesAPI）
 func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	ctx context.Context,
 	c *gin.Context,
@@ -56,8 +56,11 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	body []byte,
 	promptCacheKey string,
 	defaultMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, err error) {
 	beginCaptureAttempt(c)
+	defer func() {
+		result, err = finalizeOpenAIForwardResultWithUsage(c, result, err, body)
+	}()
 	beginUpstreamResponseModelObservation(c)
 
 	restrictionResult := s.detectCodexClientRestriction(c, account, body)
@@ -87,9 +90,50 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
-	// 入口分流：APIKey 账号 + 强制或已探测确认上游不支持 Responses，走 CC 直转。
-	// 自动模式下标记缺失（未探测）按"现状即证据"原则继续走下方原 Responses 转换路径。
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	// Cursor compatibility: some clients send a Responses-shaped body to the
+	// /v1/chat/completions URL. Detect it before adaptive routing so adaptive
+	// accounts never forward the body unchanged to a Chat Completions endpoint.
+	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
+
+	// 自适应账号的标准 Chat Completions 入站使用供应商原生 CC 端点。
+	// Responses 形状下，DeepSeek 继续走下方原生 Responses 链；Kimi/GLM
+	// 没有 Responses 端点，先转换成 Chat Completions 再直转。
+	if account.IsAdaptiveAPIProtocol() {
+		if !isResponsesShape {
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+		if account.Platform != PlatformDeepseek {
+			var responsesReq apicompat.ResponsesRequest
+			if err := json.Unmarshal(body, &responsesReq); err != nil {
+				return nil, fmt.Errorf("parse responses-shaped chat completions request: %w", err)
+			}
+			chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(
+				&responsesReq,
+				&apicompat.ResponsesToChatOptions{ReasoningContentByID: s.reasoningContentByID},
+			)
+			if err != nil {
+				return nil, fmt.Errorf("convert responses-shaped chat completions request: %w", err)
+			}
+			chatBody, err := json.Marshal(chatReq)
+			if err != nil {
+				return nil, fmt.Errorf("marshal converted chat completions request: %w", err)
+			}
+			return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel)
+		}
+		// DeepSeek 原生 Responses 请求继续走下方 Responses→Chat 回程转换。
+	}
+
+	// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点，
+	// CC 入站请求经 CC→Responses→Anthropic 转换链直通该端点。必须先于
+	// ShouldUseResponsesAPI 分流：该类账号经 probe 落标
+	// openai_responses_supported=false，会先命中下方的 CC 直转分支。
+	if account.IsAnthropicProtocol() {
+		return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
+	}
+
+	// 固定 chat_completions 的 CN 账号，以及强制或已探测确认不支持 Responses
+	// 的其他 APIKey 账号，均走 CC 直转。
+	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -124,15 +168,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// and produce `input: null`, which Codex upstreams reject with
 	// "Invalid type for 'input': expected a string, but got an object".
 	//
-	// Detect that shape and forward the raw body as-is, only rewriting `model`
+	// Forward that shape as-is, only rewriting `model`
 	// to the resolved upstream model. The downstream codex OAuth transform will
 	// still normalize store/stream/instructions/etc.
-	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
-
 	var (
 		responsesReq  *apicompat.ResponsesRequest
 		responsesBody []byte
-		err           error
 	)
 	if isResponsesShape {
 		responsesBody, err = sjson.SetBytes(body, "model", upstreamModel)
@@ -322,7 +363,6 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	// 9. Handle normal response
-	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
 		result, handleErr = s.handleChatStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body))
@@ -614,7 +654,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	defer func() { _ = staged.close() }()
 	var stagedWriteErr error
 	providerTerminalObserved := false
-	responsesState := openAIResponsesSSEAttemptState{}
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
@@ -680,28 +719,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
-		if providerTerminalObserved {
-			message := "OpenAI Responses data arrived after a terminal event"
-			if !staged.committed {
-				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
-			} else {
-				streamNonFailoverErr = errors.New(message)
-			}
-			return true
-		}
 		payloadBytes := []byte(payload)
-		validatedType, err := validateOpenAIResponsesSSEPayload(payloadBytes, "")
-		if err == nil {
-			err = responsesState.observe(payloadBytes, validatedType)
-		}
-		if err != nil {
-			if !staged.committed {
-				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, payloadBytes, err.Error(), resp)
-			} else {
-				streamNonFailoverErr = err
-			}
-			return true
-		}
 		if retainErr := collectOpenAIResponsesImageResultsFromEventPayloadRetained(payloadBytes, &imageResults, imageResultSeen, imageRetentionBudget, 0); retainErr != nil {
 			message := "OpenAI Responses image output retention failed: " + retainErr.Error()
 			if !staged.committed {
@@ -735,16 +753,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
 		if isTerminalEvent {
 			providerTerminalObserved = true
-		}
-		if (strings.TrimSpace(event.Type) == "response.completed" || strings.TrimSpace(event.Type) == "response.done") &&
-			!validOpenAIResponsesObject(gjson.GetBytes([]byte(payload), "response")) {
-			message := "OpenAI terminal event omitted a valid response object"
-			if !staged.committed {
-				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(payload), message, resp)
-			} else {
-				streamNonFailoverErr = errors.New(message)
-			}
-			return true
 		}
 		terminalFailed, _ := openAIResponsesTerminalFailureStatus([]byte(payload), event.Type)
 		if isTerminalEvent {
@@ -926,25 +934,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
-		if stagedWriteErr != nil || streamFailoverErr != nil || streamNonFailoverErr != nil {
-			return finalizeStream()
-		}
-		if !staged.committed {
-			return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "OpenAI chat_completions stream ended before a terminal event", resp)
-		}
-		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
+		return resultWithUsage(), nil
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
-		if strings.TrimSpace(frame.Data) != "[DONE]" {
-			if _, err := validateOpenAIResponsesSSEPayload([]byte(frame.Data), frame.EventType); err != nil {
-				if !staged.committed {
-					streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, []byte(frame.Data), err.Error(), resp)
-				} else {
-					streamNonFailoverErr = err
-				}
-				return true
-			}
-		}
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		if strings.TrimSpace(payload) == "[DONE]" {
 			return false

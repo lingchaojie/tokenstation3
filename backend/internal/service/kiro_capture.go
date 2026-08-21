@@ -116,14 +116,6 @@ func finalizeKiroCapture(c *gin.Context, result *ForwardResult) *ForwardResult {
 			}
 		}
 	}
-	if result.CaptureContentPolicy == nil {
-		outcome := CaptureOutcomeSuccess
-		if result.UpstreamFailed || result.CaptureTerminalError {
-			outcome = CaptureOutcomeTerminalError
-		}
-		if content, enabled := CaptureDecisionFor(c, PlatformKiro, outcome); enabled {
-			result.CaptureContentPolicy = &content
-		}
-	}
+	RefreshForwardCaptureContentPolicy(c, PlatformKiro, result)
 	return result
 }

@@ -158,9 +158,12 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
-	ccResp, parsedUsage, _, err := s.readCCUpstreamJSONResponse(c, resp, writeAnthropicError)
+	ccResp, parsedUsage, sawUsage, err := s.readCCUpstreamJSONResponse(c, resp, writeAnthropicError)
 	if err != nil {
 		return nil, err
+	}
+	if !sawUsage {
+		return nil, fmt.Errorf("upstream Chat Completions response missing usage: %w", ErrOpenAIUpstreamUsageMissing)
 	}
 	anthropicResp := apicompat.ChatCompletionsResponseToAnthropic(ccResp, originalModel)
 
@@ -198,120 +201,37 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 
 	anthropicState := apicompat.NewChatCompletionsToAnthropicStreamState(originalModel)
 	clientDisconnected := false
-	var staged stagedConvertedStream
-	defer func() {
-		if err := staged.close(); err != nil {
-			logger.L().Warn("openai messages chat fallback: converted stage cleanup failed",
-				zap.Error(err),
-				zap.String("request_id", requestID),
-			)
-		}
-	}()
-
-	// 与 responses 兄弟不同：客户端断开后仍继续做事件转换（喂 anthropicState），
-	// 仅跳过写出，保证 finalize 阶段的 usage 汇总不受断开影响。
 	emitChunk := func(chunk *apicompat.ChatCompletionsChunk) (bool, error) {
-		// CC chunk → Anthropic events (direct, single state machine)
-		anthropicEvents, err := apicompat.ChatCompletionsChunkToAnthropicEvents(chunk, anthropicState)
-		if err != nil {
-			return staged.committed, fmt.Errorf("convert upstream Chat Completions stream: %w", err)
-		}
+		anthropicEvents := apicompat.ChatCompletionsChunkToAnthropicEvents(chunk, anthropicState)
 		semanticOutput := anthropicConvertedEventsHaveSemanticOutput(anthropicEvents)
-		var wire strings.Builder
-		for _, aEvt := range anthropicEvents {
-			sse, err := apicompat.ResponsesAnthropicEventToSSE(aEvt)
-			if err != nil {
-				return staged.committed, fmt.Errorf("marshal anthropic stream event %q: %w", aEvt.Type, err)
-			}
-			_, _ = wire.WriteString(sse)
-		}
 		if clientDisconnected {
-			return staged.committed, nil
+			return semanticOutput, nil
 		}
-		if err := staged.write(c, writeStreamHeaders, wire.String(), semanticOutput); err != nil {
-			var clientWriteErr *stagedConvertedClientWriteError
-			if !errors.As(err, &clientWriteErr) {
-				return staged.committed, err
+		for _, event := range anthropicEvents {
+			sse, err := apicompat.ResponsesAnthropicEventToSSE(event)
+			if err != nil {
+				logger.L().Warn("openai messages chat fallback: failed to marshal stream event",
+					zap.Error(err),
+					zap.String("request_id", requestID),
+				)
+				continue
 			}
-			clientDisconnected = true
+			writeStreamHeaders()
+			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+				clientDisconnected = true
+				break
+			}
 		}
-		return staged.committed, nil
+		if !clientDisconnected && len(anthropicEvents) > 0 {
+			c.Writer.Flush()
+		}
+		return semanticOutput, nil
 	}
 
 	scan := s.scanCCStream(ctx, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
-	usage := scan.Usage
-
-	if scan.Err != nil {
-		if !scan.SawOutput {
-			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream read failed before semantic output")
-		}
-		// Broken upstream read: skip finalization so no synthetic message_stop
-		// masks the truncation, and surface the error to flag usage incomplete
-		// (mirrors forwardResponsesViaRawChatCompletions).
-		return &OpenAIForwardResult{
-			RequestID:        requestID,
-			Usage:            usage,
-			Model:            originalModel,
-			BillingModel:     billingModel,
-			UpstreamModel:    upstreamModel,
-			ReasoningEffort:  reasoningEffort,
-			ServiceTier:      serviceTier,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     scan.FirstTokenMs,
-			ClientDisconnect: clientDisconnected,
-		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
-	}
-	if !scan.SawDone {
-		logCCStreamMissingDoneSentinel("openai messages chat fallback", requestID)
-		if !scan.SawOutput {
-			return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream ended before [DONE]")
-		}
-		return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs, ClientDisconnect: clientDisconnected}, errors.New("upstream stream ended without [DONE]")
-	}
-	if !scan.SawProviderPayload {
-		return nil, newOpenAIIncompleteChatStreamFailover(resp, "upstream Chat Completions stream contained only [DONE]")
-	}
-	// Finalize: close open blocks + emit message_delta/message_stop.
-	finalEvents := apicompat.FinalizeChatCompletionsAnthropicStream(anthropicState)
-	finalSemantic := anthropicConvertedEventsHaveSemanticOutput(finalEvents)
-	var wire strings.Builder
-	for _, aEvt := range finalEvents {
-		sse, err := apicompat.ResponsesAnthropicEventToSSE(aEvt)
-		if err != nil {
-			if finalSemantic && !scan.SawOutput {
-				scan.SawOutput = true
-				ms := int(time.Since(startTime).Milliseconds())
-				scan.FirstTokenMs = &ms
-			}
-			if !scan.SawOutput {
-				return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
-			}
-			return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs, ClientDisconnect: clientDisconnected}, fmt.Errorf("marshal final anthropic stream event %q: %w", aEvt.Type, err)
-		}
-		_, _ = wire.WriteString(sse)
-	}
-	if finalSemantic && !scan.SawOutput {
-		scan.SawOutput = true
-		ms := int(time.Since(startTime).Milliseconds())
-		scan.FirstTokenMs = &ms
-	}
-	if !clientDisconnected {
-		if err := staged.write(c, writeStreamHeaders, wire.String(), true); err != nil {
-			var clientWriteErr *stagedConvertedClientWriteError
-			if !errors.As(err, &clientWriteErr) {
-				if !scan.SawOutput {
-					return nil, &UpstreamFailoverError{Stage: GatewayFailureStageInference}
-				}
-				return &OpenAIForwardResult{RequestID: requestID, Usage: usage, Model: originalModel, BillingModel: billingModel, UpstreamModel: upstreamModel, ReasoningEffort: reasoningEffort, ServiceTier: serviceTier, Stream: true, Duration: time.Since(startTime), FirstTokenMs: scan.FirstTokenMs, ClientDisconnect: clientDisconnected}, fmt.Errorf("finalize converted anthropic stream: %w", err)
-			}
-			clientDisconnected = true
-		}
-	}
-
-	return &OpenAIForwardResult{
+	result := &OpenAIForwardResult{
 		RequestID:        requestID,
-		Usage:            usage,
+		Usage:            scan.Usage,
 		Model:            originalModel,
 		BillingModel:     billingModel,
 		UpstreamModel:    upstreamModel,
@@ -321,7 +241,44 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     scan.FirstTokenMs,
 		ClientDisconnect: clientDisconnected,
-	}, nil
+	}
+	if scan.Err != nil {
+		var failoverErr *UpstreamFailoverError
+		if errors.As(scan.Err, &failoverErr) {
+			return nil, scan.Err
+		}
+		return result, fmt.Errorf("stream usage incomplete: %w", scan.Err)
+	}
+
+	finalEvents := apicompat.FinalizeChatCompletionsAnthropicStream(anthropicState)
+	if !clientDisconnected {
+		for _, event := range finalEvents {
+			sse, err := apicompat.ResponsesAnthropicEventToSSE(event)
+			if err != nil {
+				logger.L().Warn("openai messages chat fallback: failed to marshal final stream event",
+					zap.Error(err),
+					zap.String("request_id", requestID),
+				)
+				continue
+			}
+			writeStreamHeaders()
+			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+				clientDisconnected = true
+				break
+			}
+		}
+		if !clientDisconnected {
+			c.Writer.Flush()
+		}
+	}
+	result.ClientDisconnect = clientDisconnected
+	if !scan.SawDone {
+		logCCStreamMissingDoneSentinel("openai messages chat fallback", requestID)
+	}
+	if !scan.SawUsage {
+		return result, fmt.Errorf("upstream Chat Completions stream missing usage: %w", ErrOpenAIUpstreamUsageMissing)
+	}
+	return result, nil
 }
 
 func anthropicConvertedEventsHaveSemanticOutput(events []apicompat.AnthropicStreamEvent) bool {

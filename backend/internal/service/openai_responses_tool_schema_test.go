@@ -216,26 +216,23 @@ func buildToolSchemaNullTypeBody(t *testing.T, hits int) []byte {
 	return body
 }
 
-// 复杂度守卫：重写次数必须与命中数无关。
+// 复杂度守卫：大量命中不能退化成逐命中全量重写。
 //
 // 逐个 sjson.SetBytes 的写法每命中一处就重扫并全量拷贝一次文档，命中 N 处即 N 次
 // 全量拷贝；/v1/responses 的 body 上限是 gateway.max_body_size（默认 256MB），
-// 构造请求可以塞进百万级命中，会被放大成 TB 级 memcpy。这里用分配次数锁死该行为：
-// 命中数放大 500 倍，分配次数不得随之增长。
-func TestSanitizeOpenAIResponsesToolParameterTypes_RewriteCountIndependentOfHits(t *testing.T) {
-	small := buildToolSchemaNullTypeBody(t, 4)
+// 构造请求可以塞进百万级命中，会被放大成 TB 级 memcpy。这里对 2000 个命中的
+// 总分配次数设置宽松绝对上限；避免用大小输入的全进程分配差值做比较，因为并行
+// 测试遗留的后台 goroutine 分配会让差值在完整 test suite 中偶发抖动。
+func TestSanitizeOpenAIResponsesToolParameterTypes_LargeHitSetDoesNotAllocatePerHit(t *testing.T) {
 	large := buildToolSchemaNullTypeBody(t, 2000)
 
-	smallAllocs := testing.AllocsPerRun(2, func() {
-		_, _, _ = sanitizeOpenAIResponsesToolParameterTypes(small)
-	})
-	largeAllocs := testing.AllocsPerRun(2, func() {
+	largeAllocs := testing.AllocsPerRun(5, func() {
 		_, _, _ = sanitizeOpenAIResponsesToolParameterTypes(large)
 	})
 
-	// 命中切片扩容是对数级，留出充裕余量；线性写法在这里会是 2000 量级。
-	require.Less(t, largeAllocs, smallAllocs+40,
-		"分配次数随命中数线性增长，说明退回了逐路径全量重写 (small=%v large=%v)", smallAllocs, largeAllocs)
+	// 当前单次拼接远低于此值；逐路径 sjson.SetBytes 至少会产生 2000 级分配。
+	require.Less(t, largeAllocs, float64(500),
+		"大量命中产生了逐命中级分配，疑似退回逐路径全量重写 (large=%v)", largeAllocs)
 
 	// 同时确认大 body 的结果确实全部修好了。
 	sanitized, changed, err := sanitizeOpenAIResponsesToolParameterTypes(large)

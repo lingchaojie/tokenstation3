@@ -186,7 +186,7 @@ func setCaptureScopeForPlatformTest(t *testing.T, c *gin.Context, enabled, anthr
 	setCompiledCaptureScopeForTest(c, compiled, 1, nil)
 }
 
-func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_NonJSON2xxTriggersFailover(t *testing.T) {
+func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_NonJSON2xxPassesThrough(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -202,12 +202,10 @@ func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_NonJSON2xxTriggers
 
 	usage, err := svc.handleNonStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 2})
 
-	require.Nil(t, usage)
-	var failoverErr *UpstreamFailoverError
-	require.True(t, errors.As(err, &failoverErr))
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-	require.Equal(t, body, failoverErr.ResponseBody)
-	require.False(t, c.Writer.Written(), "invalid passthrough response must not be committed before failover")
+	require.NoError(t, err)
+	require.Equal(t, &ClaudeUsage{}, usage)
+	require.True(t, c.Writer.Written())
+	require.Equal(t, body, rec.Body.Bytes())
 }
 
 func TestHandleNonStreamingResponseAnthropicAPIKeyPassthrough_ValidJSONUnchanged(t *testing.T) {

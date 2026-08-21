@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -668,6 +669,203 @@ func TestParsePricingData_PreservesServiceTierPriorityFields(t *testing.T) {
 	require.InDelta(t, 0.00000025, pricing.CacheReadInputTokenCost, 1e-12)
 	require.InDelta(t, 0.0000005, pricing.CacheReadInputTokenCostPriority, 1e-12)
 	require.True(t, pricing.SupportsServiceTier)
+}
+
+func TestBillingService_ParsedPricingPreservesRelevantTokenBucketPresence(t *testing.T) {
+	tests := []struct {
+		name        string
+		entry       string
+		tokens      UsageTokens
+		serviceTier string
+		wantErr     bool
+		wantCost    float64
+	}{
+		{
+			name:    "missing input price",
+			entry:   `"output_cost_per_token": 0.002`,
+			tokens:  UsageTokens{InputTokens: 100},
+			wantErr: true,
+		},
+		{
+			name:     "explicit zero input price is free",
+			entry:    `"input_cost_per_token": 0, "output_cost_per_token": 0.002`,
+			tokens:   UsageTokens{InputTokens: 100},
+			wantCost: 0,
+		},
+		{
+			name:    "missing output price",
+			entry:   `"input_cost_per_token": 0.001`,
+			tokens:  UsageTokens{OutputTokens: 100},
+			wantErr: true,
+		},
+		{
+			name:     "explicit zero output price is free",
+			entry:    `"input_cost_per_token": 0.001, "output_cost_per_token": 0`,
+			tokens:   UsageTokens{OutputTokens: 100},
+			wantCost: 0,
+		},
+		{
+			name:    "missing cache write price",
+			entry:   `"input_cost_per_token": 0.001, "output_cost_per_token": 0.002`,
+			tokens:  UsageTokens{CacheCreationTokens: 100},
+			wantErr: true,
+		},
+		{
+			name:     "explicit zero cache write price is free",
+			entry:    `"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "cache_creation_input_token_cost": 0`,
+			tokens:   UsageTokens{CacheCreationTokens: 100},
+			wantCost: 0,
+		},
+		{
+			name:    "missing cache read price",
+			entry:   `"input_cost_per_token": 0.001, "output_cost_per_token": 0.002`,
+			tokens:  UsageTokens{CacheReadTokens: 100},
+			wantErr: true,
+		},
+		{
+			name:     "explicit zero cache read price is free",
+			entry:    `"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "cache_read_input_token_cost": 0`,
+			tokens:   UsageTokens{CacheReadTokens: 100},
+			wantCost: 0,
+		},
+		{
+			name:        "explicit zero priority output price is free",
+			entry:       `"input_cost_per_token": 0.001, "input_cost_per_token_priority": 0.002, "output_cost_per_token": 0.003, "output_cost_per_token_priority": 0, "supports_service_tier": true`,
+			tokens:      UsageTokens{OutputTokens: 100},
+			serviceTier: "priority",
+			wantCost:    0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pricingSvc := &PricingService{}
+			data, err := pricingSvc.parsePricingData([]byte(`{"partial-global-model": {` + tt.entry + `}}`))
+			require.NoError(t, err)
+			pricingSvc.pricingData = data
+			billing := NewBillingService(&config.Config{}, pricingSvc)
+			resolver := NewModelPricingResolver(nil, billing)
+
+			calculators := []struct {
+				name string
+				fn   func() (*CostBreakdown, error)
+			}{
+				{
+					name: "legacy",
+					fn: func() (*CostBreakdown, error) {
+						return billing.CalculateCostWithServiceTier("partial-global-model", tt.tokens, 1, tt.serviceTier)
+					},
+				},
+				{
+					name: "unified",
+					fn: func() (*CostBreakdown, error) {
+						return billing.CalculateCostUnified(CostInput{
+							Ctx:            context.Background(),
+							Model:          "partial-global-model",
+							Tokens:         tt.tokens,
+							RateMultiplier: 1,
+							ServiceTier:    tt.serviceTier,
+							Resolver:       resolver,
+						})
+					},
+				},
+			}
+
+			for _, calculator := range calculators {
+				t.Run(calculator.name, func(t *testing.T) {
+					cost, err := calculator.fn()
+					if tt.wantErr {
+						require.ErrorIs(t, err, ErrModelPricingUnavailable)
+						return
+					}
+					require.NoError(t, err)
+					require.InDelta(t, tt.wantCost, cost.TotalCost, 1e-12)
+				})
+			}
+		})
+	}
+}
+
+func TestBillingService_ChannelPricingCanFillMissingGlobalTokenBucket(t *testing.T) {
+	pricingSvc := &PricingService{}
+	data, err := pricingSvc.parsePricingData([]byte(`{
+		"partial-global-model": {
+			"input_cost_per_token": 0.001
+		}
+	}`))
+	require.NoError(t, err)
+	pricingSvc.pricingData = data
+	billing := NewBillingService(&config.Config{}, pricingSvc)
+	resolver := NewModelPricingResolver(nil, billing)
+
+	for _, price := range []float64{0, 0.002} {
+		price := price
+		name := "nonzero"
+		if price == 0 {
+			name = "explicit_zero"
+		}
+		t.Run("flat_"+name, func(t *testing.T) {
+			channelPricing := &ChannelModelPricing{OutputPrice: &price}
+			cost, err := billing.calculateCostInternal(
+				"partial-global-model",
+				UsageTokens{OutputTokens: 100},
+				1,
+				"",
+				channelPricing,
+			)
+			require.NoError(t, err)
+			require.InDelta(t, price*100, cost.TotalCost, 1e-12)
+		})
+
+		t.Run("interval_"+name, func(t *testing.T) {
+			base, err := billing.GetModelPricing("partial-global-model")
+			require.NoError(t, err)
+			resolved := &ResolvedPricing{
+				Mode:        BillingModeToken,
+				BasePricing: base,
+				Intervals: []PricingInterval{{
+					MinTokens:   0,
+					OutputPrice: &price,
+				}},
+			}
+			cost, err := billing.CalculateCostUnified(CostInput{
+				Ctx:            context.Background(),
+				Model:          "partial-global-model",
+				Tokens:         UsageTokens{OutputTokens: 100},
+				RateMultiplier: 1,
+				Resolver:       resolver,
+				Resolved:       resolved,
+			})
+			require.NoError(t, err)
+			require.InDelta(t, price*100, cost.TotalCost, 1e-12)
+		})
+	}
+}
+
+func TestBillingService_ChannelOverridePreservesExplicitZeroPriorityPrice(t *testing.T) {
+	pricingSvc := &PricingService{}
+	data, err := pricingSvc.parsePricingData([]byte(`{
+		"priority-free-model": {
+			"input_cost_per_token": 0.001,
+			"input_cost_per_token_priority": 0,
+			"output_cost_per_token": 0.002,
+			"supports_service_tier": true
+		}
+	}`))
+	require.NoError(t, err)
+	pricingSvc.pricingData = data
+	billing := NewBillingService(&config.Config{}, pricingSvc)
+	channelPrice := 0.003
+
+	cost, err := billing.calculateCostInternal(
+		"priority-free-model",
+		UsageTokens{InputTokens: 100},
+		1,
+		"priority",
+		&ChannelModelPricing{InputPrice: &channelPrice},
+	)
+	require.NoError(t, err)
+	require.Zero(t, cost.TotalCost)
 }
 
 // ---------------------------------------------------------------------------

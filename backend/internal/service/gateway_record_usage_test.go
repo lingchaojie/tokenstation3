@@ -68,6 +68,233 @@ type openAIRecordUsageBestEffortLogRepoStub struct {
 	lastCtxErr      error
 }
 
+func TestGatewayServiceRecordUsage_ZeroUsageFailsClosed(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result:  &ForwardResult{RequestID: "gateway_zero_usage", Model: "claude-sonnet-4"},
+		APIKey:  &APIKey{ID: 501},
+		User:    &User{ID: 601},
+		Account: &Account{ID: 701},
+	})
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+}
+
+func TestGatewayServiceValidateUsagePricing_KiroRelayCreditsOnlyFailsClosed(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+
+	err := svc.ValidateUsagePricing(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "kiro_relay_credits_only",
+			Model:     "claude-sonnet-4",
+			Usage:     ClaudeUsage{KiroCredits: 0.17},
+		},
+		APIKey: &APIKey{ID: 501},
+		User:   &User{ID: 601},
+		Account: &Account{
+			ID:       701,
+			Platform: PlatformKiro,
+			Type:     AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"base_url": "https://relay.example.com",
+			},
+		},
+	})
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+}
+
+func TestGatewayServiceValidateUsagePricing_KiroDirectEstimatedTokensRemainBillable(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+
+	err := svc.ValidateUsagePricing(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "kiro_direct_estimated_tokens",
+			Model:     "claude-sonnet-4",
+			Usage:     ClaudeUsage{InputTokens: 20, OutputTokens: 10, KiroCredits: 0.17},
+		},
+		APIKey:  &APIKey{ID: 501},
+		User:    &User{ID: 601},
+		Account: &Account{ID: 701, Platform: PlatformKiro, Type: AccountTypeOAuth},
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+}
+
+func TestGatewayServiceRecordUsage_MissingPricingFailsClosed(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_missing_pricing",
+			Model:     "pricing-missing-test-model",
+			Usage:     ClaudeUsage{InputTokens: 20, OutputTokens: 10},
+		},
+		APIKey:  &APIKey{ID: 501},
+		User:    &User{ID: 601},
+		Account: &Account{ID: 701},
+	})
+
+	require.ErrorContains(t, err, "calculate usage cost failed")
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+}
+
+func TestGatewayServiceValidateUsagePricingDoesNotPersistOrMutate(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo)
+	result := &ForwardResult{
+		RequestID: "gateway_pricing_preflight",
+		Model:     "claude-sonnet-4",
+		Usage:     ClaudeUsage{InputTokens: 20, OutputTokens: 10},
+	}
+
+	err := svc.ValidateUsagePricing(context.Background(), &RecordUsageInput{
+		Result:            result,
+		APIKey:            &APIKey{ID: 501},
+		User:              &User{ID: 601},
+		Account:           &Account{ID: 701},
+		ForceCacheBilling: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 20, result.Usage.InputTokens, "preflight must price a clone")
+	require.Zero(t, result.Usage.CacheReadInputTokens)
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+	require.Zero(t, userRepo.deductCalls)
+	require.Zero(t, subRepo.incrementCalls)
+}
+
+func TestGatewayServiceValidateUsagePricingRejectsUnpricedModelWithoutWrites(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo)
+
+	err := svc.ValidateUsagePricing(context.Background(), &RecordUsageInput{
+		Result:  &ForwardResult{RequestID: "gateway_unpriced_preflight", Model: "pricing-missing-test-model", Usage: ClaudeUsage{InputTokens: 20, OutputTokens: 10}},
+		APIKey:  &APIKey{ID: 501},
+		User:    &User{ID: 601},
+		Account: &Account{ID: 701},
+	})
+
+	require.ErrorContains(t, err, "calculate usage cost failed")
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+	require.Zero(t, userRepo.deductCalls)
+	require.Zero(t, subRepo.incrementCalls)
+}
+
+func TestGatewayServiceValidateUsagePricingMappedModelFallbackAndFailure(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo)
+	base := RecordUsageInput{
+		APIKey:  &APIKey{ID: 501},
+		User:    &User{ID: 601},
+		Account: &Account{ID: 701},
+		ChannelUsageFields: ChannelUsageFields{
+			OriginalModel:      "client-alias",
+			ChannelMappedModel: "pricing-missing-mapped-model",
+			BillingModelSource: BillingModelSourceChannelMapped,
+		},
+	}
+
+	priceable := base
+	priceable.Result = &ForwardResult{
+		RequestID:     "gateway_mapped_fallback_preflight",
+		Model:         "client-alias",
+		UpstreamModel: "claude-sonnet-4",
+		Usage:         ClaudeUsage{InputTokens: 20, OutputTokens: 10},
+	}
+	require.NoError(t, svc.ValidateUsagePricing(context.Background(), &priceable), "an unpriced alias may fall back to the priced concrete upstream model")
+
+	unpriceable := base
+	unpriceable.Result = &ForwardResult{
+		RequestID:     "gateway_mapped_unpriced_preflight",
+		Model:         "pricing-missing-client-model",
+		UpstreamModel: "pricing-missing-upstream-model",
+		Usage:         ClaudeUsage{InputTokens: 20, OutputTokens: 10},
+	}
+	require.ErrorContains(t, svc.ValidateUsagePricing(context.Background(), &unpriceable), "calculate usage cost failed")
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+	require.Zero(t, userRepo.deductCalls)
+	require.Zero(t, subRepo.incrementCalls)
+}
+
+func TestGatewayServiceBillableModelWithFallback_IgnoresEmptyAliasTokenCard(t *testing.T) {
+	svc := newGatewayRecordUsageServiceForTest(nil, nil, nil)
+	svc.resolver = NewModelPricingResolver(nil, svc.billingService)
+	apiKey := &APIKey{Group: &Group{ID: 1, ModelPricing: []ChannelModelPricing{{
+		Models:      []string{"customer-alias"},
+		BillingMode: BillingModeToken,
+	}}}}
+
+	got := svc.billableModelWithFallback(context.Background(), apiKey, "customer-alias", "claude-sonnet-4")
+
+	require.Equal(t, "claude-sonnet-4", got)
+}
+
+func TestGatewayServiceBillableModelWithFallback_KeepsExplicitZeroAliasTokenPrice(t *testing.T) {
+	svc := newGatewayRecordUsageServiceForTest(nil, nil, nil)
+	svc.resolver = NewModelPricingResolver(nil, svc.billingService)
+	apiKey := &APIKey{Group: &Group{ID: 1, ModelPricing: []ChannelModelPricing{{
+		Models:      []string{"free-customer-alias"},
+		BillingMode: BillingModeToken,
+		InputPrice:  testPtrFloat64(0),
+	}}}}
+
+	got := svc.billableModelWithFallback(context.Background(), apiKey, "free-customer-alias", "claude-sonnet-4")
+
+	require.Equal(t, "free-customer-alias", got)
+}
+
+func TestGatewayServiceValidateUsagePricingWithLongContextIsReadOnly(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo)
+
+	err := svc.ValidateUsagePricingWithLongContext(context.Background(), &RecordUsageLongContextInput{
+		Result:                &ForwardResult{RequestID: "gateway_long_context_preflight", Model: "claude-sonnet-4", Usage: ClaudeUsage{InputTokens: 200001, OutputTokens: 10}},
+		APIKey:                &APIKey{ID: 501},
+		User:                  &User{ID: 601},
+		Account:               &Account{ID: 701},
+		LongContextThreshold:  200000,
+		LongContextMultiplier: 2,
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, usageRepo.calls)
+	require.Zero(t, billingRepo.calls)
+	require.Zero(t, userRepo.deductCalls)
+	require.Zero(t, subRepo.incrementCalls)
+}
+
 func (s *openAIRecordUsageBestEffortLogRepoStub) CreateBestEffort(ctx context.Context, log *UsageLog) error {
 	s.bestEffortCalls++
 	s.lastLog = log
@@ -347,6 +574,38 @@ func TestGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *
 	require.InDelta(t, expectedActual, userRepo.lastAmount, 1e-12)
 }
 
+func TestGatewayServiceRecordUsage_TimePricingUsesPricingAt(t *testing.T) {
+	groupID := int64(904)
+	requestStart := time.Date(2024, time.January, 2, 2, 0, 0, 0, time.UTC) // 上海 10:00
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
+	svc.resolver = newOpenAITokenImageChannelPricingResolverWithTimeForTest(t, groupID, "gpt-5.1", &ChannelTimePricing{
+		Timezone: "Asia/Shanghai",
+		Periods:  []ChannelTimePricingPeriod{{StartTime: "09:00", EndTime: "12:00", Multiplier: 2}},
+	})
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_time_pricing_request_start",
+			Model:     "gpt-5.1",
+			Usage:     ClaudeUsage{InputTokens: 1000, OutputTokens: 500},
+		},
+		APIKey: &APIKey{ID: 804, GroupID: i64p(groupID), Group: &Group{
+			ID: groupID, RateMultiplier: 0.8, SubscriptionType: SubscriptionTypeSubscription,
+		}},
+		User:      &User{ID: 604},
+		Account:   &Account{ID: 704},
+		PricingAt: requestStart,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	baseCost := 1000*3e-6 + 500*15e-6
+	require.InDelta(t, baseCost*2, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, baseCost*2*0.8, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, 0.8, usageRepo.lastLog.RateMultiplier, 1e-12)
+}
 func TestGatewayServiceRecordUsage_UsesExplicitPricingAtForPeakRate(t *testing.T) {
 	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformAntigravity} {
 		t.Run(platform, func(t *testing.T) {

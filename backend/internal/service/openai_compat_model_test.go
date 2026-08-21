@@ -1382,7 +1382,7 @@ func TestForwardAsAnthropic_StoresStreamingResponseIDWithoutUsage(t *testing.T) 
 	firstCtx.Request.Header.Set("Content-Type", "application/json")
 
 	firstResult, err := svc.ForwardAsAnthropic(context.Background(), firstCtx, account, firstBody, "stable-cache-key", "gpt-5.3-codex")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
 	require.NotNil(t, firstResult)
 	require.Equal(t, "resp_stream_first", firstResult.ResponseID)
 
@@ -1973,7 +1973,7 @@ func TestForwardAsAnthropic_BufferedEventNamedTerminalWithoutUpstreamCloseReturn
 	}
 }
 
-func TestForwardAsAnthropic_MissingTerminalBeforeOutputReturnsFailoverAndOps(t *testing.T) {
+func TestForwardAsAnthropic_MissingUsageBeforeOutputReturnsBillingErrorWithoutFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -2003,25 +2003,18 @@ func TestForwardAsAnthropic_MissingTerminalBeforeOutputReturnsFailoverAndOps(t *
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
-	require.Error(t, err)
+	require.ErrorContains(t, err, "upstream response missing billable usage")
 	var failoverErr *UpstreamFailoverError
-	require.True(t, errors.As(err, &failoverErr), "missing terminal before output must use failover path")
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-	require.Contains(t, string(failoverErr.ResponseBody), "OpenAI messages stream ended before a terminal event")
-	require.Nil(t, result, "a pre-output failure must remain eligible for real handler failover")
+	require.False(t, errors.As(err, &failoverErr), "missing usage is a billing error, not a reason to replay the request")
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
 	require.False(t, c.Writer.Written(), "no client body/header should be committed before safe failover")
 	require.Empty(t, rec.Body.String())
-
-	events := openAICompatOpsEvents(t, c)
-	require.Len(t, events, 1)
-	require.Equal(t, "failover", events[0].Kind)
-	require.Equal(t, http.StatusBadGateway, events[0].UpstreamStatusCode)
-	require.Equal(t, int64(1), events[0].AccountID)
-	require.Equal(t, "rid_missing_terminal", events[0].UpstreamRequestID)
-	require.Contains(t, events[0].Message, "terminal event")
+	_, hasOpsErrors := c.Get(OpsUpstreamErrorsKey)
+	require.False(t, hasOpsErrors, "missing usage is recorded by the request error path, not as an upstream protocol error")
 }
 
-func TestForwardAsAnthropic_MissingTerminalAfterOutputRecordsOpsWithoutFailover(t *testing.T) {
+func TestForwardAsAnthropic_MissingUsageAfterOutputReturnsBillingErrorWithoutFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -2056,26 +2049,21 @@ func TestForwardAsAnthropic_MissingTerminalAfterOutputRecordsOpsWithoutFailover(
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing terminal event")
+	require.ErrorContains(t, err, "upstream response missing billable usage")
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr), "partial output must not be replayed through failover")
 	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
 	require.False(t, result.ClientDisconnect)
 	require.True(t, c.Writer.Written())
 	require.Contains(t, rec.Body.String(), "event: message_start")
 	require.Contains(t, rec.Body.String(), "partial")
 
-	events := openAICompatOpsEvents(t, c)
-	require.Len(t, events, 1)
-	require.Equal(t, "stream_missing_terminal", events[0].Kind)
-	require.Equal(t, http.StatusBadGateway, events[0].UpstreamStatusCode)
-	require.Equal(t, int64(1), events[0].AccountID)
-	require.Equal(t, "rid_partial_missing_terminal", events[0].UpstreamRequestID)
-	require.Contains(t, events[0].Message, "terminal event")
+	_, hasOpsErrors := c.Get(OpsUpstreamErrorsKey)
+	require.False(t, hasOpsErrors, "missing terminal is not an upstream protocol error")
 }
 
-func TestForwardAsAnthropic_MissingTerminalAfterClientDisconnectSkipsOpsAndFailover(t *testing.T) {
+func TestForwardAsAnthropic_MissingUsageAfterClientDisconnectReturnsBillingErrorWithoutFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -2111,11 +2099,12 @@ func TestForwardAsAnthropic_MissingTerminalAfterClientDisconnectSkipsOpsAndFailo
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
-	require.NoError(t, err, "a real downstream disconnect is drained for usage and must not trigger account replay")
+	require.ErrorContains(t, err, "upstream response missing billable usage")
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr), "a committed client disconnect must not be replayed")
 	require.NotNil(t, result)
 	require.True(t, result.ClientDisconnect)
+	require.True(t, result.UpstreamFailed)
 	require.Empty(t, rec.Body.String())
 	_, ok := c.Get(OpsUpstreamErrorsKey)
 	require.False(t, ok, "client disconnect must not be attributed as an upstream error")
@@ -2167,15 +2156,6 @@ func TestForwardAsAnthropic_CompleteStreamDoesNotRecordMissingTerminalOps(t *tes
 	require.Contains(t, rec.Body.String(), "event: message_stop")
 	_, ok := c.Get(OpsUpstreamErrorsKey)
 	require.False(t, ok)
-}
-
-func openAICompatOpsEvents(t *testing.T, c *gin.Context) []*OpsUpstreamErrorEvent {
-	t.Helper()
-	v, ok := c.Get(OpsUpstreamErrorsKey)
-	require.True(t, ok)
-	events, ok := v.([]*OpsUpstreamErrorEvent)
-	require.True(t, ok)
-	return events
 }
 
 func TestForwardAsAnthropic_UpstreamRequestIgnoresClientCancel(t *testing.T) {

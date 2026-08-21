@@ -452,6 +452,10 @@ var allowedHeaders = map[string]bool{
 // cache implementation (e.g. redis.Nil), mirroring ErrRefreshTokenNotFound.
 var ErrStickySessionNotFound = errors.New("sticky session not found")
 
+// ErrReasoningContentNotFound is returned by GatewayCache.GetReasoningContent
+// when no cached reasoning content exists for the reasoning item ID.
+var ErrReasoningContentNotFound = errors.New("reasoning content not found")
+
 // GatewayCache 定义网关服务的缓存操作接口。
 // 提供粘性会话（Sticky Session）的存储、查询、刷新和删除功能。
 //
@@ -486,6 +490,13 @@ type GatewayCache interface {
 	ClaimGrokVideoBilled(ctx context.Context, key string, ttl time.Duration) (bool, error)
 	// ReleaseGrokVideoBilled clears a claim so a failed RecordUsage can retry billing.
 	ReleaseGrokVideoBilled(ctx context.Context, key string) error
+
+	// Reasoning content cache (Responses→Chat Completions bridge).
+	// DeepSeek thinking mode requires the previous reasoning content to be
+	// replayed when the client only returns the reasoning item reference.
+	SetReasoningContent(ctx context.Context, itemID string, content string, ttl time.Duration) error
+	// GetReasoningContent returns ErrReasoningContentNotFound on cache miss.
+	GetReasoningContent(ctx context.Context, itemID string) (string, error)
 }
 
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
@@ -608,6 +619,9 @@ type ForwardResult struct {
 	CaptureTerminalError          bool // archive this exchange under terminal_error even when partial usage remains billable
 	CaptureResponseComplete       bool // final provider response bytes were fully consumed despite a terminal error
 	ReasoningEffort               *string
+	// ServiceTier records the billable request tier. OpenAI uses service_tier;
+	// Anthropic speed=fast is normalized to "fast".
+	ServiceTier *string
 
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount         int    // 生成的图片数量
@@ -630,6 +644,65 @@ type ForwardResult struct {
 	CaptureStream           bool
 	CaptureStreamKnown      bool
 	CaptureContentPolicy    *CaptureContentPolicy
+}
+
+var ErrUpstreamUsageMissing = errors.New("upstream response missing billable usage")
+
+// HasBillableUsage reports whether the upstream supplied a potentially
+// billable unit. Account-mode-specific checks (for example Kiro relay credits
+// without tokens) run once the selected account is available to billing.
+// It never estimates missing token usage.
+func (r *ForwardResult) HasBillableUsage() bool {
+	if r == nil {
+		return false
+	}
+	u := r.Usage
+	return u.InputTokens > 0 ||
+		u.OutputTokens > 0 ||
+		u.CacheCreationInputTokens > 0 ||
+		u.CacheReadInputTokens > 0 ||
+		u.CacheCreation5mTokens > 0 ||
+		u.CacheCreation1hTokens > 0 ||
+		u.ImageOutputTokens > 0 ||
+		u.KiroCredits > 0 ||
+		r.ImageCount > 0
+}
+
+func (r *ForwardResult) hasBillableUsageWithoutKiroCredits() bool {
+	if r == nil {
+		return false
+	}
+	u := r.Usage
+	return u.InputTokens > 0 ||
+		u.OutputTokens > 0 ||
+		u.CacheCreationInputTokens > 0 ||
+		u.CacheReadInputTokens > 0 ||
+		u.CacheCreation5mTokens > 0 ||
+		u.CacheCreation1hTokens > 0 ||
+		u.ImageOutputTokens > 0 ||
+		r.ImageCount > 0
+}
+
+func isKiroRelayCreditsOnlyUsage(account *Account, result *ForwardResult) bool {
+	return isKiroRelayModeAccount(account) &&
+		result != nil &&
+		result.Usage.KiroCredits > 0 &&
+		!result.hasBillableUsageWithoutKiroCredits()
+}
+
+// FinalizeForwardUsage converts an otherwise successful, unbillable upstream
+// response into a capture-only error result. Existing forwarding errors keep
+// their identity while the result is prevented from entering normal billing.
+func FinalizeForwardUsage(result *ForwardResult, forwardErr error) error {
+	if result == nil || result.HasBillableUsage() {
+		return forwardErr
+	}
+	result.UpstreamFailed = true
+	result.CaptureTerminalError = true
+	if forwardErr != nil {
+		return forwardErr
+	}
+	return ErrUpstreamUsageMissing
 }
 
 func (r *ForwardResult) UpstreamModelForCapture() string {
@@ -1600,6 +1673,17 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	hasAnyMapping := false
 
 	for _, acc := range accounts {
+		// Passthrough routing accepts models independently of model_mapping. A stale
+		// mapping on any eligible passthrough account therefore cannot define the
+		// public whitelist; return nil so the handler uses its default model set.
+		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() {
+			if s.modelsListCache != nil {
+				s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
+				modelsListCacheStoreTotal.Add(1)
+			}
+			return nil
+		}
+
 		mapping := acc.GetModelMapping()
 		if len(mapping) > 0 {
 			hasAnyMapping = true

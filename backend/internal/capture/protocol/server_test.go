@@ -368,7 +368,7 @@ func TestServerRemovesOnlyStaleSocketAndStopsWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(ctx) }()
-	waitForSocket(t, path)
+	waitForServerReady(t, server, path)
 	cancel()
 	require.NoError(t, <-done)
 	_, err = os.Lstat(path)
@@ -533,7 +533,7 @@ func startTestServerAt(t *testing.T, cfg ServerConfig, factory SessionFactory) (
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(ctx) }()
-	waitForSocket(t, cfg.SocketPath)
+	waitForServerReady(t, server, cfg.SocketPath)
 	t.Cleanup(func() {
 		cancel()
 		_ = server.Close()
@@ -549,9 +549,15 @@ func startTestServerAt(t *testing.T, cfg ServerConfig, factory SessionFactory) (
 	return server, cfg.SocketPath
 }
 
-func waitForSocket(t *testing.T, path string) {
+func waitForServerReady(t *testing.T, server *Server, path string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
+		server.listenerMu.Lock()
+		listenerReady := server.listener != nil && !server.closed
+		server.listenerMu.Unlock()
+		if !listenerReady {
+			return false
+		}
 		info, err := os.Lstat(path)
 		return err == nil && info.Mode()&os.ModeSocket != 0
 	}, time.Second, time.Millisecond)

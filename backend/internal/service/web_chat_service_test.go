@@ -468,6 +468,10 @@ func (h *webChatRealGatewayHarness) SelectAccountWithLoadAwareness(context.Conte
 
 func (*webChatRealGatewayHarness) RecordUsage(context.Context, *RecordUsageInput) error { return nil }
 
+func (*webChatRealGatewayHarness) ValidateUsagePricing(context.Context, *RecordUsageInput) error {
+	return nil
+}
+
 type webChatRealOpenAIHarness struct {
 	*OpenAIGatewayService
 	account *Account
@@ -478,6 +482,10 @@ func (h *webChatRealOpenAIHarness) SelectAccountWithLoadAwareness(context.Contex
 }
 
 func (*webChatRealOpenAIHarness) RecordUsage(context.Context, *OpenAIRecordUsageInput) error {
+	return nil
+}
+
+func (*webChatRealOpenAIHarness) ValidateUsagePricing(context.Context, *OpenAIRecordUsageInput) error {
 	return nil
 }
 
@@ -853,6 +861,157 @@ func TestWebChatDispatchArchivesFailedProviderResultWithoutRecordingUsage(t *tes
 			require.Nil(t, svc.openAIRecordUsageInput)
 			require.Equal(t, 0, countWebChatEvent(svc.events, "record_usage")+countWebChatEvent(svc.events, "record_openai_usage"))
 			require.Equal(t, 1, countWebChatEvent(svc.events, map[string]string{PlatformOpenAI: "submit_openai_capture", PlatformAnthropic: "submit_gateway_capture"}[tt.platform]))
+		})
+	}
+}
+
+func TestWebChatDispatchRecordsCommittedUsageDespitePostResponseError(t *testing.T) {
+	sentinel := errors.New("provider stream ended after committed usage")
+	tests := []struct {
+		name          string
+		platform      string
+		provider      string
+		model         string
+		forwardEvent  string
+		validateEvent string
+		captureEvent  string
+		recordEvent   string
+		prepare       func(*webChatServiceTestDouble)
+	}{
+		{
+			name: "anthropic", platform: PlatformAnthropic, provider: PlatformAnthropic, model: "claude-sonnet-4",
+			forwardEvent: "forward", validateEvent: "validate_gateway_usage", captureEvent: "submit_gateway_capture", recordEvent: "record_usage",
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
+				svc.gatewayForwardResult = &ForwardResult{
+					RequestID: "anthropic-partial", Model: "claude-sonnet-4", Usage: ClaudeUsage{InputTokens: 2, OutputTokens: 1},
+					CaptureTerminalError: true,
+				}
+				svc.forwardErr = sentinel
+			},
+		},
+		{
+			name: "gemini", platform: PlatformGemini, provider: PlatformGemini, model: "gemini-2.5-flash",
+			forwardEvent: "forward", validateEvent: "validate_gateway_usage", captureEvent: "submit_gateway_capture", recordEvent: "record_usage",
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.geminiCompatService = nil
+				svc.selection = &AccountSelectionResult{Account: &Account{ID: 78, Platform: PlatformGemini}, Acquired: true}
+				svc.gatewayForwardResult = &ForwardResult{
+					RequestID: "gemini-partial", Model: "gemini-2.5-flash", Usage: ClaudeUsage{InputTokens: 2, OutputTokens: 1},
+					CaptureTerminalError: true,
+				}
+				svc.forwardErr = sentinel
+			},
+		},
+		{
+			name: "openai", platform: PlatformOpenAI, provider: PlatformOpenAI, model: "gpt-5.5",
+			forwardEvent: "forward_openai_responses", validateEvent: "validate_openai_usage", captureEvent: "submit_openai_capture", recordEvent: "record_openai_usage",
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.openAISelection = &AccountSelectionResult{Account: &Account{ID: 79, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, Acquired: true}
+				svc.openAIForwardResult = &OpenAIForwardResult{
+					RequestID: "openai-partial", Model: "gpt-5.5", Usage: OpenAIUsage{InputTokens: 2, OutputTokens: 1},
+					CaptureTerminalError: true,
+				}
+				svc.openAIForwardErr = sentinel
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newWebChatServiceWithStubs(t)
+			svc.availableGroups = []Group{{ID: 11, Platform: tt.platform, Status: StatusActive}}
+			tt.prepare(svc)
+
+			result, err := svc.dispatchChatCompletions(newTestGinContext(context.Background()), webChatDispatchInput{
+				User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+				ConversationID: 7, AssistantMessageID: 101, Model: tt.model, Provider: tt.provider,
+				Capabilities: WebChatModelCapability{Provider: tt.provider, Platform: tt.platform, Model: tt.model, SupportsText: true},
+				Messages:     []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello"}}, Stream: true,
+			})
+
+			require.ErrorIs(t, err, sentinel)
+			require.NotNil(t, result)
+			requireOrderedEvents(t, svc.events, tt.forwardEvent, tt.validateEvent, tt.captureEvent, tt.recordEvent)
+			if tt.platform == PlatformOpenAI {
+				require.NotNil(t, svc.openAIRecordUsageInput)
+			} else {
+				require.True(t, svc.recordUsageCalled)
+				require.NotNil(t, svc.recordUsageInput)
+			}
+		})
+	}
+}
+
+func TestWebChatDispatchPricingPreflightFailureIsTerminalBeforeCaptureAndSkipsBilling(t *testing.T) {
+	sentinel := errors.New("model has no local price")
+	tests := []struct {
+		name          string
+		platform      string
+		provider      string
+		model         string
+		forwardEvent  string
+		validateEvent string
+		captureEvent  string
+		prepare       func(*webChatServiceTestDouble)
+	}{
+		{
+			name: "anthropic", platform: PlatformAnthropic, provider: PlatformAnthropic, model: "claude-sonnet-4",
+			forwardEvent: "forward", validateEvent: "validate_gateway_usage", captureEvent: "submit_gateway_capture",
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.selection = &AccountSelectionResult{Account: &Account{ID: 77, Platform: PlatformAnthropic}, Acquired: true}
+				svc.gatewayForwardResult = &ForwardResult{RequestID: "anthropic-unpriced", Model: "claude-sonnet-4", Usage: ClaudeUsage{InputTokens: 2, OutputTokens: 1}}
+				svc.gatewayValidateUsageErr = sentinel
+			},
+		},
+		{
+			name: "gemini", platform: PlatformGemini, provider: PlatformGemini, model: "gemini-2.5-flash",
+			forwardEvent: "forward", validateEvent: "validate_gateway_usage", captureEvent: "submit_gateway_capture",
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.geminiCompatService = nil
+				svc.selection = &AccountSelectionResult{Account: &Account{ID: 78, Platform: PlatformGemini}, Acquired: true}
+				svc.gatewayForwardResult = &ForwardResult{RequestID: "gemini-unpriced", Model: "gemini-2.5-flash", Usage: ClaudeUsage{InputTokens: 2, OutputTokens: 1}}
+				svc.gatewayValidateUsageErr = sentinel
+			},
+		},
+		{
+			name: "openai", platform: PlatformOpenAI, provider: PlatformOpenAI, model: "gpt-5.5",
+			forwardEvent: "forward_openai_responses", validateEvent: "validate_openai_usage", captureEvent: "submit_openai_capture",
+			prepare: func(svc *webChatServiceTestDouble) {
+				svc.openAISelection = &AccountSelectionResult{Account: &Account{ID: 79, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, Acquired: true}
+				svc.openAIForwardResult = &OpenAIForwardResult{RequestID: "openai-unpriced", Model: "gpt-5.5", Usage: OpenAIUsage{InputTokens: 2, OutputTokens: 1}}
+				svc.openAIValidateUsageErr = sentinel
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newWebChatServiceWithStubs(t)
+			svc.availableGroups = []Group{{ID: 11, Platform: tt.platform, Status: StatusActive}}
+			tt.prepare(svc)
+			c := newTestGinContext(context.Background())
+
+			result, err := svc.dispatchChatCompletions(c, webChatDispatchInput{
+				User:           &User{ID: 42, AllowedGroups: []int64{11}, SubscriptionBalanceFallbackEnabled: true},
+				ConversationID: 7, AssistantMessageID: 101, Model: tt.model, Provider: tt.provider,
+				Capabilities: WebChatModelCapability{Provider: tt.provider, Platform: tt.platform, Model: tt.model, SupportsText: true},
+				Messages:     []WebChatMessage{{Role: WebChatRoleUser, ContentText: "hello"}}, Stream: true,
+			})
+
+			require.ErrorIs(t, err, sentinel)
+			require.NotNil(t, result, "provider bytes must remain available for failed-message persistence")
+			requireOrderedEvents(t, svc.events, tt.forwardEvent, tt.validateEvent, tt.captureEvent)
+			require.Equal(t, 0, countWebChatEvent(svc.events, "record_usage")+countWebChatEvent(svc.events, "record_openai_usage"))
+			if tt.platform == PlatformOpenAI {
+				require.True(t, svc.openAICaptureTerminal)
+			} else {
+				require.True(t, svc.gatewayCaptureTerminal)
+			}
+			marked, ok := GetOpsStreamError(c)
+			require.True(t, ok)
+			require.Equal(t, "usage_pricing_unavailable", marked.Code)
+			require.True(t, marked.CountTowardsSLA)
 		})
 	}
 }
@@ -1586,6 +1745,10 @@ type webChatServiceTestDouble struct {
 	recordUsageInput            *RecordUsageInput
 	recordUsageCalled           bool
 	recordUsageErr              error
+	gatewayValidateUsageErr     error
+	openAIValidateUsageErr      error
+	gatewayCaptureTerminal      bool
+	openAICaptureTerminal       bool
 	gatewayForwardResult        *ForwardResult
 	gatewayResponseBody         []byte
 	openAIForwardResult         *OpenAIForwardResult
@@ -1942,8 +2105,14 @@ func (s *webChatGatewayServiceStub) RecordUsage(ctx context.Context, in *RecordU
 	return s.double.recordUsageErr
 }
 
-func (s *webChatGatewayServiceStub) SubmitWebChatCapture(_ *ForwardResult, _ *Account, _ []byte, _ string) {
+func (s *webChatGatewayServiceStub) ValidateUsagePricing(_ context.Context, _ *RecordUsageInput) error {
+	s.double.events = append(s.double.events, "validate_gateway_usage")
+	return s.double.gatewayValidateUsageErr
+}
+
+func (s *webChatGatewayServiceStub) SubmitWebChatCapture(result *ForwardResult, _ *Account, _ []byte, _ string) {
 	s.double.events = append(s.double.events, "submit_gateway_capture")
+	s.double.gatewayCaptureTerminal = result != nil && result.CaptureTerminalError
 }
 
 type webChatOpenAIGatewayServiceStub struct {
@@ -2007,8 +2176,14 @@ func (s *webChatOpenAIGatewayServiceStub) RecordUsage(ctx context.Context, in *O
 	return s.double.recordUsageErr
 }
 
-func (s *webChatOpenAIGatewayServiceStub) SubmitWebChatCapture(_ *OpenAIForwardResult, _ *Account, _ []byte, _ string) {
+func (s *webChatOpenAIGatewayServiceStub) ValidateUsagePricing(_ context.Context, _ *OpenAIRecordUsageInput) error {
+	s.double.events = append(s.double.events, "validate_openai_usage")
+	return s.double.openAIValidateUsageErr
+}
+
+func (s *webChatOpenAIGatewayServiceStub) SubmitWebChatCapture(result *OpenAIForwardResult, _ *Account, _ []byte, _ string) {
 	s.double.events = append(s.double.events, "submit_openai_capture")
+	s.double.openAICaptureTerminal = result != nil && result.CaptureTerminalError
 }
 
 type webChatUsageLogRepoStub struct {

@@ -934,15 +934,19 @@ func (s *UsageLogRepoSuite) TestGetEndpointStatsWithFilters_WebChatAPIKeyFilter(
 	s.Require().NoError(err, "GetUpstreamEndpointStatsWithFilters hidden web chat apiKey")
 	s.Require().Empty(upstreamEndpoints)
 
-	endpointPaths, err := s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, user.ID, 0, 0, 0, "", "", nil, nil, nil, nil, "")
-	s.Require().NoError(err, "getEndpointPathStatsWithFilters user includes web chat usage")
-	s.Require().Len(endpointPaths, 1)
-	s.Require().Equal(inboundEndpoint+" -> "+upstreamEndpoint, endpointPaths[0].Endpoint)
-	s.Require().Equal(int64(2), endpointPaths[0].Requests)
+	combined, err := s.repo.GetStatsWithFilters(s.ctx, usagestats.UsageLogFilters{
+		UserID: user.ID, StartTime: &startTime, EndTime: &endTime,
+	})
+	s.Require().NoError(err, "GetStatsWithFilters user includes web chat endpoint path")
+	s.Require().Len(combined.EndpointPaths, 1)
+	s.Require().Equal(inboundEndpoint+" -> "+upstreamEndpoint, combined.EndpointPaths[0].Endpoint)
+	s.Require().Equal(int64(2), combined.EndpointPaths[0].Requests)
 
-	endpointPaths, err = s.repo.getEndpointPathStatsWithFilters(s.ctx, startTime, endTime, 0, webChat.ID, 0, 0, "", "", nil, nil, nil, nil, "")
-	s.Require().NoError(err, "getEndpointPathStatsWithFilters hidden web chat apiKey")
-	s.Require().Empty(endpointPaths)
+	combined, err = s.repo.GetStatsWithFilters(s.ctx, usagestats.UsageLogFilters{
+		APIKeyID: webChat.ID, StartTime: &startTime, EndTime: &endTime,
+	})
+	s.Require().NoError(err, "GetStatsWithFilters hidden web chat apiKey")
+	s.Require().Empty(combined.EndpointPaths)
 }
 
 // --- GetDashboardStats ---

@@ -268,33 +268,30 @@ func TestOpenAIResponseFlush_TerminalReadErrorFlushesResidual(t *testing.T) {
 	require.Equal(t, gotBody, flushes[len(flushes)-1])
 }
 
-func TestOpenAIResponseFlush_OutputWithoutTerminalFlushesResidualWithoutFailover(t *testing.T) {
+func TestOpenAIResponseFlush_OutputWithoutTerminalFlushesResidual(t *testing.T) {
 	body := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n"
 	recorder := newOpenAIResponseFlushRecorder()
 
 	result, err := runOpenAIResponseFlushTest(recorder, io.NopCloser(strings.NewReader(body)), config.GatewayConfig{})
 
-	require.ErrorContains(t, err, "missing terminal event")
-	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr))
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	gotBody, flushes := recorder.snapshot()
 	require.Equal(t, body, gotBody)
 	require.Equal(t, []string{body}, flushes)
 }
 
-func TestOpenAIResponseFlush_PreambleWithoutTerminalRemainsBufferedForFailover(t *testing.T) {
+func TestOpenAIResponseFlush_PreambleWithoutTerminalFlushesResidual(t *testing.T) {
 	body := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n"
 	recorder := newOpenAIResponseFlushRecorder()
 
 	result, err := runOpenAIResponseFlushTest(recorder, io.NopCloser(strings.NewReader(body)), config.GatewayConfig{})
 
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	gotBody, flushes := recorder.snapshot()
-	require.Empty(t, gotBody)
-	require.Empty(t, flushes)
+	require.Equal(t, body, gotBody)
+	require.Equal(t, []string{body}, flushes)
 }
 
 func TestOpenAIResponseFlush_CanceledAfterOutputFlushesResidualWithoutErrorEvent(t *testing.T) {
@@ -311,7 +308,7 @@ func TestOpenAIResponseFlush_CanceledAfterOutputFlushesResidualWithoutErrorEvent
 	require.NotContains(t, gotBody, "stream_read_error")
 }
 
-func TestOpenAIResponseFlush_PresemanticKeepaliveRemainsPrivate(t *testing.T) {
+func TestOpenAIResponseFlush_PresemanticKeepaliveRemainsPrivateUntilEOF(t *testing.T) {
 	recorder := newOpenAIResponseFlushRecorder()
 	reader, writer := io.Pipe()
 	resultCh, errCh := runOpenAIResponseFlushTestAsync(recorder, reader, config.GatewayConfig{StreamKeepaliveInterval: 1})
@@ -322,12 +319,13 @@ func TestOpenAIResponseFlush_PresemanticKeepaliveRemainsPrivate(t *testing.T) {
 	require.Empty(t, flushes)
 	require.NoError(t, writer.Close())
 
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, <-errCh, &failoverErr)
-	require.NotNil(t, <-resultCh)
+	require.NoError(t, <-errCh)
+	result := <-resultCh
+	require.NotNil(t, result)
+	require.Equal(t, &OpenAIUsage{}, result.usage)
 	gotBody, flushes = recorder.snapshot()
-	require.Empty(t, gotBody)
-	require.Empty(t, flushes)
+	require.Equal(t, ":\n\n", gotBody)
+	require.Equal(t, []string{":\n\n"}, flushes)
 }
 
 func TestOpenAIResponseFlush_KeepaliveDoesNotSplitOpenEvent(t *testing.T) {
@@ -424,7 +422,7 @@ func TestOpenAIResponseFlush_FailedAndErrorEventsFlushAtBoundaries(t *testing.T)
 		require.NotNil(t, result)
 		gotBody, flushes := recorder.snapshot()
 		require.Equal(t, body, gotBody)
-		require.Len(t, flushes, 1)
+		require.Len(t, flushes, 2)
 	})
 }
 
@@ -452,12 +450,11 @@ func TestOpenAIResponseFlush_ReusedTypeKeepsSSEBytesAndTerminalSemantics(t *test
 
 			result, err := runOpenAIResponseFlushTest(recorder, io.NopCloser(strings.NewReader(tt.body)), config.GatewayConfig{})
 
-			var failoverErr *UpstreamFailoverError
-			require.ErrorAs(t, err, &failoverErr)
+			require.NoError(t, err)
 			require.NotNil(t, result)
 			gotBody, flushes := recorder.snapshot()
-			require.Empty(t, gotBody)
-			require.Empty(t, flushes)
+			require.Equal(t, tt.body, gotBody)
+			require.Len(t, flushes, tt.flushCount)
 		})
 	}
 }

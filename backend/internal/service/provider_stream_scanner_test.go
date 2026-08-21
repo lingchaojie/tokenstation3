@@ -20,22 +20,13 @@ import (
 
 func TestProviderLineReaderDeliversQueuedProviderDataBeforeIdleTimeout(t *testing.T) {
 	for iteration := 0; iteration < 64; iteration++ {
-		resp := &http.Response{Body: io.NopCloser(strings.NewReader("first\nsecond\n"))}
-		reader := newProviderLineReader(resp, nil, bufio.NewScanner)
-		reader.timeout = time.Millisecond
-		reader.timer = time.NewTimer(reader.timeout)
-		reader.timerCh = reader.timer.C
+		events := make(chan providerLineScanEvent, 1)
+		events <- providerLineScanEvent{line: "second"}
+		timer := time.NewTimer(0)
+		reader := &providerLineReader{events: events, timer: timer, timerCh: timer.C}
 
 		line, ok, err := reader.Next()
-		require.NoError(t, err)
-		require.True(t, ok)
-		require.Equal(t, "first", line)
-		require.Eventually(t, func() bool { return len(reader.events) > 0 }, 100*time.Millisecond, time.Millisecond,
-			"the second provider token must be queued before testing the expired-timer tie")
-		time.Sleep(2 * time.Millisecond)
-
-		line, ok, err = reader.Next()
-		reader.Close()
+		timer.Stop()
 		require.NoError(t, err, "queued upstream data must win over an expired consumer-side timer")
 		require.True(t, ok)
 		require.Equal(t, "second", line)

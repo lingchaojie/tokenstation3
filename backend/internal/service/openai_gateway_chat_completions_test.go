@@ -1113,7 +1113,7 @@ func TestForwardAsChatCompletions_BufferedTerminalWithoutUpstreamCloseReturns(t 
 	}
 }
 
-func TestForwardAsChatCompletions_DoneSentinelWithoutTerminalReturnsError(t *testing.T) {
+func TestForwardAsChatCompletions_DoneSentinelWithoutUsageReturnsBillingError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -1143,10 +1143,11 @@ func TestForwardAsChatCompletions_DoneSentinelWithoutTerminalReturnsError(t *tes
 	}
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.1")
-	require.Error(t, err)
+	require.ErrorContains(t, err, "upstream response missing billable usage")
 	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Nil(t, result)
+	require.False(t, errors.As(err, &failoverErr))
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
 }
 
 func TestForwardAsChatCompletions_UpstreamRequestIgnoresClientCancel(t *testing.T) {

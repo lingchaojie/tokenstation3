@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func TestDeepSeekOfficialHostRemainsInDeploymentAllowlistExample(t *testing.T) {
+	configExample := readRepoFile(t, "deploy/config.example.yaml")
+	if !strings.Contains(configExample, `- "api.deepseek.com"`) {
+		t.Fatal("deploy/config.example.yaml must allow the official DeepSeek API host")
+	}
+}
+
 func TestTask8DeferredGrokProductSurfacesAreAbsent(t *testing.T) {
 	root := repoRoot(t)
 	for _, path := range []string{
@@ -73,6 +80,13 @@ func TestTask8DeferredGrokProductSurfacesAreAbsent(t *testing.T) {
 		},
 		"backend/internal/service/openai_gateway_usage.go": {
 			"SearchPricePer1k", "AudioRealtimePricePerMin", "AudioTTSPricePerMillionChars", "AudioSTTPricePerHour",
+		},
+		"backend/internal/service/billing_service.go": {
+			"defaultAudioRealtimePricePerMin", "defaultAudioTTSPricePerMillionChars", "defaultAudioSTTPricePerHour",
+			"audioPriceConfig", "CalculateAudioCost",
+		},
+		"backend/internal/service/model_pricing_resolver_test.go": {
+			"grok-voice", "CalculateAudioCost",
 		},
 		"backend/internal/service/grok_upstream_url.go": {"buildGrokVoiceURL"},
 		"backend/internal/service/account_test_service.go": {

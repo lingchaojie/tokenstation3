@@ -1004,11 +1004,18 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				if upstreamReqID == "" {
 					upstreamReqID = resp.Header.Get("x-goog-request-id")
 				}
-				if failoverErr := s.poolModeSkippedFailoverError(c, account, resp, respBody, upstreamReqID); failoverErr != nil {
+				if failoverErr := s.skippedErrorPolicyFailoverError(c, account, resp, respBody, upstreamReqID); failoverErr != nil {
 					return nil, failoverErr
 				}
-				_ = s.writeGeminiMappedError(c, account, http.StatusInternalServerError, upstreamReqID, respBody)
-				return nil, newTerminalProviderHTTPError(account, resp, respBody)
+				if account.IsCustomErrorCodesEnabled() {
+					writeErr := s.writeGeminiCustomCodeSkippedError(c, account, resp.StatusCode, upstreamReqID, respBody, func() {
+						_ = s.writeClaudeError(c, http.StatusInternalServerError, "api_error", geminiCustomCodeSkippedClientMessage)
+					})
+					return nil, wrapGeminiTerminalProviderHTTPError(account, resp, respBody, writeErr, false)
+				}
+				// 池模式：客户端写出与 ErrorPolicyNone 相同（按上游真实状态码映射），仅跳过账号状态标记。
+				writeErr := s.writeGeminiMappedError(c, account, resp.StatusCode, upstreamReqID, respBody)
+				return nil, wrapGeminiTerminalProviderHTTPError(account, resp, respBody, writeErr, false)
 			case ErrorPolicyMatched, ErrorPolicyTempUnscheduled:
 				if policy == ErrorPolicyMatched {
 					s.handleGeminiUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
@@ -1163,7 +1170,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
 	finishCaptureResponse(resp)
-	return finalizeForwardResult(c, &ForwardResult{
+	return finalizeGeminiForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *usage,
 		Model:                         originalModel,
@@ -1176,7 +1183,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
-	}), nil
+	}, nil, "generateContent")
 }
 
 func isGeminiSignatureRelatedError(respBody []byte) bool {
@@ -1590,17 +1597,18 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			policy := s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, mappedModel)
 			switch policy {
 			case ErrorPolicySkipped:
-				if failoverErr := s.poolModeSkippedFailoverError(c, account, resp, respBody, requestID); failoverErr != nil {
+				if failoverErr := s.skippedErrorPolicyFailoverError(c, account, resp, respBody, requestID); failoverErr != nil {
 					return nil, withCaptureCompleteness(failoverErr)
 				}
-				respBody = unwrapIfNeeded(isOAuth, respBody)
-				contentType := resp.Header.Get("Content-Type")
-				if contentType == "" {
-					contentType = "application/json"
+				if account.IsCustomErrorCodesEnabled() {
+					writeErr := s.writeGeminiCustomCodeSkippedError(c, account, resp.StatusCode, requestID, respBody, func() {
+						_ = s.writeGoogleError(c, http.StatusInternalServerError, geminiCustomCodeSkippedClientMessage)
+					})
+					return nil, wrapGeminiTerminalProviderHTTPError(account, resp, respBody, writeErr, !responseComplete)
 				}
-				MarkResponseCommitted(c)
-				c.Data(http.StatusInternalServerError, contentType, respBody)
-				return nil, withCaptureCompleteness(newTerminalProviderHTTPError(account, resp, respBody))
+				// 池模式：客户端写出与 ErrorPolicyNone 相同（状态码/响应体保真），仅跳过账号状态标记。
+				writeErr := s.writeGeminiNativeUpstreamError(c, account, resp, respBody, requestID, isOAuth)
+				return nil, wrapGeminiTerminalProviderHTTPError(account, resp, respBody, writeErr, !responseComplete)
 			case ErrorPolicyMatched, ErrorPolicyTempUnscheduled:
 				if policy == ErrorPolicyMatched {
 					s.handleGeminiUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
@@ -1769,7 +1777,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
 	finishCapture()
-	return finalizeForwardResult(c, &ForwardResult{
+	return finalizeGeminiForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
 		Usage:                         *usage,
 		Model:                         originalModel,
@@ -1782,7 +1790,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
-	}), nil
+	}, nil, action)
 }
 
 // checkErrorPolicyInLoop 在重试循环内预检查错误策略。
@@ -1838,26 +1846,20 @@ func newGeminiHTTPFailoverError(account *Account, resp *http.Response, body []by
 	return newProviderHTTPError(account, resp, body, retryable)
 }
 
-// poolModeSkippedFailoverError 池模式账号命中 ErrorPolicySkipped 时构造 failover 错误：
-// 可 failover 的状态码返回 UpstreamFailoverError，交给 handler 层按 pool_mode_retry_count
-// 同账号重试后换号；返回 nil 表示不适用（非池模式或状态码不可 failover），由调用方透传。
-func (s *GeminiMessagesCompatService) poolModeSkippedFailoverError(c *gin.Context, account *Account, resp *http.Response, respBody []byte, upstreamRequestID string) *UpstreamFailoverError {
+// skippedErrorPolicyFailoverError 命中 ErrorPolicySkipped（池模式、或自定义错误码未命中）
+// 时构造 failover 错误：可 failover 的状态码返回 UpstreamFailoverError，交给 handler 层换号
+// （池模式账号按 pool_mode_retry_count 先同账号重试）；返回 nil 表示状态码不可 failover，
+// 由调用方决定客户端写出。Skipped 只豁免账号状态标记，不豁免换号，与 OpenAI 网关路径一致。
+func (s *GeminiMessagesCompatService) skippedErrorPolicyFailoverError(c *gin.Context, account *Account, resp *http.Response, respBody []byte, upstreamRequestID string) *UpstreamFailoverError {
 	statusCode := 0
 	if resp != nil {
 		statusCode = resp.StatusCode
 	}
-	if !account.IsPoolMode() || !s.shouldFailoverGeminiUpstreamError(statusCode) {
+	if !s.shouldFailoverGeminiUpstreamError(statusCode) {
 		return nil
 	}
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-	upstreamDetail := ""
-	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
-		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
-		if maxBytes <= 0 {
-			maxBytes = 2048
-		}
-		upstreamDetail = truncateString(string(respBody), maxBytes)
-	}
+	upstreamDetail := s.upstreamErrorDetail(respBody)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:           account.Platform,
 		AccountID:          account.ID,
@@ -1868,7 +1870,82 @@ func (s *GeminiMessagesCompatService) poolModeSkippedFailoverError(c *gin.Contex
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
 	})
-	return newGeminiHTTPFailoverError(account, resp, respBody, account.IsPoolModeRetryableStatus(statusCode))
+	return newGeminiHTTPFailoverError(account, resp, respBody, account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode))
+}
+
+// geminiCustomCodeSkippedClientMessage 自定义错误码未命中时对客户端隐藏上游细节的固定文案，
+// 与 OpenAI 网关路径同场景的文案一致。
+const geminiCustomCodeSkippedClientMessage = "Upstream gateway error"
+
+func (s *GeminiMessagesCompatService) upstreamErrorDetail(body []byte) string {
+	if s.cfg == nil || !s.cfg.Gateway.LogUpstreamErrorBody {
+		return ""
+	}
+	maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+	if maxBytes <= 0 {
+		maxBytes = 2048
+	}
+	return truncateString(string(body), maxBytes)
+}
+
+func (s *GeminiMessagesCompatService) writeGeminiCustomCodeSkippedError(c *gin.Context, account *Account, upstreamStatus int, upstreamRequestID string, body []byte, write func()) error {
+	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	upstreamDetail := s.upstreamErrorDetail(body)
+	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: upstreamStatus,
+		UpstreamRequestID:  upstreamRequestID,
+		Kind:               "http_error",
+		Message:            upstreamMsg,
+		Detail:             upstreamDetail,
+	})
+	write()
+	if upstreamMsg == "" {
+		return fmt.Errorf("gemini upstream error: %d (not in custom error codes)", upstreamStatus)
+	}
+	return fmt.Errorf("gemini upstream error: %d (not in custom error codes) message=%s", upstreamStatus, upstreamMsg)
+}
+
+func (s *GeminiMessagesCompatService) writeGeminiNativeUpstreamError(c *gin.Context, account *Account, resp *http.Response, respBody []byte, requestID string, isOAuth bool) error {
+	respBody = unwrapIfNeeded(isOAuth, respBody)
+	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
+	upstreamDetail := s.upstreamErrorDetail(respBody)
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		logger.LegacyPrintf("service.gemini_messages_compat", "[Gemini] native upstream error %d: %s", resp.StatusCode, truncateForLog(respBody, s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes))
+	}
+	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: resp.StatusCode,
+		UpstreamRequestID:  requestID,
+		Kind:               "http_error",
+		Message:            upstreamMsg,
+		Detail:             upstreamDetail,
+	})
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	MarkResponseCommitted(c)
+	c.Data(resp.StatusCode, contentType, respBody)
+	if upstreamMsg == "" {
+		return fmt.Errorf("gemini upstream error: %d", resp.StatusCode)
+	}
+	return fmt.Errorf("gemini upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+}
+
+func wrapGeminiTerminalProviderHTTPError(account *Account, resp *http.Response, body []byte, cause error, captureResponseIncomplete bool) error {
+	failure := newTerminalProviderHTTPError(account, resp, body)
+	failure.CaptureResponseIncomplete = captureResponseIncomplete
+	if cause == nil {
+		return failure
+	}
+	return fmt.Errorf("%v: %w", cause, failure)
 }
 
 func sleepGeminiBackoff(attempt int) {
@@ -1969,6 +2046,9 @@ func (s *GeminiMessagesCompatService) writeGeminiMappedError(c *gin.Context, acc
 		}
 		if errType == "" {
 			errType = "invalid_request_error"
+		}
+		if errMsg == "" {
+			errMsg = upstreamMsg
 		}
 		if errMsg == "" {
 			errMsg = "Invalid request"
@@ -2151,9 +2231,6 @@ func (s *GeminiMessagesCompatService) handleNonStreamingResponse(c *gin.Context,
 	if err != nil {
 		return nil, newInvalidProviderResponseFailover(resp, "gemini messages response wrapper is invalid")
 	}
-	if !validGeminiTerminalResponse(unwrappedBody) {
-		return nil, newInvalidProviderResponseFailover(resp, "gemini messages response is not a valid terminal response")
-	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2203,9 +2280,6 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	finishReason := ""
 	sawToolUse := false
 	semanticOutput := false
-	terminalObserved := false
-	validProviderPayloadObserved := false
-	var providerState geminiProviderStreamState
 	commitTerminal := false
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
@@ -2260,14 +2334,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "" || payload == "[DONE]" {
 			if payload == "[DONE]" {
-				if err := providerState.observeDone(); err != nil {
-					if staged.committed {
-						return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini stream terminal: %w", err)
-					}
-					return nil, newIncompleteProviderStreamFailover(resp, err.Error())
-				}
-				terminalObserved = true
-				commitTerminal = validProviderPayloadObserved
+				commitTerminal = true
 			}
 			continue
 		}
@@ -2278,13 +2345,6 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 				return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
-		}
-		providerPayload, stateErr := providerState.observePayload(unwrappedBytes)
-		if stateErr != nil {
-			if staged.committed {
-				return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini provider stream: %w", stateErr)
-			}
-			return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
 		}
 		observer := upstreamResponseModelObserverFromContext(c)
 		if observer == nil {
@@ -2300,18 +2360,9 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
 		}
-		if providerPayload {
-			validProviderPayloadObserved = true
-		}
-		if providerState.terminalObserved() {
-			terminalObserved = true
-			commitTerminal = validProviderPayloadObserved
-		}
-
 		if fr := extractGeminiFinishReason(geminiResp); fr != "" {
 			finishReason = fr
-			terminalObserved = providerState.terminalObserved()
-			commitTerminal = validProviderPayloadObserved
+			commitTerminal = true
 		}
 
 		parts := extractGeminiParts(geminiResp)
@@ -2461,10 +2512,6 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		}
 
 	}
-	if !terminalObserved && providerState.applicationTerminalObserved() {
-		terminalObserved = true
-		commitTerminal = validProviderPayloadObserved
-	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
 			result := &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
@@ -2477,16 +2524,6 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("stream read error: %w", scanErr)
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream read failed before semantic output: "+sanitizeStreamError(scanErr))
-	}
-	if !terminalObserved {
-		result := &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
-		if staged.committed {
-			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
-		}
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream ended before semantic output")
-	}
-	if !validProviderPayloadObserved {
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream ended without a valid provider payload")
 	}
 	// A downstream write failure does not prove that the provider attempt
 	// completed. Drain and validate the provider stream first; only a fully
@@ -2611,9 +2648,6 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 	var lastWithParts map[string]any
 	var collectedTextParts []string // Collect all text parts for aggregation
 	usage := &ClaudeUsage{}
-	terminalObserved := false
-	validProviderPayloadObserved := false
-	var providerState geminiProviderStreamState
 	lineReader := newProviderLineReader(resp, cfg, func(r io.Reader) *bufio.Scanner {
 		return newBufferedProviderSSEScanner(r, cfg)
 	})
@@ -2635,10 +2669,6 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 				switch payload {
 				case "":
 				case "[DONE]":
-					if err := providerState.observeDone(); err != nil {
-						return nil, nil, newIncompleteProviderStreamFailover(resp, err.Error())
-					}
-					terminalObserved = true
 				default:
 					var rawBytes []byte
 					if isOAuth {
@@ -2650,20 +2680,12 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 					} else {
 						rawBytes = []byte(payload)
 					}
-					providerPayload, stateErr := providerState.observePayload(rawBytes)
-					if stateErr != nil {
-						return nil, nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-					}
 					parsed, err := decodeGeminiCompatResponse(rawBytes)
 					if err != nil {
 						return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
 					}
 					if parsed != nil {
-						if providerPayload {
-							validProviderPayloadObserved = true
-						}
 						last = parsed
-						terminalObserved = providerState.terminalObserved()
 						if u := extractGeminiUsage(rawBytes); u != nil {
 							usage = u
 						}
@@ -2682,20 +2704,11 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 		}
 
 	}
-	if !terminalObserved && providerState.applicationTerminalObserved() {
-		terminalObserved = true
-	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
 			return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream data interval timeout")
 		}
-		return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed before terminal event: "+sanitizeStreamError(scanErr))
-	}
-	if !terminalObserved {
-		return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream ended before terminal event")
-	}
-	if !validProviderPayloadObserved {
-		return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream ended without a valid provider payload")
+		return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed: "+sanitizeStreamError(scanErr))
 	}
 
 	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, nil
@@ -2884,9 +2897,6 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 		}
 		respBody = unwrappedBody
 	}
-	if !validGeminiNativeNonStreamingResponse(respBody, action) {
-		return nil, newInvalidProviderResponseFailover(resp, "gemini native response is not a valid terminal response")
-	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2906,679 +2916,6 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 		return u, nil
 	}
 	return &ClaudeUsage{}, nil
-}
-
-func validGeminiNativeNonStreamingResponse(body []byte, action string) bool {
-	if !gjson.ValidBytes(body) {
-		return false
-	}
-	if err := validateOpenAIResponsesNoDuplicateKnownFields(body, providerJSONGeminiRoot); err != nil {
-		return false
-	}
-	return validGeminiTerminalResponse(body) ||
-		(action == "countTokens" && gjson.GetBytes(body, "totalTokens").Type == gjson.Number)
-}
-
-const (
-	maxGeminiCandidatesPerAttempt  = 1024
-	maxGeminiPartsPerCandidate     = 1024
-	maxGeminiMetadataItems         = 1024
-	maxGeminiRetainedMetadataBytes = 1024
-	maxGeminiOpaqueSignatureBytes  = 64 << 10
-)
-
-func validGeminiProviderPayload(body []byte) bool {
-	if !json.Valid(body) {
-		return false
-	}
-	if err := validateOpenAIResponsesNoDuplicateKnownFields(body, providerJSONGeminiRoot); err != nil {
-		return false
-	}
-	root := gjson.ParseBytes(body)
-	if !validGeminiRootEnvelopeResult(root) {
-		return false
-	}
-	return validGeminiProviderPayloadResult(root)
-}
-
-func validGeminiProviderPayloadResult(root gjson.Result) bool {
-	candidates := root.Get("candidates")
-	if candidates.IsArray() && gjsonCollectionHasValues(candidates) {
-		recognized := false
-		candidates.ForEach(func(_, candidate gjson.Result) bool {
-			if geminiCandidateHasRecognizableProviderOutput(candidate) {
-				recognized = true
-				return false
-			}
-			return true
-		})
-		if recognized {
-			return true
-		}
-	}
-	promptFeedback := root.Get("promptFeedback")
-	blockReason := promptFeedback.Get("blockReason")
-	return promptFeedback.IsObject() && blockReason.Type == gjson.String && strings.TrimSpace(blockReason.String()) != ""
-}
-
-func validGeminiTerminalResponse(body []byte) bool {
-	if !gjson.ValidBytes(body) || !validGeminiRootEnvelopeShape(body) {
-		return false
-	}
-	blockReason := gjson.GetBytes(body, "promptFeedback.blockReason")
-	if blockReason.Type == gjson.String && strings.TrimSpace(blockReason.String()) != "" {
-		return true
-	}
-	candidates := gjson.GetBytes(body, "candidates")
-	if !candidates.IsArray() || !gjsonCollectionHasValues(candidates) {
-		return false
-	}
-	terminal := true
-	candidates.ForEach(func(_, candidate gjson.Result) bool {
-		finishReason := candidate.Get("finishReason")
-		if finishReason.Type != gjson.String || strings.TrimSpace(finishReason.String()) == "" {
-			terminal = false
-			return false
-		}
-		if !geminiCandidateHasRecognizableProviderOutput(candidate) {
-			terminal = false
-			return false
-		}
-		return true
-	})
-	return terminal
-}
-
-func geminiCandidateHasRecognizableProviderOutput(candidate gjson.Result) bool {
-	content := candidate.Get("content")
-	recognized := false
-	content.Get("parts").ForEach(func(_, part gjson.Result) bool {
-		if text := part.Get("text"); text.Type == gjson.String && strings.TrimSpace(text.String()) != "" {
-			recognized = true
-			return false
-		}
-		// These typed parts are provider-native output even when their string
-		// payload is legitimately empty (for example a successful code
-		// execution result with output: ""). Their strict field shapes are
-		// checked by validGeminiPartShape before this classifier runs.
-		for _, field := range []string{"functionCall", "functionResponse", "inlineData", "fileData", "executableCode", "codeExecutionResult"} {
-			if part.Get(field).Exists() {
-				recognized = true
-				return false
-			}
-		}
-		return true
-	})
-	if recognized {
-		return true
-	}
-	// Candidate-level safety/error terminals can legally omit generated
-	// content. Ordinary STOP/MAX_TOKENS framing cannot prove provider output.
-	finishReason := strings.ToUpper(strings.TrimSpace(candidate.Get("finishReason").String()))
-	return finishReason != "" && finishReason != "STOP" && finishReason != "MAX_TOKENS"
-}
-
-func validGeminiRootEnvelopeShape(body []byte) bool {
-	if !json.Valid(body) {
-		return false
-	}
-	if err := validateOpenAIResponsesNoDuplicateKnownFields(body, providerJSONGeminiRoot); err != nil {
-		return false
-	}
-	return validGeminiRootEnvelopeResult(gjson.ParseBytes(body))
-}
-
-func validGeminiRootEnvelopeResult(root gjson.Result) bool {
-	if !root.IsObject() {
-		return false
-	}
-	if candidates := root.Get("candidates"); candidates.Exists() {
-		if !candidates.IsArray() {
-			return false
-		}
-		seenIndexes := make(map[int64]struct{})
-		candidateCount := 0
-		valid := true
-		candidates.ForEach(func(_, candidate gjson.Result) bool {
-			if candidateCount >= maxGeminiCandidatesPerAttempt {
-				valid = false
-				return false
-			}
-			resolvedIndex := int64(candidateCount)
-			candidateCount++
-			if !validGeminiCandidateShape(candidate) {
-				valid = false
-				return false
-			}
-			if index := candidate.Get("index"); index.Exists() {
-				resolvedIndex = index.Int()
-			}
-			if _, duplicate := seenIndexes[resolvedIndex]; duplicate {
-				valid = false
-				return false
-			}
-			seenIndexes[resolvedIndex] = struct{}{}
-			return true
-		})
-		if !valid {
-			return false
-		}
-	}
-	if feedback := root.Get("promptFeedback"); feedback.Exists() {
-		if !feedback.IsObject() {
-			return false
-		}
-		for _, field := range []string{"blockReason", "blockReasonMessage"} {
-			value := feedback.Get(field)
-			if value.Exists() && (value.Type != gjson.String || len(value.String()) > maxGeminiRetainedMetadataBytes) {
-				return false
-			}
-		}
-		if ratings := feedback.Get("safetyRatings"); ratings.Exists() && !validGeminiSafetyRatingsShape(ratings) {
-			return false
-		}
-	}
-	if usage := root.Get("usageMetadata"); usage.Exists() {
-		if !usage.IsObject() {
-			return false
-		}
-		for _, field := range []string{"promptTokenCount", "candidatesTokenCount", "totalTokenCount", "cachedContentTokenCount", "thoughtsTokenCount", "toolUsePromptTokenCount"} {
-			value := usage.Get(field)
-			if value.Exists() && !nonNegativeIntegerGJSON(value) {
-				return false
-			}
-		}
-		for _, field := range []string{"promptTokensDetails", "cacheTokensDetails", "candidatesTokensDetails", "toolUsePromptTokensDetails"} {
-			if details := usage.Get(field); details.Exists() && !validGeminiTokenDetailsShape(details) {
-				return false
-			}
-		}
-		for detailsField, totalField := range map[string]string{
-			"promptTokensDetails":        "promptTokenCount",
-			"cacheTokensDetails":         "cachedContentTokenCount",
-			"candidatesTokensDetails":    "candidatesTokenCount",
-			"toolUsePromptTokensDetails": "toolUsePromptTokenCount",
-		} {
-			details := usage.Get(detailsField)
-			if !details.Exists() {
-				continue
-			}
-			detailsTotal, ok := geminiTokenDetailsTotal(details)
-			total := usage.Get(totalField)
-			if !ok || (detailsTotal > 0 && !total.Exists()) || (total.Exists() && detailsTotal > total.Int()) {
-				return false
-			}
-		}
-		promptTokens := usage.Get("promptTokenCount")
-		cachedTokens := usage.Get("cachedContentTokenCount")
-		if cachedTokens.Exists() && (!promptTokens.Exists() || cachedTokens.Int() > promptTokens.Int()) {
-			return false
-		}
-		candidatesTokens := usage.Get("candidatesTokenCount")
-		thoughtTokens := usage.Get("thoughtsTokenCount")
-		outputTokens, ok := checkedAddNonNegativeGJSON(candidatesTokens, thoughtTokens)
-		if !ok {
-			return false
-		}
-		candidateDetailsTotal, ok := geminiTokenDetailsTotal(usage.Get("candidatesTokensDetails"))
-		if !ok || candidateDetailsTotal > outputTokens {
-			return false
-		}
-	}
-	for _, field := range []string{"modelVersion", "responseId"} {
-		value := root.Get(field)
-		if value.Exists() && (value.Type != gjson.String || strings.TrimSpace(value.String()) == "" || len(value.String()) > maxGeminiRetainedMetadataBytes) {
-			return false
-		}
-	}
-	if totalTokens := root.Get("totalTokens"); totalTokens.Exists() && !nonNegativeIntegerGJSON(totalTokens) {
-		return false
-	}
-	blockReason := root.Get("promptFeedback.blockReason")
-	candidates := root.Get("candidates")
-	if blockReason.Type == gjson.String && strings.TrimSpace(blockReason.String()) != "" &&
-		candidates.IsArray() && gjsonCollectionHasValues(candidates) {
-		// A prompt-level block is a terminal response precisely because the
-		// provider produced no candidates. Mixing it with candidate output is a
-		// contradictory envelope and must not be archived/billed as success.
-		return false
-	}
-	return true
-}
-
-func validGeminiTokenDetailsShape(details gjson.Result) bool {
-	if !details.IsArray() {
-		return false
-	}
-	valid := true
-	count := 0
-	details.ForEach(func(_, detail gjson.Result) bool {
-		if count >= maxGeminiMetadataItems {
-			valid = false
-			return false
-		}
-		count++
-		if !detail.IsObject() || !boundedNonEmptyGJSONString(detail.Get("modality"), maxGeminiRetainedMetadataBytes) || !nonNegativeIntegerGJSON(detail.Get("tokenCount")) {
-			valid = false
-			return false
-		}
-		return true
-	})
-	return valid
-}
-
-func validGeminiSafetyRatingsShape(ratings gjson.Result) bool {
-	if !ratings.IsArray() {
-		return false
-	}
-	valid := true
-	count := 0
-	ratings.ForEach(func(_, rating gjson.Result) bool {
-		if count >= maxGeminiMetadataItems {
-			valid = false
-			return false
-		}
-		count++
-		if !rating.IsObject() {
-			valid = false
-			return false
-		}
-		for _, field := range []string{"category", "probability", "severity"} {
-			value := rating.Get(field)
-			if value.Exists() && (value.Type != gjson.String || strings.TrimSpace(value.String()) == "" || len(value.String()) > maxGeminiRetainedMetadataBytes) {
-				valid = false
-				return false
-			}
-		}
-		if blocked := rating.Get("blocked"); blocked.Exists() && blocked.Type != gjson.True && blocked.Type != gjson.False {
-			valid = false
-			return false
-		}
-		for _, field := range []string{"probabilityScore", "severityScore"} {
-			value := rating.Get(field)
-			if value.Exists() && (value.Type != gjson.Number || value.Float() < 0 || value.Float() > 1) {
-				valid = false
-				return false
-			}
-		}
-		return true
-	})
-	return valid
-}
-
-func validGeminiGroundingMetadataShape(metadata gjson.Result) bool {
-	if !metadata.IsObject() {
-		return false
-	}
-	if queries := metadata.Get("webSearchQueries"); queries.Exists() {
-		if !queries.IsArray() {
-			return false
-		}
-		valid := true
-		count := 0
-		queries.ForEach(func(_, query gjson.Result) bool {
-			if count >= maxGeminiMetadataItems || query.Type != gjson.String || len(query.String()) > maxGeminiRetainedMetadataBytes {
-				valid = false
-				return false
-			}
-			count++
-			return true
-		})
-		if !valid {
-			return false
-		}
-	}
-	if chunks := metadata.Get("groundingChunks"); chunks.Exists() {
-		if !chunks.IsArray() {
-			return false
-		}
-		valid := true
-		count := 0
-		chunks.ForEach(func(_, chunk gjson.Result) bool {
-			if count >= maxGeminiMetadataItems || !chunk.IsObject() {
-				valid = false
-				return false
-			}
-			count++
-			if web := chunk.Get("web"); web.Exists() {
-				if !web.IsObject() {
-					valid = false
-					return false
-				}
-				for _, field := range []string{"title", "uri"} {
-					value := web.Get(field)
-					if value.Exists() && (value.Type != gjson.String || len(value.String()) > maxGeminiRetainedMetadataBytes) {
-						valid = false
-						return false
-					}
-				}
-			}
-			return true
-		})
-		if !valid {
-			return false
-		}
-	}
-	return true
-}
-
-func geminiTokenDetailsTotal(details gjson.Result) (int64, bool) {
-	if !details.Exists() {
-		return 0, true
-	}
-	if !details.IsArray() {
-		return 0, false
-	}
-	var total int64
-	valid := true
-	count := 0
-	details.ForEach(func(_, detail gjson.Result) bool {
-		if count >= maxGeminiMetadataItems {
-			valid = false
-			return false
-		}
-		count++
-		tokenCount := detail.Get("tokenCount")
-		if !nonNegativeIntegerGJSON(tokenCount) || tokenCount.Int() > int64(^uint(0)>>1)-total {
-			valid = false
-			return false
-		}
-		total += tokenCount.Int()
-		return true
-	})
-	if !valid {
-		return 0, false
-	}
-	return total, true
-}
-
-func validGeminiCandidateShape(candidate gjson.Result) bool {
-	if !candidate.IsObject() {
-		return false
-	}
-	if index := candidate.Get("index"); index.Exists() && !nonNegativeIntegerGJSON(index) {
-		return false
-	}
-	finishReason := candidate.Get("finishReason")
-	if finishReason.Exists() && (finishReason.Type != gjson.String || len(finishReason.String()) > maxGeminiRetainedMetadataBytes) {
-		return false
-	}
-	if finishMessage := candidate.Get("finishMessage"); finishMessage.Exists() && (finishMessage.Type != gjson.String || len(finishMessage.String()) > maxGeminiRetainedMetadataBytes) {
-		return false
-	}
-	if ratings := candidate.Get("safetyRatings"); ratings.Exists() && !validGeminiSafetyRatingsShape(ratings) {
-		return false
-	}
-	if grounding := candidate.Get("groundingMetadata"); grounding.Exists() && !validGeminiGroundingMetadataShape(grounding) {
-		return false
-	}
-	content := candidate.Get("content")
-	if !content.Exists() {
-		return finishReason.Type == gjson.String && strings.TrimSpace(finishReason.String()) != ""
-	}
-	if !content.IsObject() {
-		return false
-	}
-	role := content.Get("role")
-	if role.Exists() && (role.Type != gjson.String || role.String() != "model") {
-		return false
-	}
-	parts := content.Get("parts")
-	if !parts.Exists() {
-		return role.Type == gjson.String && strings.TrimSpace(role.String()) != ""
-	}
-	if !parts.IsArray() {
-		return false
-	}
-	valid := true
-	partCount := 0
-	parts.ForEach(func(_, part gjson.Result) bool {
-		if partCount >= maxGeminiPartsPerCandidate {
-			valid = false
-			return false
-		}
-		partCount++
-		if !validGeminiPartShape(part) {
-			valid = false
-			return false
-		}
-		return true
-	})
-	return valid
-}
-
-func validGeminiPartShape(part gjson.Result) bool {
-	if !part.IsObject() || !gjsonCollectionHasValues(part) {
-		return false
-	}
-	if text := part.Get("text"); text.Exists() && text.Type != gjson.String {
-		return false
-	}
-	if signature := part.Get("thoughtSignature"); signature.Exists() &&
-		(signature.Type != gjson.String || len(signature.String()) > maxGeminiOpaqueSignatureBytes) {
-		return false
-	}
-	thought := part.Get("thought")
-	if thought.Exists() && thought.Type != gjson.True && thought.Type != gjson.False {
-		return false
-	}
-	dataFields := 0
-	for _, field := range []string{"text", "inlineData", "functionCall", "functionResponse", "fileData", "executableCode", "codeExecutionResult"} {
-		if part.Get(field).Exists() {
-			dataFields++
-		}
-	}
-	if dataFields > 1 {
-		return false
-	}
-	if call := part.Get("functionCall"); call.Exists() {
-		if !call.IsObject() || !boundedNonEmptyGJSONString(call.Get("name"), maxGeminiRetainedMetadataBytes) {
-			return false
-		}
-		if args := call.Get("args"); args.Exists() && !args.IsObject() {
-			return false
-		}
-	}
-	if response := part.Get("functionResponse"); response.Exists() {
-		if !response.IsObject() || !boundedNonEmptyGJSONString(response.Get("name"), maxGeminiRetainedMetadataBytes) || !response.Get("response").IsObject() {
-			return false
-		}
-	}
-	if inline := part.Get("inlineData"); inline.Exists() {
-		if !inline.IsObject() ||
-			!boundedNonEmptyGJSONString(inline.Get("mimeType"), maxGeminiRetainedMetadataBytes) ||
-			!nonEmptyGJSONString(inline.Get("data")) {
-			return false
-		}
-	}
-	if file := part.Get("fileData"); file.Exists() {
-		if !file.IsObject() || !boundedNonEmptyGJSONString(file.Get("fileUri"), maxGeminiRetainedMetadataBytes) {
-			return false
-		}
-		if mimeType := file.Get("mimeType"); mimeType.Exists() && !boundedNonEmptyGJSONString(mimeType, maxGeminiRetainedMetadataBytes) {
-			return false
-		}
-	}
-	if code := part.Get("executableCode"); code.Exists() {
-		if !code.IsObject() || !boundedNonEmptyGJSONString(code.Get("language"), maxGeminiRetainedMetadataBytes) || code.Get("code").Type != gjson.String {
-			return false
-		}
-	}
-	if result := part.Get("codeExecutionResult"); result.Exists() {
-		if !result.IsObject() || !boundedNonEmptyGJSONString(result.Get("outcome"), maxGeminiRetainedMetadataBytes) {
-			return false
-		}
-		if output := result.Get("output"); output.Exists() && output.Type != gjson.String {
-			return false
-		}
-	}
-	return true
-}
-
-// geminiProviderStreamState validates provider framing independently from
-// downstream semantic-output detection. Recognizable GenerateContent payloads
-// and explicit ancillary usage/model/response-id frames are accepted, but
-// ancillary data cannot by itself prove a successful attempt. Malformed or
-// unrecognized frames must never be "washed clean" by a later valid terminal.
-// A finishReason or blocked promptFeedback is the application terminal; one
-// trailing [DONE] framing sentinel remains valid for providers that emit both.
-type geminiProviderStreamState struct {
-	providerPayloadObserved bool
-	blockedTerminalSeen     bool
-	doneSeen                bool
-	seenCandidates          map[int64]struct{}
-	terminalCandidates      map[int64]struct{}
-}
-
-func geminiProviderCollectionLimitError(root gjson.Result) error {
-	candidates := root.Get("candidates")
-	if !candidates.IsArray() {
-		return nil
-	}
-	candidateCount := 0
-	var limitErr error
-	candidates.ForEach(func(_, candidate gjson.Result) bool {
-		if candidateCount >= maxGeminiCandidatesPerAttempt {
-			limitErr = errors.New("gemini provider payload contained too many candidates")
-			return false
-		}
-		candidateCount++
-		parts := candidate.Get("content.parts")
-		if !parts.IsArray() {
-			return true
-		}
-		partCount := 0
-		parts.ForEach(func(_, _ gjson.Result) bool {
-			if partCount >= maxGeminiPartsPerCandidate {
-				limitErr = errors.New("gemini provider candidate contained too many parts")
-				return false
-			}
-			partCount++
-			return true
-		})
-		return limitErr == nil
-	})
-	return limitErr
-}
-
-func (s *geminiProviderStreamState) observePayload(body []byte) (bool, error) {
-	if s.doneSeen {
-		return false, errors.New("gemini provider payload arrived after terminal event")
-	}
-	if !json.Valid(body) {
-		return false, errors.New("invalid Gemini provider JSON payload")
-	}
-	if err := validateOpenAIResponsesNoDuplicateKnownFields(body, providerJSONGeminiRoot); err != nil {
-		return false, fmt.Errorf("invalid Gemini provider JSON payload: %w", err)
-	}
-	root := gjson.ParseBytes(body)
-	if !root.IsObject() {
-		return false, errors.New("invalid Gemini provider JSON payload")
-	}
-	if err := geminiProviderCollectionLimitError(root); err != nil {
-		return false, err
-	}
-	if !validGeminiRootEnvelopeResult(root) {
-		return false, errors.New("invalid Gemini provider JSON payload")
-	}
-
-	providerPayload := validGeminiProviderPayloadResult(root)
-	usage := root.Get("usageMetadata")
-	modelVersion := root.Get("modelVersion")
-	responseID := root.Get("responseId")
-	ancillary := (usage.IsObject() && gjsonCollectionHasValues(usage)) ||
-		(modelVersion.Type == gjson.String && strings.TrimSpace(modelVersion.String()) != "") ||
-		(responseID.Type == gjson.String && strings.TrimSpace(responseID.String()) != "")
-	terminalUpdate := false
-	position := 0
-	root.Get("candidates").ForEach(func(_, candidate gjson.Result) bool {
-		index := int64(position)
-		if explicit := candidate.Get("index"); explicit.Exists() {
-			index = explicit.Int()
-		}
-		finishReason := candidate.Get("finishReason")
-		if finishReason.Type == gjson.String && strings.TrimSpace(finishReason.String()) != "" {
-			_, terminalUpdate = s.seenCandidates[index]
-			if terminalUpdate {
-				return false
-			}
-		}
-		position++
-		return true
-	})
-	if s.blockedTerminalSeen {
-		if providerPayload || !ancillary {
-			return false, errors.New("gemini provider payload arrived after application terminal")
-		}
-		return false, nil
-	}
-	if !providerPayload && !ancillary && !terminalUpdate {
-		return false, errors.New("unrecognized Gemini provider payload")
-	}
-	if providerPayload {
-		s.providerPayloadObserved = true
-	}
-	position = 0
-	var stateErr error
-	root.Get("candidates").ForEach(func(_, candidate gjson.Result) bool {
-		index := int64(position)
-		if explicit := candidate.Get("index"); explicit.Exists() {
-			index = explicit.Int()
-		}
-		if s.seenCandidates == nil {
-			s.seenCandidates = make(map[int64]struct{})
-			s.terminalCandidates = make(map[int64]struct{})
-		}
-		if _, finished := s.terminalCandidates[index]; finished {
-			stateErr = fmt.Errorf("gemini candidate %d emitted payload after finishReason", index)
-			return false
-		}
-		if _, seen := s.seenCandidates[index]; !seen && len(s.seenCandidates) >= maxGeminiCandidatesPerAttempt {
-			stateErr = errors.New("gemini provider stream tracked too many candidates")
-			return false
-		}
-		s.seenCandidates[index] = struct{}{}
-		finishReason := candidate.Get("finishReason")
-		if finishReason.Type == gjson.String && strings.TrimSpace(finishReason.String()) != "" {
-			s.terminalCandidates[index] = struct{}{}
-		}
-		position++
-		return true
-	})
-	if stateErr != nil {
-		return false, stateErr
-	}
-	blockReason := root.Get("promptFeedback.blockReason")
-	if blockReason.Type == gjson.String && strings.TrimSpace(blockReason.String()) != "" {
-		if len(s.seenCandidates) > 0 {
-			return false, errors.New("gemini prompt block arrived after candidate output")
-		}
-		s.blockedTerminalSeen = true
-	}
-	return providerPayload, nil
-}
-
-func (s *geminiProviderStreamState) observeDone() error {
-	if s.doneSeen {
-		return errors.New("duplicate Gemini [DONE] terminal")
-	}
-	if !s.providerPayloadObserved {
-		return errors.New("gemini [DONE] arrived before a valid provider payload")
-	}
-	if !s.applicationTerminalObserved() {
-		return errors.New("gemini [DONE] arrived before an application terminal")
-	}
-	s.doneSeen = true
-	return nil
-}
-
-func (s *geminiProviderStreamState) terminalObserved() bool {
-	return s.blockedTerminalSeen || s.doneSeen
-}
-
-func (s *geminiProviderStreamState) applicationTerminalObserved() bool {
-	return s.blockedTerminalSeen ||
-		(len(s.seenCandidates) > 0 && len(s.terminalCandidates) == len(s.seenCandidates))
 }
 
 func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, isOAuth bool) (*geminiNativeStreamResult, error) {
@@ -3610,9 +2947,6 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	}
 	var firstTokenMs *int
 	semanticOutput := false
-	terminalObserved := false
-	validProviderPayloadObserved := false
-	var providerState geminiProviderStreamState
 	commitTerminal := false
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
@@ -3659,14 +2993,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 				// Keepalive / done markers
 				if payload == "" || payload == "[DONE]" {
 					if payload == "[DONE]" {
-						if err := providerState.observeDone(); err != nil {
-							if staged.committed {
-								return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini native terminal: %w", err)
-							}
-							return nil, newIncompleteProviderStreamFailover(resp, err.Error())
-						}
-						terminalObserved = true
-						commitTerminal = validProviderPayloadObserved
+						commitTerminal = true
 					}
 					if isOAuth {
 						emit(line + "\n\n")
@@ -3691,30 +3018,14 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					} else {
 						rawBytes = []byte(payload)
 					}
-					providerPayload, stateErr := providerState.observePayload(rawBytes)
-					if stateErr != nil {
-						if staged.committed {
-							return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini native provider stream: %w", stateErr)
-						}
-						return nil, newIncompleteProviderStreamFailover(resp, stateErr.Error())
-					}
-
 					if u := extractGeminiUsage(rawBytes); u != nil {
 						usage = u
-					}
-					if providerPayload {
-						validProviderPayloadObserved = true
-					}
-					if providerState.terminalObserved() {
-						terminalObserved = true
-						commitTerminal = validProviderPayloadObserved
 					}
 					if geminiPayloadHasSemanticOutput(rawBytes) {
 						semanticOutput = true
 					}
 					if fr := gjson.GetBytes(rawBytes, "candidates.0.finishReason").String(); strings.TrimSpace(fr) != "" {
-						terminalObserved = providerState.terminalObserved()
-						commitTerminal = validProviderPayloadObserved
+						commitTerminal = true
 					}
 					observer.ObserveGemini(rawBytes)
 					observeGeminiImageOutputs(c, rawBytes)
@@ -3742,10 +3053,6 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 		}
 
 	}
-	if !terminalObserved && providerState.applicationTerminalObserved() {
-		terminalObserved = true
-		commitTerminal = validProviderPayloadObserved
-	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
 			result := &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
@@ -3758,16 +3065,6 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, scanErr
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream read failed before semantic output: "+sanitizeStreamError(scanErr))
-	}
-	if !terminalObserved {
-		result := &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
-		if staged.committed {
-			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
-		}
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream ended before semantic output")
-	}
-	if !validProviderPayloadObserved {
-		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream ended without a valid provider payload")
 	}
 	// As in the compatibility bridge above, classify the provider terminal
 	// before suppressing a downstream write error. A disconnected client must
@@ -3897,9 +3194,6 @@ type geminiCompatWireResponse struct {
 // arguments stay as RawMessage so a large, valid object costs one bounded copy
 // instead of one allocation per JSON node.
 func decodeGeminiCompatResponse(body []byte) (map[string]any, error) {
-	if err := validateOpenAIResponsesNoDuplicateKnownFields(body, providerJSONGeminiRoot); err != nil {
-		return nil, fmt.Errorf("invalid Gemini provider JSON payload: %w", err)
-	}
 	var wire geminiCompatWireResponse
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, err

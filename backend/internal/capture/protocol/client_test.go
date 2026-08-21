@@ -194,19 +194,17 @@ func TestAttemptMultiFrameWriteUsesOneAbsoluteDeadlineWithoutRetry(t *testing.T)
 	dialer := &countingDialer{dial: func(context.Context) (net.Conn, error) { return conn, nil }}
 	client := NewClient(ClientConfig{
 		Dial:         dialer.DialContext,
-		WriteTimeout: 10 * time.Millisecond,
-		ReadTimeout:  10 * time.Millisecond,
+		WriteTimeout: 100 * time.Millisecond,
+		ReadTimeout:  100 * time.Millisecond,
 	})
 	attempt, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
 	require.NoError(t, err)
-	conn.SetWriteDelay(3 * time.Millisecond)
 	conn.ResetWrites()
+	conn.expireWhenDeadlineReusedOnWrite(4)
 
-	started := time.Now()
 	require.False(t, attempt.WriteResponse(make([]byte, 2*MaxPayloadBytes+1)))
-	require.Less(t, time.Since(started), 40*time.Millisecond)
 	writes := conn.Writes()
-	require.Less(t, writes, 6, "the shared deadline must stop before all three frame header/payload pairs succeed")
+	require.Equal(t, 4, writes, "the shared deadline must stop on the second frame payload")
 	require.False(t, attempt.WriteResponse([]byte("must not retry")))
 	require.Equal(t, writes, conn.Writes(), "a failed logical operation must make the attempt inert")
 	require.Equal(t, 1, dialer.Calls())
@@ -216,17 +214,15 @@ func TestAttemptFinalizeHeaderAndPayloadShareOneAbsoluteDeadline(t *testing.T) {
 	conn := newDeadlineAwareSlowConn(0)
 	client := NewClient(ClientConfig{
 		Dial:         func(context.Context, string, string) (net.Conn, error) { return conn, nil },
-		WriteTimeout: 10 * time.Millisecond,
-		ReadTimeout:  10 * time.Millisecond,
+		WriteTimeout: 100 * time.Millisecond,
+		ReadTimeout:  100 * time.Millisecond,
 	})
 	attempt, err := client.Begin(context.Background(), model.Begin{CaptureID: uuid.New()})
 	require.NoError(t, err)
-	conn.SetWriteDelay(6 * time.Millisecond)
 	conn.ResetWrites()
+	conn.expireWhenDeadlineReusedOnWrite(2)
 
-	started := time.Now()
 	require.False(t, attempt.Finalize(model.Final{HTTPStatus: 200, StopReason: "stop", ResponseComplete: true}))
-	require.Less(t, time.Since(started), 40*time.Millisecond)
 	require.Equal(t, 2, conn.Writes(), "Finalize header and payload must consume one shared budget")
 	require.False(t, attempt.Commit(), "failed Finalize must leave no terminal retry path")
 }

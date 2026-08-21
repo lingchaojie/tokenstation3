@@ -294,9 +294,10 @@ type OpenAIForwardResult struct {
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
 	// 上游不返回 usage 字段，>0 时走按次计费（分组单价 × 次数 × 倍率）。
-	WebSearchCalls      int
-	wsReplayInput       []json.RawMessage
-	wsReplayInputExists bool
+	WebSearchCalls               int
+	wsReplayInput                []json.RawMessage
+	wsReplayInputExists          bool
+	wsAccountFailoverReplayInput []json.RawMessage
 
 	// ── 归档采集（仅 gateway.capture.enabled=true 时填充，否则 nil）──
 	// UpstreamRequest is the exact final request body sent by this attempt.
@@ -314,6 +315,68 @@ type OpenAIForwardResult struct {
 	CaptureStream           bool
 	CaptureStreamKnown      bool
 	CaptureContentPolicy    *CaptureContentPolicy
+}
+
+var ErrOpenAIUpstreamUsageMissing = errors.New("upstream response missing billable usage")
+
+// HasBillableUsage reports whether the parsed upstream result contains a
+// potentially billable unit. Account-mode-specific checks (for example Kiro
+// relay credits without tokens) run once the selected account is available to
+// billing. It deliberately does not estimate tokens: the counts remain the
+// values returned by the upstream provider.
+func (r *OpenAIForwardResult) HasBillableUsage() bool {
+	if r == nil {
+		return false
+	}
+	u := r.Usage
+	return u.InputTokens > 0 ||
+		u.ImageInputTokens > 0 ||
+		u.OutputTokens > 0 ||
+		u.CacheCreationInputTokens > 0 ||
+		u.CacheReadInputTokens > 0 ||
+		u.ImageOutputTokens > 0 ||
+		u.KiroCredits > 0 ||
+		r.ImageCount > 0 ||
+		r.VideoCount > 0 ||
+		r.WebSearchCalls > 0
+}
+
+func (r *OpenAIForwardResult) hasBillableUsageWithoutKiroCredits() bool {
+	if r == nil {
+		return false
+	}
+	u := r.Usage
+	return u.InputTokens > 0 ||
+		u.ImageInputTokens > 0 ||
+		u.OutputTokens > 0 ||
+		u.CacheCreationInputTokens > 0 ||
+		u.CacheReadInputTokens > 0 ||
+		u.ImageOutputTokens > 0 ||
+		r.ImageCount > 0 ||
+		r.VideoCount > 0 ||
+		r.WebSearchCalls > 0
+}
+
+func isOpenAIKiroRelayCreditsOnlyUsage(account *Account, result *OpenAIForwardResult) bool {
+	return isKiroRelayModeAccount(account) &&
+		result != nil &&
+		result.Usage.KiroCredits > 0 &&
+		!result.hasBillableUsageWithoutKiroCredits()
+}
+
+// FinalizeOpenAIForwardUsage turns an otherwise successful response with no
+// billable upstream usage into an error result. Existing forwarding errors and
+// client disconnects retain their original identity and semantics.
+func FinalizeOpenAIForwardUsage(result *OpenAIForwardResult, forwardErr error) error {
+	if result == nil || result.HasBillableUsage() {
+		return forwardErr
+	}
+	result.UpstreamFailed = true
+	result.CaptureTerminalError = true
+	if forwardErr != nil {
+		return forwardErr
+	}
+	return ErrOpenAIUpstreamUsageMissing
 }
 
 func (r *OpenAIForwardResult) UpstreamModelForCapture() string {
@@ -523,6 +586,8 @@ type OpenAIGatewayService struct {
 	codexModelsManifestCache            codexModelsManifestCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	openaiCodexTurnStateOrigins         sync.Map
+	openaiCodexTurnStateWrites          atomic.Uint64
 	capturePool                         *ConversationCapturePool // 可选：归档采集池（nil 表示未启用），仅用于错误响应归档
 }
 
@@ -686,6 +751,10 @@ func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Contex
 func (s *OpenAIGatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string, requireCompact bool) bool {
 	if s.channelService == nil {
 		return false
+	}
+	if forwardModel, ok := openAIForwardModelFromContext(ctx); ok {
+		requestedModel = forwardModel.model
+		requireCompact = forwardModel.useCompactModelMapping
 	}
 	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
 	if upstreamModel == "" {
@@ -1286,7 +1355,7 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 			}
 			return apiKey, "apikey", nil
 		}
-		apiKey := account.GetOpenAIApiKey()
+		apiKey := account.GetOpenAIProtocolAPIKey()
 		if apiKey == "" {
 			return "", "", errors.New("api_key not found in credentials")
 		}

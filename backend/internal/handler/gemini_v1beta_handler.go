@@ -519,9 +519,6 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
 		}
-		if result != nil {
-			h.submitGatewayResultCaptureForRequest(c, result, account, body, GetUpstreamEndpoint(c, account.Platform))
-		}
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if result == nil && errors.As(err, &failoverErr) {
@@ -542,6 +539,9 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				}
 			}
 			if result == nil || result.UpstreamFailed {
+				if result != nil {
+					h.submitGatewayResultCaptureForRequest(c, result, account, body, GetUpstreamEndpoint(c, account.Platform))
+				}
 				// ForwardNative already wrote the response. Capture-only failures
 				// must not create a usage row; a committed partial result continues
 				// below so already delivered tokens are accounted exactly once.
@@ -581,27 +581,33 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		forceCacheBilling := fs.ForceCacheBilling
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 		sessionID := service.ExtractClientSessionID(c)
+		usageInput := &service.RecordUsageLongContextInput{
+			Result:                result,
+			QuotaPlatform:         quotaPlatform,
+			APIKey:                apiKey,
+			User:                  apiKey.User,
+			Account:               account,
+			Subscription:          subscription,
+			PricingAt:             pricingAt,
+			InboundEndpoint:       inboundEndpoint,
+			UpstreamEndpoint:      upstreamEndpoint,
+			UserAgent:             userAgent,
+			IPAddress:             clientIP,
+			RequestPayloadHash:    requestPayloadHash,
+			LongContextThreshold:  200000, // Gemini 200K 阈值
+			LongContextMultiplier: 2.0,    // 超出部分双倍计费
+			ForceCacheBilling:     forceCacheBilling,
+			APIKeyService:         h.apiKeyService,
+			SessionID:             sessionID,
+			ChannelUsageFields:    clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+		}
+		if !h.validateGatewayUsagePricingWithLongContext(c, usageInput) {
+			h.submitGatewayResultCaptureForRequest(c, result, account, body, upstreamEndpoint)
+			return
+		}
+		h.submitGatewayResultCaptureForRequest(c, result, account, body, upstreamEndpoint)
 		h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-			if err := h.gatewayService.RecordUsageWithLongContext(ctx, &service.RecordUsageLongContextInput{
-				Result:                result,
-				QuotaPlatform:         quotaPlatform,
-				APIKey:                apiKey,
-				User:                  apiKey.User,
-				Account:               account,
-				Subscription:          subscription,
-				PricingAt:             pricingAt,
-				InboundEndpoint:       inboundEndpoint,
-				UpstreamEndpoint:      upstreamEndpoint,
-				UserAgent:             userAgent,
-				IPAddress:             clientIP,
-				RequestPayloadHash:    requestPayloadHash,
-				LongContextThreshold:  200000, // Gemini 200K 阈值
-				LongContextMultiplier: 2.0,    // 超出部分双倍计费
-				ForceCacheBilling:     forceCacheBilling,
-				APIKeyService:         h.apiKeyService,
-				SessionID:             sessionID,
-				ChannelUsageFields:    clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
-			}); err != nil {
+			if err := h.gatewayService.RecordUsageWithLongContext(ctx, usageInput); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.gemini_v1beta.models"),
 					zap.Int64("user_id", authSubject.UserID),

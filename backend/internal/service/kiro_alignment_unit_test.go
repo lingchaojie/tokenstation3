@@ -21,15 +21,15 @@ func TestGetBaseURL_KiroAPIKeyWithoutBaseURLReturnsEmpty(t *testing.T) {
 	require.Empty(t, account.GetBaseURL())
 }
 
-func TestGetModelPricing_KiroHaiku45UsesDedicatedFallback(t *testing.T) {
+func TestGetModelPricing_KiroHaiku45UsesUpstreamFallback(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, nil)
 
 	pricing, err := svc.GetModelPricing("claude-haiku-4-5")
 
 	require.NoError(t, err)
 	require.NotNil(t, pricing)
-	require.InDelta(t, 1e-6, pricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 5e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.25e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 1.25e-6, pricing.OutputPricePerToken, 1e-12)
 }
 
 func TestForwardResultBillingModel_NormalizesKiroModels(t *testing.T) {

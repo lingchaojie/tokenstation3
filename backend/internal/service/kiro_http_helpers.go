@@ -258,6 +258,16 @@ func isKiroDirectModeAccount(account *Account) bool {
 	return false
 }
 
+// isKiroRelayModeAccount reports the explicit API-key + base_url relay mode.
+// Keep this narrower than !isKiroDirectModeAccount so unsupported or partial
+// Kiro account records are not silently reclassified as relays.
+func isKiroRelayModeAccount(account *Account) bool {
+	return account != nil &&
+		account.Platform == PlatformKiro &&
+		account.Type == AccountTypeAPIKey &&
+		strings.TrimSpace(account.GetCredential("base_url")) != ""
+}
+
 func kiroAPIRegion(account *Account) string {
 	if account == nil {
 		return kiroDefaultRegion

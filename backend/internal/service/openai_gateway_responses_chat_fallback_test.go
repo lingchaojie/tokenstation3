@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,6 +64,50 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
+}
+
+func TestForwardResponses_PassthroughFlagWithUnsupportedResponsesUsesAccountMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, path := range []string{"/v1/responses", "/v1/responses/compact"} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-5.4-channel","input":"hello","stream":false}`)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"chatcmpl_mapping","object":"chat.completion","model":"gpt-5.4-account","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
+				)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg:          rawChatCompletionsTestConfig(),
+				httpUpstream: upstream,
+			}
+			account := rawChatCompletionsTestAccount()
+			account.Credentials["model_mapping"] = map[string]any{
+				"gpt-5.4-channel": "gpt-5.4-account",
+			}
+			account.Credentials["compact_model_mapping"] = map[string]any{
+				"gpt-5.4-account": "gpt-5.4-compact",
+			}
+			account.Extra = map[string]any{
+				"openai_passthrough":                     true,
+				openai_compat.ExtraKeyResponsesSupported: false,
+			}
+
+			result, err := svc.Forward(context.Background(), c, account, body)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, "http://upstream.example/v1/chat/completions", upstream.lastReq.URL.String())
+			require.Equal(t, "gpt-5.4-account", gjson.GetBytes(upstream.lastBody, "model").String())
+		})
+	}
 }
 
 func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t *testing.T) {
@@ -133,7 +178,7 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	capture.commit(t, c, result, upstream.lastBody, []byte(upstreamBody), false)
 }
 
-func TestForwardResponsesRawCCMissingDoneClassifiesCommitBoundary(t *testing.T) {
+func TestForwardResponsesRawCCDoesNotRequireDoneButRequiresUsage(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		sse       string
@@ -154,30 +199,32 @@ func TestForwardResponsesRawCCMissingDoneClassifiesCommitBoundary(t *testing.T) 
 			cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
 			capture := newOpenAITypedCaptureTestHarness(t)
 			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: capture.pool}).Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
-			require.Error(t, err)
 			if tt.committed {
+				require.NoError(t, err)
 				require.NotNil(t, result)
 				require.Nil(t, result.UpstreamRequest)
 				require.Nil(t, result.CaptureResponse)
-				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
 				require.Contains(t, recorder.Body.String(), `"delta":"hi"`)
 			} else {
-				require.Nil(t, result)
+				require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
+				require.NotNil(t, result)
+				require.True(t, result.UpstreamFailed)
+				require.True(t, result.CaptureTerminalError)
+				require.True(t, result.CaptureResponseComplete)
 				var fo *UpstreamFailoverError
-				require.ErrorAs(t, err, &fo)
-				require.Equal(t, -1, c.Writer.Size(), "protocol preamble must remain retryable")
-				require.Empty(t, recorder.Body.String(), "discard staged preamble before failover")
-				capture.abort(t, c)
+				require.False(t, errors.As(err, &fo))
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
 			}
 		})
 	}
 }
 
-func TestForwardResponsesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChunk(t *testing.T) {
+func TestForwardResponsesRawCCSkipsMalformedChunksAndRequiresUsage(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		sse       string
-		committed bool
+		name     string
+		sse      string
+		wantText string
 	}{
 		{
 			name: "empty converted delta remains retryable",
@@ -188,9 +235,9 @@ func TestForwardResponsesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChun
 			sse:  "data: {not-json}\n\ndata: [DONE]\n\n",
 		},
 		{
-			name:      "malformed after converted text returns partial error",
-			sse:       "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
-			committed: true,
+			name:     "malformed after converted text does not disconnect",
+			sse:      "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
+			wantText: `"delta":"hello"`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -206,21 +253,18 @@ func TestForwardResponsesRawCCUsesConvertedCommitBoundaryAndStopsOnMalformedChun
 			capture := newOpenAITypedCaptureTestHarness(t)
 
 			result, err := (&OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, capturePool: capture.pool}).Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
-			require.Error(t, err)
+			require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
 			var failoverErr *UpstreamFailoverError
-			if tt.committed {
-				require.NotNil(t, result)
-				require.False(t, errors.As(err, &failoverErr))
-				require.Contains(t, recorder.Body.String(), `"delta":"hello"`)
-				require.Nil(t, result.CaptureResponse)
-				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
-				return
+			require.False(t, errors.As(err, &failoverErr))
+			require.NotNil(t, result)
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			require.True(t, result.CaptureResponseComplete)
+			if tt.wantText != "" {
+				require.Contains(t, recorder.Body.String(), tt.wantText)
 			}
-			require.Nil(t, result)
-			require.ErrorAs(t, err, &failoverErr)
-			require.Equal(t, -1, c.Writer.Size())
-			require.Empty(t, recorder.Body.String())
-			capture.abort(t, c)
+			require.Nil(t, result.CaptureResponse)
+			capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
 		})
 	}
 }
@@ -239,21 +283,18 @@ func rawCCSpilledCommitFailureSSE() string {
 	}, "\n")
 }
 
-func TestForwardResponsesRawCCSpilledCommitWriteFailureUsesDeliveredByteBoundary(t *testing.T) {
+func TestForwardResponsesRawCCClientWriteFailureStillDrainsUsage(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-5.4","input":"hello","stream":true}`)
 	for _, tt := range []struct {
 		name          string
 		acceptedBytes int
-		wantCommitted bool
 	}{
-		{name: "zero bytes remains failover safe", acceptedBytes: 0},
-		{name: "partial bytes prevents replay", acceptedBytes: 1024, wantCommitted: true},
+		{name: "zero bytes accepted", acceptedBytes: 0},
+		{name: "partial bytes accepted", acceptedBytes: 1024},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
-			c.Writer.Header().Set("X-Preexisting-Test", "kept")
-			headersBeforeAttempt := c.Writer.Header().Clone()
 			writer := &stagedConvertedFailingResponseWriter{
 				ResponseWriter: c.Writer,
 				accept:         tt.acceptedBytes,
@@ -272,22 +313,15 @@ func TestForwardResponsesRawCCSpilledCommitWriteFailureUsesDeliveredByteBoundary
 				httpUpstream: upstream,
 			}).Forward(context.Background(), c, forceChatResponsesFallbackAccount(), requestBody)
 
-			require.Error(t, err)
-			require.Equal(t, tt.acceptedBytes, writer.wrote)
-			require.Equal(t, tt.acceptedBytes, recorder.Body.Len())
-			var failoverErr *UpstreamFailoverError
-			if !tt.wantCommitted {
-				require.Nil(t, result)
-				require.ErrorAs(t, err, &failoverErr)
-				require.Equal(t, -1, c.Writer.Size())
-				require.Empty(t, recorder.Body.String(), "a zero-byte failed attempt must not pollute the replay stream")
-				require.Equal(t, headersBeforeAttempt, c.Writer.Header(), "a zero-byte failed attempt must not pollute replay response headers")
-				return
+			require.NoError(t, err)
+			if tt.acceptedBytes == 0 {
+				require.Zero(t, writer.wrote)
+			} else {
+				require.Positive(t, writer.wrote)
+				require.LessOrEqual(t, writer.wrote, tt.acceptedBytes)
 			}
+			require.Equal(t, writer.wrote, recorder.Body.Len())
 			require.NotNil(t, result)
-			require.False(t, errors.As(err, &failoverErr), "partial downstream delivery must not be replayed")
-			require.ErrorContains(t, err, "stream usage incomplete")
-			require.Equal(t, tt.acceptedBytes, c.Writer.Size())
 			require.Equal(t, 7, result.Usage.InputTokens)
 			require.Equal(t, 3, result.Usage.OutputTokens)
 			require.NotNil(t, result.FirstTokenMs)
@@ -295,10 +329,7 @@ func TestForwardResponsesRawCCSpilledCommitWriteFailureUsesDeliveredByteBoundary
 	}
 }
 
-func TestForwardResponsesRawCCCancellationAndStageBoundCloseBody(t *testing.T) {
-	oversizedConvertedPreamble := []byte("data: {\"id\":\"" + strings.Repeat("x", openAIFirstOutputStageMaxBytes-64) + "\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n")
-	require.Less(t, len(bytes.TrimSuffix(oversizedConvertedPreamble, []byte("\n\n"))), openAIFirstOutputStageMaxBytes,
-		"fixture must reach converted staging rather than the scanner-token guard")
+func TestForwardResponsesRawCCCancellationAndIdleCloseBody(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		payload   []byte
@@ -310,7 +341,6 @@ func TestForwardResponsesRawCCCancellationAndStageBoundCloseBody(t *testing.T) {
 		{name: "cancel after text", payload: []byte("data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"), committed: true, cancel: true},
 		{name: "idle before output", idle: true},
 		{name: "idle after text", payload: []byte("data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"), committed: true, idle: true},
-		{name: "oversized converted preamble", payload: oversizedConvertedPreamble},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			requestBody := []byte(`{"model":"gpt-5.4","input":"hello","stream":true}`)
@@ -355,17 +385,18 @@ func TestForwardResponsesRawCCCancellationAndStageBoundCloseBody(t *testing.T) {
 			}
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
+			require.False(t, errors.As(err, &failoverErr))
+			require.NotNil(t, result)
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			if tt.cancel {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+			if tt.idle {
+				require.ErrorContains(t, err, "data interval timeout")
+			}
 			if tt.committed {
-				require.NotNil(t, result)
-				require.False(t, errors.As(err, &failoverErr))
 				require.Contains(t, recorder.Body.String(), "hello")
-				if tt.idle {
-					require.Contains(t, err.Error(), "data interval timeout")
-				}
-			} else {
-				require.Nil(t, result)
-				require.ErrorAs(t, err, &failoverErr)
-				require.Equal(t, -1, c.Writer.Size())
 			}
 			select {
 			case <-blocked.closed:
@@ -428,7 +459,7 @@ func TestForwardResponsesRawCCFirstSemanticOverflowUsesCommittedOutputBoundary(t
 	}
 }
 
-func TestForwardResponses_ForceChatCompletionsRejectsNegativeUsageBeforeCommit(t *testing.T) {
+func TestForwardResponses_ForceChatCompletionsReportsBillingErrorForNegativeUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","input":"hello","stream":false}`)
@@ -450,12 +481,12 @@ func TestForwardResponses_ForceChatCompletionsRejectsNegativeUsageBeforeCommit(t
 	}
 
 	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
-	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Nil(t, result)
-	require.Equal(t, -1, c.Writer.Size(), "malformed provider usage must remain replay-safe")
-	require.Empty(t, rec.Body.String())
+	require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
+	require.NotNil(t, result, "failed result retains capture metadata")
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, c.Writer.Written(), "forwarding must not buffer the response solely to validate usage")
+	require.Contains(t, rec.Body.String(), "ok")
 }
 
 func TestForwardResponses_DeepSeekReasoningOnlyStreamProducesVisibleText(t *testing.T) {
@@ -532,7 +563,7 @@ func TestForwardResponses_AutoSupportedAccountStillUsesResponsesEndpoint(t *test
 	require.Equal(t, "ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 }
 
-func TestScanCCStreamRejectsKnownFiniteDataAfterDone(t *testing.T) {
+func TestScanCCStreamStopsAtDoneWithoutValidatingProviderTail(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
 		``,
@@ -554,10 +585,10 @@ func TestScanCCStreamRejectsKnownFiniteDataAfterDone(t *testing.T) {
 	)
 
 	require.True(t, state.SawDone)
-	require.ErrorContains(t, state.Err, "data arrived after [DONE]")
+	require.NoError(t, state.Err)
 }
 
-func TestScanCCStreamParserFailureDrainsFiniteProviderTailBeforeCapture(t *testing.T) {
+func TestScanCCStreamParserSkipDrainsThroughDoneForCapture(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -581,14 +612,15 @@ func TestScanCCStreamParserFailureDrainsFiniteProviderTailBeforeCapture(t *testi
 	)
 	finishCapture()
 
-	require.Error(t, state.Err)
+	require.NoError(t, state.Err)
+	require.True(t, state.SawDone)
 	capture, ok := takeCaptureResult(c)
 	require.True(t, ok)
 	require.Equal(t, append(append([]byte(nil), first...), tail...), capture.Response)
 	require.False(t, capture.ResponseTruncated)
 }
 
-func TestScanCCStreamRejectsDelayedChunkedDataAfterDone(t *testing.T) {
+func TestScanCCStreamDoesNotWaitForDelayedChunkedDataAfterDone(t *testing.T) {
 	terminal := []byte(strings.Join([]string{
 		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
 		``,
@@ -607,10 +639,10 @@ func TestScanCCStreamRejectsDelayedChunkedDataAfterDone(t *testing.T) {
 	)
 
 	require.True(t, state.SawDone)
-	require.ErrorContains(t, state.Err, "data arrived after [DONE]")
+	require.NoError(t, state.Err)
 }
 
-func TestScanCCStreamRejectsBufferedPartialDataTailBeforeClosingOpenBody(t *testing.T) {
+func TestScanCCStreamReturnsAtDoneWithoutInspectingBufferedPartialTail(t *testing.T) {
 	terminal := []byte(strings.Join([]string{
 		`data: {"id":"chatcmpl-tail","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
 		``,
@@ -632,11 +664,12 @@ func TestScanCCStreamRejectsBufferedPartialDataTailBeforeClosingOpenBody(t *test
 	)
 
 	require.True(t, state.SawDone)
-	require.ErrorContains(t, state.Err, "data arrived after [DONE]")
+	require.NoError(t, state.Err)
+	require.NoError(t, body.Close())
 	select {
 	case <-body.closed:
 	default:
-		t.Fatal("terminal tail validation must close and join the open provider body")
+		t.Fatal("caller cleanup must close the provider body")
 	}
 }
 
@@ -675,4 +708,144 @@ func forceChatResponsesFallbackAccount() *Account {
 		openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceChatCompletions),
 	}
 	return account
+}
+
+// reasoningRecordingCache 记录 reasoning 缓存写入、并按需响应回查。
+type reasoningRecordingCache struct {
+	stubGatewayCache
+	mu      sync.Mutex
+	sets    map[string]string
+	getResp map[string]string
+}
+
+func (c *reasoningRecordingCache) SetReasoningContent(_ context.Context, itemID string, content string, _ time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sets == nil {
+		c.sets = make(map[string]string)
+	}
+	c.sets[itemID] = content
+	return nil
+}
+
+func (c *reasoningRecordingCache) GetReasoningContent(_ context.Context, itemID string) (string, error) {
+	if v, ok := c.getResp[itemID]; ok {
+		return v, nil
+	}
+	return "", ErrReasoningContentNotFound
+}
+
+func (c *reasoningRecordingCache) snapshotSets() map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]string, len(c.sets))
+	for k, v := range c.sets {
+		out[k] = v
+	}
+	return out
+}
+
+// 流式响应里的 reasoning_content 应按 reasoning item id 写入缓存，供后续轮次
+// 客户端不回传明文 summary 时回注（DeepSeek thinking mode 400 修复的写入侧）。
+func TestForwardResponses_ChatFallbackCachesStreamedReasoning(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"deepseek-reasoner","input":"hello","stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"id":"chatcmpl_rc","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		"",
+		`data: {"id":"chatcmpl_rc","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[{"index":0,"delta":{"reasoning_content":"think "},"finish_reason":null}]}`,
+		"",
+		`data: {"id":"chatcmpl_rc","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[{"index":0,"delta":{"reasoning_content":"first"},"finish_reason":null}]}`,
+		"",
+		`data: {"id":"chatcmpl_rc","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}]}`,
+		"",
+		`data: {"id":"chatcmpl_rc","object":"chat.completion.chunk","model":"deepseek-reasoner","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_reasoning_cache_stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	cache := &reasoningRecordingCache{}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+		cache:        cache,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	sets := cache.snapshotSets()
+	require.Len(t, sets, 1, "应恰好缓存一个 reasoning item")
+	for itemID, content := range sets {
+		require.NotEmpty(t, itemID)
+		require.Equal(t, "think first", content)
+	}
+}
+
+// 请求侧：encrypted-only reasoning item（无明文 summary）经缓存回查补回
+// reasoning_content；带明文 summary 的 item 顺手回写缓存（自愈）。
+func TestForwardResponses_ChatFallbackRestoresReasoningFromCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{
+		"model":"deepseek-reasoner",
+		"stream":false,
+		"input":[
+			{"type":"reasoning","id":"item_plain","summary":[{"type":"summary_text","text":"plain thinking"}]},
+			{"type":"function_call","call_id":"call_0","name":"get_value","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_0","output":"ok"},
+			{"type":"reasoning","id":"item_enc1","summary":[],"encrypted_content":"opaque"},
+			{"type":"function_call","call_id":"call_1","name":"get_value","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"go on"}]}
+		]
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_reasoning_cache_restore"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_restore","object":"chat.completion","model":"deepseek-reasoner","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+		)),
+	}}
+	cache := &reasoningRecordingCache{
+		getResp: map[string]string{"item_enc1": "cached thinking"},
+	}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+		cache:        cache,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// 明文 summary 的 assistant 工具调用消息：reasoning_content 来自 summary 本身。
+	require.Equal(t, "plain thinking", gjson.GetBytes(upstream.lastBody, "messages.0.reasoning_content").String())
+	require.Equal(t, "call_0", gjson.GetBytes(upstream.lastBody, "messages.0.tool_calls.0.id").String())
+	require.Equal(t, "tool", gjson.GetBytes(upstream.lastBody, "messages.1.role").String())
+	// encrypted-only 的 assistant 工具调用消息：reasoning_content 来自缓存回查。
+	require.Equal(t, "cached thinking", gjson.GetBytes(upstream.lastBody, "messages.2.reasoning_content").String())
+	require.Equal(t, "call_1", gjson.GetBytes(upstream.lastBody, "messages.2.tool_calls.0.id").String())
+	require.Equal(t, "tool", gjson.GetBytes(upstream.lastBody, "messages.3.role").String())
+
+	// 明文 summary 的 item 被回写进缓存（自愈）。
+	require.Equal(t, "plain thinking", cache.snapshotSets()["item_plain"])
 }

@@ -72,7 +72,7 @@ func buildBedrockServiceChunkFrame(t *testing.T, eventJSON string) []byte {
 	return frame.Bytes()
 }
 
-func TestBedrockClientDisconnectDoesNotHideCanceledIncompleteProviderStream(t *testing.T) {
+func TestBedrockClientDisconnectReturnsCollectedUsageOnCanceledProviderStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var frames bytes.Buffer
@@ -103,12 +103,11 @@ func TestBedrockClientDisconnectDoesNotHideCanceledIncompleteProviderStream(t *t
 	)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
-	require.ErrorContains(t, err, "bedrock stream read error")
-	require.ErrorIs(t, err, context.Canceled)
-	require.NotErrorIs(t, err, io.EOF)
+	require.NoError(t, err)
+	require.Equal(t, 3, result.usage.InputTokens)
 }
 
-func TestBedrockClientDisconnectDoesNotHideIdleIncompleteProviderStream(t *testing.T) {
+func TestBedrockClientDisconnectReturnsCollectedUsageOnIdleProviderStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var frames bytes.Buffer
@@ -145,7 +144,8 @@ func TestBedrockClientDisconnectDoesNotHideIdleIncompleteProviderStream(t *testi
 	<-writeDone
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
-	require.ErrorContains(t, err, "stream data interval timeout")
+	require.NoError(t, err)
+	require.Equal(t, 3, result.usage.InputTokens)
 }
 
 func TestBedrockTreatsPartialFrameBytesAsProviderActivity(t *testing.T) {

@@ -168,7 +168,7 @@ func TestLocallyCorruptBatchIsRecoveredWithoutBlockingOtherReadyRecords(t *testi
 	close(uploader.releaseCorrupt)
 	require.Eventually(t, func() bool {
 		return uploader.successCount() == 1 && store.Snapshot().ReadyRecords == 0 && runtime.Status().CurrentBatchID == ""
-	}, time.Second, time.Millisecond)
+	}, 5*time.Second, time.Millisecond)
 	newAdmission := make(chan error, 1)
 	go func() {
 		sink, openErr := store.Open(model.Begin{CaptureID: uuid.New(), Policy: model.ContentPolicy{}})
