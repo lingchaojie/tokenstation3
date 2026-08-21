@@ -1472,7 +1472,7 @@ func parseGrokQuotaSnapshot(headers http.Header, statusCode int, now time.Time) 
 	if snapshot == nil && statusCode == http.StatusTooManyRequests {
 		return &xai.QuotaSnapshot{
 			StatusCode: statusCode,
-			UpdatedAt:  now.UTC().Format(time.RFC3339),
+			UpdatedAt:  now.UTC().Format(time.RFC3339Nano),
 		}
 	}
 	return snapshot
