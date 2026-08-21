@@ -185,8 +185,8 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   const providerAuthConfig = input.codexAuthMode === 'api-key'
     ? `requires_openai_auth = false
 http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
-    : 'requires_openai_auth = true'
-  const configContent = `model_provider = "OpenAI"
+    : 'requires_openai_auth = false'
+  const configContent = `model_provider = "linx2ai"
 model = "gpt-5.5"
 review_model = "gpt-5.5"
 model_reasoning_effort = "xhigh"
@@ -194,8 +194,8 @@ disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 
-[model_providers.OpenAI]
-name = "OpenAI"
+[model_providers.linx2ai]
+name = "linx2ai"
 base_url = "${v1}"
 wire_api = "responses"
 ${providerAuthConfig}

@@ -88,12 +88,12 @@ function expectCodexFileContract(wrapper: VueWrapper, expectedBaseUrl: string) {
   const configToml = generatedFileContent(wrapper, 'config.toml')
   const authJson = generatedFileContent(wrapper, 'auth.json')
 
-  expect(configToml).toContain('model_provider = "OpenAI"')
+  expect(configToml).toContain('model_provider = "linx2ai"')
   expect(configToml).toContain('model = "gpt-5.5"')
   expect(configToml).toContain('review_model = "gpt-5.5"')
-  expect(configToml).toContain(`[model_providers.OpenAI]\nname = "OpenAI"\nbase_url = "${expectedBaseUrl}"`)
+  expect(configToml).toContain(`[model_providers.linx2ai]\nname = "linx2ai"\nbase_url = "${expectedBaseUrl}"`)
   expect(configToml).toContain('wire_api = "responses"')
-  expect(configToml).toContain('requires_openai_auth = true')
+  expect(configToml).toContain('requires_openai_auth = false')
   expect(configToml).toContain('[features]\ngoals = true')
   expect(configToml).not.toContain('sk-test')
   expect(configToml).not.toContain('env_key')
@@ -318,13 +318,13 @@ describe('UseKeyModal', () => {
     })
 
     const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
-    const configToml = codeBlocks.find((content) => content.includes('model_provider = "OpenAI"'))
+    const configToml = codeBlocks.find((content) => content.includes('model_provider = "linx2ai"'))
 
     expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe(
       'true'
     )
     expect(configToml).toBeDefined()
-    expect(configToml).toContain('requires_openai_auth = true')
+    expect(configToml).toContain('requires_openai_auth = false')
     expect(configToml).not.toContain('x-openai-actor-authorization')
     expect(configToml).not.toContain('env_key')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
@@ -348,7 +348,7 @@ describe('UseKeyModal', () => {
     await nextTick()
 
     const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
-    const configToml = codeBlocks.find((content) => content.includes('model_provider = "OpenAI"'))
+    const configToml = codeBlocks.find((content) => content.includes('model_provider = "linx2ai"'))
 
     expect(apiKeyMode.attributes('aria-checked')).toBe('true')
     expect(configToml).toBeDefined()
@@ -393,7 +393,7 @@ describe('UseKeyModal', () => {
       'true'
     )
     expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).toContain(
-      'requires_openai_auth = true'
+      'requires_openai_auth = false'
     )
 
     await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
