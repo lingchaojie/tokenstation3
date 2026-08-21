@@ -139,7 +139,12 @@ func TestClickHouseOutageRetainsReadyDataAndOnlyIncrementsRetry(t *testing.T) {
 	uploader := &recordingUploader{uploadResults: []error{upload.ErrRetryable}}
 	runtime := newTestRuntime(t, root, store, uploader, clock, &blockingReceiver{})
 	startRuntime(t, runtime)
-	require.Eventually(t, func() bool { return uploader.uploadCount() == 1 }, time.Second, time.Millisecond)
+	// The uploader records the attempt before the runtime durably checkpoints
+	// the retry counter. Wait for both observations before asserting the status
+	// snapshot so the test does not race that persistence boundary.
+	require.Eventually(t, func() bool {
+		return uploader.uploadCount() == 1 && runtime.Status().UploadRetries == 1
+	}, time.Second, time.Millisecond)
 
 	status := runtime.Status()
 	require.EqualValues(t, 1, status.ReadyRecords)

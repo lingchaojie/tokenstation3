@@ -106,7 +106,10 @@ func parseQuotaHeaders(headers http.Header, statusCode int, source string, keepE
 	if headers == nil && !keepEmpty {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	// Preserve sub-second precision because Retry-After is relative to this
+	// observation. Truncating to whole seconds can make a persisted cooldown
+	// expire almost one second early (and makes boundary assertions flaky).
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	snapshot := &QuotaSnapshot{
 		Requests:          parseQuotaWindow(headers, "requests"),
 		Tokens:            parseQuotaWindow(headers, "tokens"),
