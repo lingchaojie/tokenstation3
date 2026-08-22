@@ -170,6 +170,109 @@ func TestAntigravityForwardGemini_ProviderStreamFailuresRemainTerminal(t *testin
 	}
 }
 
+func TestAntigravityForwardGemini_PreSemanticCancellationWithoutLiveAttemptPreservesProxyFailure(t *testing.T) {
+	for _, admission := range []struct {
+		name string
+		set  func(*AntigravityGatewayService, *config.Config)
+	}{
+		{name: "pool_nil", set: func(svc *AntigravityGatewayService, _ *config.Config) { svc.capturePool = nil }},
+		{name: "capture_disabled", set: func(_ *AntigravityGatewayService, cfg *config.Config) { cfg.Gateway.Capture.Enabled = false }},
+		{name: "runtime_disabled", set: func(svc *AntigravityGatewayService, _ *config.Config) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{}, func() bool { return false })
+		}},
+		{name: "ipc_begin_failed", set: func(svc *AntigravityGatewayService, _ *config.Config) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{beginErr: errors.New("capture IPC unavailable")}, func() bool { return true })
+		}},
+	} {
+		t.Run(admission.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			requestBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:streamGenerateContent", bytes.NewReader(requestBody)).WithContext(ctx)
+			installDisconnectOnlyCapturePolicy(t, c)
+			upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       &antigravityClientCancelBody{ctx: ctx, cancel: cancel},
+			}}}
+			cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{
+				Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20,
+			}}}
+			svc := &AntigravityGatewayService{
+				settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
+				tokenProvider:  &AntigravityTokenProvider{},
+				httpUpstream:   upstream,
+				capturePool:    newConversationCapturePoolForTransport(&recordingCaptureTransport{}, func() bool { return true }),
+			}
+			initialPool := svc.capturePool
+			admission.set(svc, cfg)
+			if initialPool != nil && initialPool != svc.capturePool {
+				initialPool.Stop()
+			}
+			if svc.capturePool != nil {
+				t.Cleanup(svc.capturePool.Stop)
+			}
+			account := &Account{
+				ID: 109, Name: "native-gemini-no-attempt", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "token", "project_id": "project-109", "model_mapping": map[string]any{"gemini-2.5-flash": "gemini-2.5-flash"}},
+			}
+
+			result, forwardErr := svc.ForwardGemini(ctx, c, account, "gemini-2.5-flash", "streamGenerateContent", true, requestBody, false)
+
+			require.ErrorIs(t, forwardErr, context.Canceled)
+			require.NotNil(t, result)
+			require.False(t, result.ClientDisconnect, "without a live attempt presemantic proxy behavior must remain the existing failure path")
+			require.True(t, result.UpstreamFailed)
+			require.True(t, result.CaptureTerminalError)
+			require.False(t, CommitForwardCaptureAttempt(c, PlatformAntigravity, result))
+		})
+	}
+}
+
+func TestAntigravityForwardGemini_PostSemanticCancellationWithoutLiveAttemptRemainsPartial(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	requestBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:streamGenerateContent", bytes.NewReader(requestBody)).WithContext(ctx)
+	installDisconnectOnlyCapturePolicy(t, c)
+	c.Writer = &cancelOnSemanticWriteCloser{ResponseWriter: c.Writer, cancel: cancel}
+	prefix := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"client canceled\"}]}}],\"usageMetadata\":{\"promptTokenCount\":4}}}\n\n")
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       &antigravityClientCancelBody{ctx: ctx, cancel: cancel, prefix: prefix},
+	}}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{
+		Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20,
+	}}}
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   upstream,
+		capturePool:    nil,
+	}
+	account := &Account{
+		ID: 110, Name: "native-gemini-postsemantic-no-attempt", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "project_id": "project-110", "model_mapping": map[string]any{"gemini-2.5-flash": "gemini-2.5-flash"}},
+	}
+
+	result, forwardErr := svc.ForwardGemini(ctx, c, account, "gemini-2.5-flash", "streamGenerateContent", true, requestBody, false)
+
+	require.ErrorIs(t, forwardErr, context.Canceled)
+	require.NotNil(t, result, "semantic output remains a non-failover partial result even without capture")
+	require.True(t, result.ClientDisconnect)
+	require.False(t, result.UpstreamFailed)
+	require.False(t, result.CaptureTerminalError)
+	require.False(t, result.CaptureResponseComplete)
+	require.False(t, CommitForwardCaptureAttempt(c, PlatformAntigravity, result))
+}
+
 func (w *antigravityFailingWriter) Write(p []byte) (int, error) {
 	if w.writes >= w.failAfter {
 		return 0, errors.New("write failed: client disconnected")

@@ -1305,6 +1305,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				return streamResult(), nil
 			}
 			if ev.err != nil {
+				requestCanceled := ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+				if isClientCausalCancellation(ctx, ev.err, clientDisconnected || requestCanceled) {
+					clientDisconnected = true
+					if !semanticOutput && captureAttemptForRequest(c) == nil {
+						return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(ev.err), false)
+					}
+					return streamResult(), fmt.Errorf("stream usage incomplete: %w", ev.err)
+				}
 				if !outputCommitted && !semanticOutput {
 					// Adapter-owned pipe bodies may carry a fully classified terminal
 					// provider HTTP failure (for example KIRO only-WebSearch after the
@@ -1414,7 +1422,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				cancelErr = context.Canceled
 			}
 			clientDisconnected = true
-			if !semanticOutput && !CaptureMayApplyFor(c, string(account.Platform)) {
+			if !semanticOutput && captureAttemptForRequest(c) == nil {
 				return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(cancelErr), false)
 			}
 			return streamResult(), fmt.Errorf("stream usage incomplete: %w", cancelErr)

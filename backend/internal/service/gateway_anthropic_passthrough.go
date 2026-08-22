@@ -831,7 +831,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			}
 			cleanupErr := discardPendingEvent()
 			clientDisconnected = true
-			if !semanticOutput && !CaptureMayApplyFor(c, string(account.Platform)) {
+			if !semanticOutput && captureAttemptForRequest(c) == nil {
 				return nil, errors.Join(
 					preOutputFailover("upstream stream canceled: "+sanitizeStreamError(cancelErr), false, nil),
 					cleanupErr,

@@ -1842,7 +1842,7 @@ func streamErrorForwardResult(
 	err error,
 ) *ForwardResult {
 	clientCancellation := isClientCausalCancellation(ctx, err, clientDisconnect)
-	if !semanticOutput && !clientCancellation {
+	if !semanticOutput && (!clientCancellation || captureAttemptForRequest(c) == nil) {
 		return failedForwardResultForError(c, resp, model, upstreamModel, true, startedAt, err)
 	}
 	finishCaptureResponse(resp)

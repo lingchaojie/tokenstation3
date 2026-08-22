@@ -532,7 +532,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		// win the result assembly race.
 		finishRawCapture()
 		if streamErr != nil {
-			_, _ = io.WriteString(pw, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"stream interrupted\"}}\n\n")
+			clientCancellation := isClientCausalCancellation(ctx, streamErr, ctx != nil && errors.Is(ctx.Err(), context.Canceled))
+			if !clientCancellation {
+				_, _ = io.WriteString(pw, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"stream interrupted\"}}\n\n")
+			}
 			_ = pw.CloseWithError(streamErr)
 			return
 		}

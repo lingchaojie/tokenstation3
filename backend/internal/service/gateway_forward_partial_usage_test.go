@@ -200,6 +200,104 @@ func TestGatewayForward_ProviderStreamFailuresRemainTerminal(t *testing.T) {
 	}
 }
 
+func TestGatewayForward_PreSemanticClientCancellationWithoutLiveAttemptPreservesFailover(t *testing.T) {
+	families := []struct {
+		name    string
+		account func() *Account
+	}{
+		{name: "shared_anthropic", account: newAnthropicOAuthAccountForPartialUsageTest},
+		{name: "apikey_passthrough", account: newAnthropicAPIKeyAccountForTest},
+	}
+	admissions := []struct {
+		name string
+		set  func(*GatewayService)
+	}{
+		{name: "pool_nil", set: func(svc *GatewayService) { svc.capturePool = nil }},
+		{name: "capture_disabled", set: func(svc *GatewayService) { svc.cfg.Gateway.Capture.Enabled = false }},
+		{name: "runtime_disabled", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{}, func() bool { return false })
+		}},
+		{name: "ipc_begin_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{beginErr: errors.New("capture IPC unavailable")}, func() bool { return true })
+		}},
+	}
+	for _, family := range families {
+		for _, admission := range admissions {
+			t.Run(family.name+"/"+admission.name, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+				require.NoError(t, err)
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
+				installDisconnectOnlyCapturePolicy(t, c)
+				body := newBlockingCaptureBody(nil)
+				upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"text/event-stream"}},
+					Body:       body,
+				}}
+				svc := newForwardPartialUsageServiceForTest(upstream)
+				admission.set(svc)
+				if svc.capturePool != nil {
+					t.Cleanup(svc.capturePool.Stop)
+				}
+
+				result, forwardErr := svc.Forward(ctx, c, family.account(), parsed)
+
+				require.Nil(t, result, "capture unavailability must not create a capture-only proxy result")
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, forwardErr, &failoverErr)
+				require.False(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+			})
+		}
+	}
+}
+
+func TestGatewayForward_PostSemanticClientCancellationWithoutLiveAttemptRemainsPartial(t *testing.T) {
+	for _, family := range []struct {
+		name    string
+		account func() *Account
+	}{
+		{name: "shared_anthropic", account: newAnthropicOAuthAccountForPartialUsageTest},
+		{name: "apikey_passthrough", account: newAnthropicAPIKeyAccountForTest},
+	} {
+		t.Run(family.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
+			installDisconnectOnlyCapturePolicy(t, c)
+			c.Writer = &cancelOnSemanticWriteCloser{ResponseWriter: c.Writer, cancel: cancel}
+			prefix := []byte(anthropicAPIKeyPassthroughTestSemanticPrefix(4, "client canceled"))
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       newBlockingCaptureBody(prefix),
+			}}
+			svc := newForwardPartialUsageServiceForTest(upstream)
+			svc.capturePool = nil
+
+			result, forwardErr := svc.Forward(ctx, c, family.account(), parsed)
+
+			require.ErrorIs(t, forwardErr, context.Canceled)
+			require.NotNil(t, result, "semantic output remains a non-failover partial result even without capture")
+			require.True(t, result.ClientDisconnect)
+			require.False(t, result.CaptureTerminalError)
+			require.False(t, result.CaptureResponseComplete)
+			require.False(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+		})
+	}
+}
+
 func (r *gatewayForwardErrorPolicyRepoStub) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
 	r.tempCalls++
 	return nil
