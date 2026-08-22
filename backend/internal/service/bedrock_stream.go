@@ -119,13 +119,10 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, responseComplete: terminalObserved}, nil
 			}
 			if ev.err != nil {
-				if clientDisconnected {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, responseComplete: terminalObserved}, nil
-				}
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, responseComplete: terminalObserved}, nil
 				}
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, responseComplete: terminalObserved}, fmt.Errorf("bedrock stream read error: %w", ev.err)
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, responseComplete: terminalObserved}, fmt.Errorf("bedrock stream read error: %w", ev.err)
 			}
 
 			// payload 是 JSON，提取 chunk.bytes（base64 编码的 Claude SSE 事件数据）

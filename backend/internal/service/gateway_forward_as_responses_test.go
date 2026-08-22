@@ -300,12 +300,14 @@ func TestAnthropicToResponsesCompatibilityClientDisconnectCompleteAfterProviderT
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
-	resp := markedKiroFinalUsageAnthropicResponse("msg_responses_disconnect_complete")
+	failed := make(chan struct{})
+	c.Writer = &signalFailWriteResponseWriter{ResponseWriter: c.Writer, failed: failed}
+	resp, providerDone := anthropicCompatTerminalAfterClientWriteFailure(failed)
 
 	result, err := (&GatewayService{}).handleResponsesStreamingResponse(
 		resp, c, "gpt-5", "claude-sonnet-4.5", nil, time.Now(), true, apicompat.ResponsesClientToolMapping{},
 	)
+	<-providerDone
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.ClientDisconnect)

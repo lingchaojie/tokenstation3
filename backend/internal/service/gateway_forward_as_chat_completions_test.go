@@ -254,16 +254,51 @@ func TestAnthropicToChatCompatibilityClientDisconnectCompleteAfterProviderTermin
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
-	resp := markedKiroFinalUsageAnthropicResponse("msg_cc_disconnect_complete")
+	failed := make(chan struct{})
+	c.Writer = &signalFailWriteResponseWriter{ResponseWriter: c.Writer, failed: failed}
+	resp, providerDone := anthropicCompatTerminalAfterClientWriteFailure(failed)
 
 	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(
 		context.Background(), resp, c, "gpt-5", "claude-sonnet-4.5", nil, time.Now(), true, true,
 	)
+	<-providerDone
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.ClientDisconnect)
 	require.True(t, result.CaptureResponseComplete)
+}
+
+func anthropicCompatTerminalAfterClientWriteFailure(failed <-chan struct{}) (*http.Response, <-chan struct{}) {
+	reader, writer := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.WriteString(writer, strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_disconnect_complete","type":"message","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":2}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"semantic output"}}`,
+			``,
+		}, "\n"))
+		<-failed
+		_, _ = io.WriteString(writer, strings.Join([]string{
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))
+		_ = writer.Close()
+	}()
+	return &http.Response{Body: reader}, done
 }
 
 func TestAnthropicToChatCompatibilityRejectsIncompleteProviderTailAfterTerminal(t *testing.T) {
