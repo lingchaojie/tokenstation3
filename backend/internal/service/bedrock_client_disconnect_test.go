@@ -104,7 +104,44 @@ func TestBedrockClientDisconnectReturnsCollectedUsageOnCanceledProviderStream(t 
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 	require.False(t, result.responseComplete)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 3, result.usage.InputTokens)
+}
+
+func TestBedrockRequestCancellationAfterClientDisconnectIsClientCausal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var frames bytes.Buffer
+	for _, event := range []string{
+		`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"bedrock","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+	} {
+		_, _ = frames.Write(buildBedrockServiceChunkFrame(t, event))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &bedrockPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body: &bedrockFramesThenError{
+			frames: bytes.NewReader(frames.Bytes()),
+			err:    context.Canceled,
+		},
+	}
+
+	result, err := (&GatewayService{cfg: &config.Config{}}).handleBedrockStreamingResponse(
+		ctx, resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, time.Now(), "bedrock",
+	)
+
 	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.False(t, result.responseComplete)
 	require.Equal(t, 3, result.usage.InputTokens)
 }
 
@@ -182,7 +219,7 @@ func TestBedrockClientDisconnectReturnsCollectedUsageOnIdleProviderStream(t *tes
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
 	require.False(t, result.responseComplete)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "stream data interval timeout")
 	require.Equal(t, 3, result.usage.InputTokens)
 }
 

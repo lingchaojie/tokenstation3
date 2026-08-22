@@ -166,6 +166,13 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	resultWithUsage := func() *OpenAIForwardResult {
+		return &OpenAIForwardResult{
+			RequestID: requestID, Usage: claudeUsageToOpenAIUsage(&usage), Model: originalModel,
+			BillingModel: billingModel, UpstreamModel: upstreamModel, UpstreamEndpoint: "/v1/messages",
+			ReasoningEffort: reasoningEffort, Stream: false, Duration: time.Since(startTime),
+		}
+	}
 
 	// 读间隔上限：上游挂住 SSE 时中止组装（缓冲路径尚未提交响应头，可回 502）。
 	streamInterval := s.anthropicNativeStreamInterval()
@@ -200,7 +207,8 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 			break
 		}
 		// SSE 规范允许 `event:xxx`（冒号后无空格）：Kimi 等上游返回紧凑格式。
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
+		eventName, ok := extractOpenAISSEEventLine(line)
+		if !ok {
 			continue
 		}
 
@@ -215,6 +223,10 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		payload, ok := extractOpenAISSEDataLine(dataLine)
 		if !ok {
 			continue
+		}
+		if anthropicStreamEventIsError(eventName, payload) {
+			writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream stream returned an error")
+			return resultWithUsage(), &sseStreamErrorEventError{RawData: payload}
 		}
 
 		var event apicompat.AnthropicStreamEvent
@@ -440,7 +452,8 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 			}
 			break
 		}
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
+		eventName, ok := extractOpenAISSEEventLine(line)
+		if !ok {
 			continue
 		}
 
@@ -458,6 +471,10 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 		payload, ok := extractOpenAISSEDataLine(dataLine)
 		if !ok {
 			continue
+		}
+		if anthropicStreamEventIsError(eventName, payload) {
+			providerErr = &sseStreamErrorEventError{RawData: payload}
+			break
 		}
 
 		var event apicompat.AnthropicStreamEvent

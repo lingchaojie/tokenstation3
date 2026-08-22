@@ -373,11 +373,16 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 		keepaliveTimer.Reset(keepaliveInterval)
 	}
 	inPartialEvent := false
+	pendingEventName := ""
+	var pendingStreamError *sseStreamErrorEventError
 
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				if pendingStreamError != nil {
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, sawTerminalEvent, originalModel, billingModel, upstreamModel, startTime), pendingStreamError
+				}
 				if !clientDisconnected {
 					flusher.Flush()
 				}
@@ -408,9 +413,18 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			}
 
 			line := ev.line
+			if eventName, ok := extractOpenAISSEEventLine(line); ok {
+				pendingEventName = eventName
+				if anthropicStreamEventIsError(eventName, "") {
+					pendingStreamError = &sseStreamErrorEventError{}
+				}
+			}
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
 				observer.ObserveAnthropic([]byte(trimmed))
+				if anthropicStreamEventIsError(pendingEventName, trimmed) {
+					pendingStreamError = &sseStreamErrorEventError{RawData: trimmed}
+				}
 				if anthropicStreamEventIsTerminal("", trimmed) {
 					sawTerminalEvent = true
 				}
@@ -443,6 +457,12 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				} else {
 					inPartialEvent = true
 				}
+			}
+			if line == "" {
+				if pendingStreamError != nil {
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, sawTerminalEvent, originalModel, billingModel, upstreamModel, startTime), pendingStreamError
+				}
+				pendingEventName = ""
 			}
 
 		case <-intervalCh:

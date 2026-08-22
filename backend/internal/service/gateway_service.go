@@ -214,6 +214,14 @@ func anthropicStreamEventIsTerminal(eventName, data string) bool {
 	return gjson.Get(trimmed, "type").String() == "message_stop"
 }
 
+func anthropicStreamEventIsError(eventName, data string) bool {
+	if strings.EqualFold(strings.TrimSpace(eventName), "error") {
+		return true
+	}
+	trimmed := strings.TrimSpace(data)
+	return trimmed != "" && gjson.Get(trimmed, "type").String() == "error"
+}
+
 func cloneStringSlice(src []string) []string {
 	if len(src) == 0 {
 		return nil

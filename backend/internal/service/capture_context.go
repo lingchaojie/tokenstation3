@@ -33,6 +33,8 @@ type captureAttemptRequestSlot struct {
 	attempt            *CaptureAttempt
 	owner              captureAttemptOwner
 	responseHTTPStatus int
+	stream             bool
+	streamKnown        bool
 }
 
 type captureAttemptOwner uint8
@@ -262,6 +264,8 @@ func transitionCaptureAttemptOwner(c *gin.Context, owner captureAttemptOwner) {
 	slot.attempt = nil
 	slot.owner = owner
 	slot.responseHTTPStatus = 0
+	slot.stream = false
+	slot.streamKnown = false
 	slot.mu.Unlock()
 	if previous != nil {
 		previous.Abort()
@@ -302,6 +306,8 @@ func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 	slot.attempt = next
 	if previous != next {
 		slot.responseHTTPStatus = 0
+		slot.stream = false
+		slot.streamKnown = false
 	}
 	slot.mu.Unlock()
 	if previous != nil && previous != next {
@@ -319,6 +325,8 @@ func takeCaptureAttemptForRequest(c *gin.Context) *CaptureAttempt {
 	slot.attempt = nil
 	slot.owner = captureAttemptOwnerNone
 	slot.responseHTTPStatus = 0
+	slot.stream = false
+	slot.streamKnown = false
 	slot.mu.Unlock()
 	return attempt
 }
@@ -349,6 +357,35 @@ func captureAttemptResponseHTTPStatus(c *gin.Context) int {
 		return 0
 	}
 	return slot.responseHTTPStatus
+}
+
+func setCaptureAttemptStreamGeometry(c *gin.Context, attempt *CaptureAttempt, stream, known bool) {
+	if attempt == nil || !known {
+		return
+	}
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	if slot.owner == captureAttemptOwnerTyped && slot.attempt == attempt {
+		slot.stream = stream
+		slot.streamKnown = true
+	}
+	slot.mu.Unlock()
+}
+
+func captureAttemptStreamGeometry(c *gin.Context) (bool, bool) {
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return false, false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.owner != captureAttemptOwnerTyped || slot.attempt == nil || !slot.streamKnown {
+		return false, false
+	}
+	return slot.stream, true
 }
 
 // AbortCaptureAttempt transfers and terminates the request's current attempt.
@@ -387,11 +424,16 @@ func captureTerminalOutcome(upstreamFailed, terminalError, clientDisconnect bool
 	return CaptureOutcomeSuccess
 }
 
-func captureFinalResponseComplete(upstreamFailed, terminalError, clientDisconnect, explicitlyComplete bool) bool {
+func captureFinalResponseComplete(stream, upstreamFailed, terminalError, clientDisconnect, explicitlyComplete bool) bool {
 	if explicitlyComplete {
 		return true
 	}
-	return !upstreamFailed && !terminalError && !clientDisconnect
+	if stream || upstreamFailed || terminalError || clientDisconnect {
+		return false
+	}
+	// Non-streaming success is returned only after the provider body reader has
+	// reached the verified full-body EOF boundary.
+	return true
 }
 
 // CommitTerminalErrorCaptureAttempt commits only an observed final provider
@@ -441,6 +483,10 @@ func CommitForwardCaptureAttempt(c *gin.Context, platform string, result *Forwar
 	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
 		httpStatus = observed
 	}
+	stream, streamKnown := captureAttemptStreamGeometry(c)
+	if !streamKnown {
+		stream = result.StreamForCapture()
+	}
 	final := model.Final{
 		HTTPStatus:          boundedCaptureUint16(httpStatus),
 		InputTokens:         boundedCaptureUint32(result.Usage.InputTokens),
@@ -448,6 +494,7 @@ func CommitForwardCaptureAttempt(c *gin.Context, platform string, result *Forwar
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
 		ResponseComplete: captureFinalResponseComplete(
+			stream,
 			result.UpstreamFailed,
 			result.CaptureTerminalError,
 			result.ClientDisconnect,
@@ -469,6 +516,10 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
 		httpStatus = observed
 	}
+	stream, streamKnown := captureAttemptStreamGeometry(c)
+	if !streamKnown {
+		stream = result.StreamForCapture()
+	}
 	final := model.Final{
 		HTTPStatus:          boundedCaptureUint16(httpStatus),
 		InputTokens:         boundedCaptureUint32(result.Usage.InputTokens),
@@ -476,6 +527,7 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
 		ResponseComplete: captureFinalResponseComplete(
+			stream,
 			result.UpstreamFailed,
 			result.CaptureTerminalError,
 			result.ClientDisconnect,
@@ -545,6 +597,7 @@ func beginCaptureAttemptForWireRequest(
 	}
 	attempt.headerLimit = headerLimit
 	replaceCaptureAttemptForRequest(c, attempt)
+	setCaptureAttemptStreamGeometry(c, attempt, stream, streamKnown)
 	attempt.WriteRequestHeaders(captureHeaderBytes(req.Header, headerLimit))
 	attempt.WriteRequest(body)
 	return attempt, true

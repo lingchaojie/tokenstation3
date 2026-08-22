@@ -136,6 +136,9 @@ type StreamResult struct {
 	Usage         Usage
 	StopReason    string
 	FirstDeltaDur *time.Duration
+	// ProviderTerminalObserved is native AWS event-stream truth. It must not be
+	// inferred from the translated Anthropic message_stop emitted at clean EOF.
+	ProviderTerminalObserved bool
 }
 
 type ParseResult struct {
@@ -1607,9 +1610,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 
 	return &StreamResult{
-		Usage:         usage,
-		StopReason:    stopReason,
-		FirstDeltaDur: firstDelta,
+		Usage:                    usage,
+		StopReason:               stopReason,
+		FirstDeltaDur:            firstDelta,
+		ProviderTerminalObserved: providerTerminalObserved,
 	}, nil
 }
 

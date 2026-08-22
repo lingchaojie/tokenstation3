@@ -103,18 +103,31 @@ func TestExtractJSONPreservesProviderStopReasonWhitespace(t *testing.T) {
 }
 
 func TestExtractJSONPreservesHTTP200ProviderTerminalStopReasons(t *testing.T) {
-	for _, stopReason := range []string{"refusal", "content_filtered", "guardrail_intervened"} {
-		t.Run(stopReason, func(t *testing.T) {
+	for _, fixture := range []struct {
+		name       string
+		response   string
+		stopReason string
+	}{
+		{name: "anthropic refusal", response: `{"stop_reason":"refusal"}`, stopReason: "refusal"},
+		{name: "anthropic content filtered", response: `{"stop_reason":"content_filtered"}`, stopReason: "content_filtered"},
+		{name: "anthropic guardrail", response: `{"stop_reason":"guardrail_intervened"}`, stopReason: "guardrail_intervened"},
+		{name: "openai finish reason", response: `{"choices":[{"finish_reason":"content_filter"}]}`, stopReason: "content_filter"},
+		{name: "gemini finish reason", response: `{"candidates":[{"finishReason":"SAFETY"}]}`, stopReason: "SAFETY"},
+		{name: "aws stop reason", response: `{"stopReason":"guardrail_intervened"}`, stopReason: "guardrail_intervened"},
+		{name: "kiro message stop reason", response: `{"messageStopEvent":{"stopReason":"end_turn"}}`, stopReason: "end_turn"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
 			got, err := FromReaders(context.Background(), Input{
 				Format:   model.PayloadJSON,
-				Response: strings.NewReader(`{"stop_reason":"` + stopReason + `"}`),
+				Response: strings.NewReader(fixture.response),
 				Final: model.Final{
-					HTTPStatus: 200,
-					StopReason: "gateway_custom_value",
+					HTTPStatus:       200,
+					ResponseComplete: true,
+					StopReason:       "gateway_custom_value",
 				},
 			})
 			require.NoError(t, err)
-			require.Equal(t, stopReason, got.StopReason)
+			require.Equal(t, fixture.stopReason, got.StopReason)
 		})
 	}
 }

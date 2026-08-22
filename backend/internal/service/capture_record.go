@@ -1746,6 +1746,12 @@ func finalizeForwardResultWithUsage(c *gin.Context, result *ForwardResult, forwa
 
 func finalizeOpenAIForwardResultWithUsage(c *gin.Context, result *OpenAIForwardResult, forwardErr error, upstreamRequest []byte) (*OpenAIForwardResult, error) {
 	forwardErr = FinalizeOpenAIForwardUsage(result, forwardErr)
+	if result != nil && forwardErr != nil {
+		// A public forward returning both a billable partial result and a real
+		// provider/parser/timeout error is terminal even when an early protocol
+		// route bypassed its leaf handler's optional capture annotation.
+		result.CaptureTerminalError = true
+	}
 	if errors.Is(forwardErr, ErrOpenAIUpstreamUsageMissing) && result != nil {
 		result.CaptureResponseComplete = true
 		MarkOpsPostResponseFailure(

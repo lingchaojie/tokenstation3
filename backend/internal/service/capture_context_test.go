@@ -893,6 +893,8 @@ func TestFinalAttemptLocalSyntheticErrorAborts(t *testing.T) {
 }
 
 func TestCaptureTerminalOutcome(t *testing.T) {
+	require.True(t, captureFinalResponseComplete(false, false, false, false, false), "verified non-streaming EOF is complete")
+
 	tests := []struct {
 		name                 string
 		upstreamFailed       bool
@@ -903,7 +905,7 @@ func TestCaptureTerminalOutcome(t *testing.T) {
 		wantResponseComplete bool
 		wantCommit           bool
 	}{
-		{"success", false, false, false, false, CaptureOutcomeSuccess, true, true},
+		{"stream clean EOF without provider terminal", false, false, false, false, CaptureOutcomeSuccess, false, true},
 		{"disconnect partial", false, false, true, false, captureOutcomeClientDisconnect, false, true},
 		{"disconnect drained terminal", false, false, true, true, captureOutcomeClientDisconnect, true, true},
 		{"upstream failure beats disconnect", true, false, true, false, CaptureOutcomeTerminalError, false, false},
@@ -915,7 +917,7 @@ func TestCaptureTerminalOutcome(t *testing.T) {
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
 					require.Equal(t, tt.wantOutcome, captureTerminalOutcome(tt.upstreamFailed, tt.terminalError, tt.clientDisconnect))
-					require.Equal(t, tt.wantResponseComplete, captureFinalResponseComplete(tt.upstreamFailed, tt.terminalError, tt.clientDisconnect, tt.explicitlyComplete))
+					require.Equal(t, tt.wantResponseComplete, captureFinalResponseComplete(true, tt.upstreamFailed, tt.terminalError, tt.clientDisconnect, tt.explicitlyComplete))
 
 					policy := DefaultCaptureRuntimePolicy()
 					policy.Enabled = true

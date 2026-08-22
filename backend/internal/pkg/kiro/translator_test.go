@@ -3157,7 +3157,24 @@ func TestKiroExplicitProviderStopAllowsEmptySuccess(t *testing.T) {
 	streamResult, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
 	require.NoError(t, err)
 	require.Equal(t, "end_turn", streamResult.StopReason)
+	require.True(t, streamResult.ProviderTerminalObserved)
 	require.Contains(t, out.String(), "event: message_stop")
+}
+
+func TestKiroStreamingCleanEOFExposesMissingProviderTerminal(t *testing.T) {
+	body := buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "clean eof"},
+	})
+	var out bytes.Buffer
+
+	streamResult, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), bytes.NewReader(body), &out, "claude-sonnet-4-6", 3, KiroRequestContext{},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, streamResult)
+	require.False(t, streamResult.ProviderTerminalObserved)
+	require.Contains(t, out.String(), "event: message_stop", "client-facing translated protocol remains unchanged")
 }
 
 func TestKiroTranslatorsRejectSemanticPayloadAfterTerminal(t *testing.T) {

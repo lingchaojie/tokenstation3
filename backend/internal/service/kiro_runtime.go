@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
@@ -39,6 +40,8 @@ type kiroTranslatedStreamBody struct {
 	done                          <-chan struct{}
 	cancel                        context.CancelFunc
 	stageSyntheticWebSearchEvents bool
+	providerTerminalKnown         atomic.Bool
+	providerTerminalObserved      atomic.Bool
 	closeOnce                     sync.Once
 	closeErr                      error
 }
@@ -48,6 +51,21 @@ func (b *kiroTranslatedStreamBody) providerReadActivity() *providerBodyReadActiv
 		return nil
 	}
 	return b.activity
+}
+
+func (b *kiroTranslatedStreamBody) setProviderTerminalObservation(observed bool) {
+	if b == nil {
+		return
+	}
+	b.providerTerminalObserved.Store(observed)
+	b.providerTerminalKnown.Store(true)
+}
+
+func (b *kiroTranslatedStreamBody) providerTerminalObservation() (bool, bool) {
+	if b == nil || !b.providerTerminalKnown.Load() {
+		return false, false
+	}
+	return b.providerTerminalObserved.Load(), true
 }
 
 func (b *kiroTranslatedStreamBody) Close() error {
@@ -223,6 +241,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}
 		upstreamModel := resolveKiroUpstreamModel(mappedModel)
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
+		if translatedBody, ok := resp.Body.(*kiroTranslatedStreamBody); ok && streamResult != nil {
+			if providerTerminal, known := translatedBody.providerTerminalObservation(); known {
+				// Capture completeness is provider-native truth. The translator's
+				// synthetic message_stop remains client protocol only.
+				streamResult.responseComplete = providerTerminal
+			}
+		}
 		if err != nil {
 			resultErr := err
 			var failoverErr *UpstreamFailoverError
@@ -485,12 +510,16 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	wrappedHeaders.Set("x-request-id", claudeReqID)
 	wrappedHeaders.Set("request-id", claudeReqID)
 	rawReadActivity := newProviderBodyReadActivity(resp.Body)
+	translatedBody := &kiroTranslatedStreamBody{
+		PipeReader: pr, raw: resp.Body, activity: rawReadActivity, done: translatorDone, cancel: cancelTranslator,
+	}
 
 	go func() {
 		defer close(translatorDone)
 		defer cancelTranslator()
 		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(translatorCtx, rawReadActivity, pw, requestModel, inputTokens, requestCtx)
+		streamResult, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(translatorCtx, rawReadActivity, pw, requestModel, inputTokens, requestCtx)
+		translatedBody.setProviderTerminalObservation(streamResult != nil && streamResult.ProviderTerminalObserved)
 		if streamErr != nil {
 			drainCaptureResponseRemainderBounded(translatorCtx, resp.Body, captureOverflowDrainTimeout)
 		}
@@ -509,7 +538,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	return &http.Response{
 		StatusCode: resp.StatusCode,
 		Header:     wrappedHeaders,
-		Body:       &kiroTranslatedStreamBody{PipeReader: pr, raw: resp.Body, activity: rawReadActivity, done: translatorDone, cancel: cancelTranslator},
+		Body:       translatedBody,
 	}, inputTokens, nil
 }
 

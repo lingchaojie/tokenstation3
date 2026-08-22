@@ -508,6 +508,44 @@ func TestKiroRuntimeClientDisconnectCanceledProviderIsIncomplete(t *testing.T) {
 	require.False(t, result.CaptureResponseComplete)
 }
 
+func TestKiroRuntimeCleanEOFWithoutNativeTerminalIsCaptureIncomplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newKiroCacheTransactionAccount(615, "CLEANEOFNOTERMINAL")
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), "anthropic")
+	require.NoError(t, err)
+	parsed.Group = &Group{Platform: PlatformKiro}
+
+	var providerFrames bytes.Buffer
+	_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "clean eof without native terminal"},
+	}))
+	_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "usageEvent", map[string]any{
+		"usageEvent": map[string]any{"inputTokens": 3, "outputTokens": 4},
+	}))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(providerFrames.Bytes())),
+	}}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		rateLimitService:    &RateLimitService{},
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), "event: message_stop", "translated client protocol remains unchanged")
+	require.False(t, result.CaptureResponseComplete, "synthetic translated terminal must not prove native provider completion")
+}
+
 func TestKiroCacheDirectCommitsOnlyAfterUpstreamSuccess(t *testing.T) {
 	resetKiroCacheTracker()
 	account := newKiroCacheTransactionAccount(614, "DIRECT")
