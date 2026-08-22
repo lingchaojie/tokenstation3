@@ -19,19 +19,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type orderedOpenAIKeepaliveFailureWriter struct {
+type orderedOpenAIDeliveryFailureWriter struct {
 	gin.ResponseWriter
-	failureSignal chan struct{}
-	failOnce      sync.Once
+	failureSignal       chan struct{}
+	failSemantic        bool
+	mu                  sync.Mutex
+	failed              bool
+	postFailureAttempts int
+	postFailureBytes    int
 }
 
-func (w *orderedOpenAIKeepaliveFailureWriter) Write(p []byte) (int, error) {
+func (w *orderedOpenAIDeliveryFailureWriter) Write(p []byte) (int, error) {
 	payload := string(p)
-	if payload == ":\n\n" || strings.HasPrefix(payload, "event: ping\n") {
-		w.failOnce.Do(func() { close(w.failureSignal) })
-		return 0, errors.New("ordered downstream keepalive failure")
+	w.mu.Lock()
+	if w.failed {
+		w.postFailureAttempts++
+		w.postFailureBytes += len(p)
+		w.mu.Unlock()
+		return 0, errors.New("ordered downstream write after delivery failure")
 	}
+	shouldFail := payload == ":\n\n" || strings.HasPrefix(payload, "event: ping\n")
+	if w.failSemantic {
+		shouldFail = strings.Contains(payload, "visible before idle")
+	}
+	if shouldFail {
+		w.failed = true
+		close(w.failureSignal)
+		w.mu.Unlock()
+		return 0, errors.New("ordered downstream delivery failure")
+	}
+	w.mu.Unlock()
 	return w.ResponseWriter.Write(p)
+}
+
+func (w *orderedOpenAIDeliveryFailureWriter) postFailureWrites() (int, int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.postFailureAttempts, w.postFailureBytes
 }
 
 type orderedOpenAIProviderTail struct {
@@ -145,7 +169,7 @@ func (h *openAITypedCaptureTestHarness) requireNoExtraTerminal(t *testing.T) {
 	}
 }
 
-func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t *testing.T) {
+func TestOpenAIConvertedDeliveryFailureDefersTypedCaptureToLateProviderTruth(t *testing.T) {
 	tests := []struct {
 		name             string
 		path             string
@@ -153,6 +177,7 @@ func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t 
 		forward          func(*OpenAIGatewayService, context.Context, *gin.Context, *Account, []byte) (*OpenAIForwardResult, error)
 		lateProviderTail string
 		wantProviderErr  bool
+		failSemantic     bool
 	}{
 		{
 			name:        "chat_late_official_terminal_commits_disconnect",
@@ -164,6 +189,16 @@ func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t 
 			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
 		},
 		{
+			name:        "chat_semantic_failure_late_official_terminal_commits_disconnect",
+			path:        "/v1/chat/completions",
+			requestBody: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
+			failSemantic:     true,
+		},
+		{
 			name:        "messages_late_official_terminal_commits_disconnect",
 			path:        "/v1/messages",
 			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
@@ -171,6 +206,16 @@ func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t 
 				return svc.ForwardAsAnthropic(ctx, c, account, body, "", "gpt-5.4")
 			},
 			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name:        "messages_semantic_failure_late_official_terminal_commits_disconnect",
+			path:        "/v1/messages",
+			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsAnthropic(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
+			failSemantic:     true,
 		},
 		{
 			name:        "chat_late_provider_error_aborts_terminal_disabled",
@@ -183,6 +228,17 @@ func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t 
 			wantProviderErr:  true,
 		},
 		{
+			name:        "chat_semantic_failure_late_provider_error_aborts_terminal_disabled",
+			path:        "/v1/chat/completions",
+			requestBody: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"failed\",\"error\":{\"code\":\"upstream_error\",\"message\":\"late ordered provider failure\"}}}\n\n",
+			wantProviderErr:  true,
+			failSemantic:     true,
+		},
+		{
 			name:        "messages_late_provider_error_aborts_terminal_disabled",
 			path:        "/v1/messages",
 			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
@@ -191,6 +247,17 @@ func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t 
 			},
 			lateProviderTail: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"failed\",\"error\":{\"code\":\"upstream_error\",\"message\":\"late ordered provider failure\"}}}\n\n",
 			wantProviderErr:  true,
+		},
+		{
+			name:        "messages_semantic_failure_late_provider_error_aborts_terminal_disabled",
+			path:        "/v1/messages",
+			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsAnthropic(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"failed\",\"error\":{\"code\":\"upstream_error\",\"message\":\"late ordered provider failure\"}}}\n\n",
+			wantProviderErr:  true,
+			failSemantic:     true,
 		},
 	}
 
@@ -210,7 +277,10 @@ func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t 
 			c.Request.Header.Set("Content-Type", "application/json")
 			require.NoError(t, InstallCaptureRuntimePolicyForUnitTest(c, policy, 9, nil))
 			failureSignal := make(chan struct{})
-			c.Writer = &orderedOpenAIKeepaliveFailureWriter{ResponseWriter: c.Writer, failureSignal: failureSignal}
+			failureWriter := &orderedOpenAIDeliveryFailureWriter{
+				ResponseWriter: c.Writer, failureSignal: failureSignal, failSemantic: test.failSemantic,
+			}
+			c.Writer = failureWriter
 
 			providerPrefix := []byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ordered\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible before idle\"}\n\n")
 			providerTail := []byte(test.lateProviderTail)
@@ -239,6 +309,9 @@ func TestOpenAIConvertedKeepaliveFailureDefersTypedCaptureToLateProviderTruth(t 
 			require.Less(t, time.Since(started), 4*time.Second, "ordered drain must stay bounded")
 			require.NotNil(t, result)
 			require.True(t, result.ClientDisconnect)
+			postFailureAttempts, postFailureBytes := failureWriter.postFailureWrites()
+			require.Zero(t, postFailureAttempts, "no client write may be attempted after the first typed delivery failure")
+			require.Zero(t, postFailureBytes, "no client bytes may be attempted after the first typed delivery failure")
 			if test.wantProviderErr {
 				require.ErrorContains(t, err, "late ordered provider failure")
 				require.True(t, result.CaptureTerminalError, "late provider failure must outrank disconnect")

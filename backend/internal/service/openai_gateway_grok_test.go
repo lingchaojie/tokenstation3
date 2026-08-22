@@ -2461,6 +2461,7 @@ func TestForwardGrokResponsesNonStreamingUsesCacheIdentityAndCachedUsage(t *test
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.False(t, result.Stream)
+	require.True(t, result.CaptureResponseComplete, "successful Grok full-body read must prove completion")
 	require.Equal(t, "resp_grok_non_stream", result.ResponseID)
 	require.Equal(t, 7, result.Usage.InputTokens)
 	require.Equal(t, 2, result.Usage.OutputTokens)

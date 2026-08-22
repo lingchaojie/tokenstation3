@@ -381,6 +381,7 @@ func TestForwardAsRawChatCompletions_NonStreamingCapturesCacheWriteUsage(t *test
 			require.Equal(t, tt.wantOutput, result.Usage.OutputTokens)
 			require.Equal(t, tt.wantRead, result.Usage.CacheReadInputTokens)
 			require.Equal(t, tt.wantWrite, result.Usage.CacheCreationInputTokens)
+			require.True(t, result.CaptureResponseComplete, "successful full-body JSON read proves non-stream completion")
 		})
 	}
 }

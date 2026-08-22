@@ -259,6 +259,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		responseID = strings.TrimSpace(nonStreamResult.responseID)
 		imageCount = nonStreamResult.imageCount
 		imageOutputSizes = nonStreamResult.imageOutputSizes
+		captureResponseComplete = true
 	}
 
 	if usage == nil {

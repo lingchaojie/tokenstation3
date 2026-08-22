@@ -1146,7 +1146,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		if useUpstreamStream {
-			collected, usageObj, err := collectGeminiSSE(resp, true, s.cfg)
+			collected, usageObj, terminalObserved, err := collectGeminiSSE(resp, true, s.cfg)
 			if err != nil {
 				var failoverErr *UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -1164,13 +1164,14 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			if usageObj != nil && (usageObj.InputTokens > 0 || usageObj.OutputTokens > 0) {
 				usage = usageObj
 			}
+			captureResponseComplete = terminalObserved
 		} else {
 			usage, err = s.handleNonStreamingResponse(c, resp, originalModel)
 			if err != nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 			}
+			captureResponseComplete = true
 		}
-		captureResponseComplete = true
 	}
 
 	// 图片生成计费
@@ -1763,7 +1764,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		if useUpstreamStream {
-			collected, usageObj, err := collectGeminiSSE(resp, isOAuth, s.cfg)
+			collected, usageObj, terminalObserved, err := collectGeminiSSE(resp, isOAuth, s.cfg)
 			if err != nil {
 				var failoverErr *UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -1777,14 +1778,15 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			observeGeminiImageOutputs(c, b)
 			c.Data(http.StatusOK, "application/json", b)
 			usage = usageObj
+			captureResponseComplete = terminalObserved
 		} else {
 			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, action)
 			if err != nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 			}
 			usage = usageResp
+			captureResponseComplete = true
 		}
-		captureResponseComplete = true
 	}
 
 	if usage == nil {
@@ -2683,11 +2685,12 @@ func unwrapIfNeeded(isOAuth bool, raw []byte) []byte {
 	return inner
 }
 
-func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (map[string]any, *ClaudeUsage, error) {
+func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (map[string]any, *ClaudeUsage, bool, error) {
 	var last map[string]any
 	var lastWithParts map[string]any
 	var collectedTextParts []string // Collect all text parts for aggregation
 	usage := &ClaudeUsage{}
+	terminalObserved := false
 	lineReader := newProviderLineReader(resp, cfg, func(r io.Reader) *bufio.Scanner {
 		return newBufferedProviderSSEScanner(r, cfg)
 	})
@@ -2714,7 +2717,7 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 					if isOAuth {
 						innerBytes, err := unwrapGeminiResponse([]byte(payload))
 						if err != nil {
-							return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
+							return nil, nil, false, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
 						}
 						rawBytes = innerBytes
 					} else {
@@ -2722,9 +2725,12 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 					}
 					parsed, err := decodeGeminiCompatResponse(rawBytes)
 					if err != nil {
-						return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
+						return nil, nil, false, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
 					}
 					if parsed != nil {
+						if strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" {
+							terminalObserved = true
+						}
 						last = parsed
 						if u := extractGeminiUsage(rawBytes); u != nil {
 							usage = u
@@ -2746,12 +2752,12 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
-			return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream data interval timeout")
+			return nil, nil, false, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream data interval timeout")
 		}
-		return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed: "+sanitizeStreamError(scanErr))
+		return nil, nil, false, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed: "+sanitizeStreamError(scanErr))
 	}
 
-	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, nil
+	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, terminalObserved, nil
 }
 
 func pickGeminiCollectResult(last map[string]any, lastWithParts map[string]any) map[string]any {

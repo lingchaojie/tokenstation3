@@ -173,9 +173,43 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	require.Len(t, attempts, 1)
 	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
 	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
-	require.Empty(t, attempts[0].TerminalStates())
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
+	require.Len(t, attempts[0].Finals(), 1)
+	require.False(t, attempts[0].Finals()[0].ResponseComplete, "the public sink must preserve streaming clean-EOF incompleteness")
 	require.Contains(t, rec.Body.String(), `"text":"hello"`)
-	AbortCaptureAttempt(c)
+}
+
+func TestGatewayService_Forward_NonStreamingMissingUsageCommitsVerifiedFullBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	providerBody := []byte(`{"id":"msg_no_usage","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}`)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}}
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+
+	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "successful full-body read must survive missing-usage terminalization")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete, "the public sink must receive verified non-stream completion")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
 }
 
 func TestGatewayService_Forward_PreambleUsageOnlyMissingTerminalStillBills(t *testing.T) {
@@ -699,7 +733,8 @@ func TestGatewayForwardAsResponses_MissingUsageIsProviderFailure(t *testing.T) {
 		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"responses-no-usage"}},
 		Body:       io.NopCloser(strings.NewReader(providerBody)),
 	}}
-	svc, _ := newForwardPartialUsageCaptureServiceForTest(upstream)
+	enableCaptureForTest(t, c)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 	account := newAnthropicOAuthAccountForPartialUsageTest()
 	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "claude-3-5-sonnet-latest", Stream: false}
 
@@ -709,7 +744,60 @@ func TestGatewayForwardAsResponses_MissingUsageIsProviderFailure(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "native message_stop must prove the stream-to-buffer response complete")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete)
 	marked, ok := GetOpsStreamError(c)
 	require.True(t, ok)
 	require.Equal(t, "upstream_usage_missing", marked.Code)
+}
+
+func TestGatewayForwardAsChatCompletions_MissingUsageCommitsOfficialTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+	providerBody := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_no_usage","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-latest","stop_reason":null,"usage":{}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
+		"",
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"chat-no-usage"}},
+		Body:       io.NopCloser(strings.NewReader(providerBody)),
+	}}
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+	account := newAnthropicOAuthAccountForPartialUsageTest()
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "claude-3-5-sonnet-latest", Stream: false}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, parsed)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "native message_stop must prove the Chat stream-to-buffer response complete")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete)
 }

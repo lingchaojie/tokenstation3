@@ -54,13 +54,14 @@ func (s *GatewayService) handleResponsesCompactionResponse(
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
 	result := &ForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		UpstreamModel:   mappedModel,
-		ReasoningEffort: reasoningEffort,
-		Stream:          clientStream,
-		Duration:        time.Since(startTime),
+		RequestID:               requestID,
+		Usage:                   usage,
+		Model:                   originalModel,
+		UpstreamModel:           mappedModel,
+		ReasoningEffort:         reasoningEffort,
+		Stream:                  clientStream,
+		Duration:                time.Since(startTime),
+		CaptureResponseComplete: true,
 	}
 	if clientStream {
 		payload, ok := buildOpenAICompactSSEPayload(responseJSON)

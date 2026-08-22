@@ -435,13 +435,14 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	return &ForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		UpstreamModel:   mappedModel,
-		ReasoningEffort: reasoningEffort,
-		Stream:          false,
-		Duration:        time.Since(startTime),
+		RequestID:               requestID,
+		Usage:                   usage,
+		Model:                   originalModel,
+		UpstreamModel:           mappedModel,
+		ReasoningEffort:         reasoningEffort,
+		Stream:                  false,
+		Duration:                time.Since(startTime),
+		CaptureResponseComplete: true,
 	}, nil
 }
 

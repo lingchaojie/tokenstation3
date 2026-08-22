@@ -173,6 +173,7 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
+	require.True(t, result.CaptureResponseComplete, "successful full-body JSON read proves non-stream completion")
 	require.Nil(t, result.UpstreamRequest, "typed capture must not republish a legacy whole-body snapshot")
 	require.Nil(t, result.CaptureResponse, "typed capture must not republish a legacy whole-body snapshot")
 	capture.commit(t, c, result, upstream.lastBody, upstreamBody, false)

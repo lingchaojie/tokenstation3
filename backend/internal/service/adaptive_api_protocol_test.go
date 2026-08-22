@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
@@ -146,6 +148,29 @@ func TestAdaptiveProtocolRoutesMessagesToNativeAnthropic(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, "http://anthropic.example/v1/messages", upstream.lastReq.URL.String())
 	require.Equal(t, "glm-4.7", gjson.GetBytes(upstream.lastBody, "model").String())
+}
+
+func TestNativeAnthropicMessagesVerifiedFullBodyIsComplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"glm-4.7","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	providerBody := `{"id":"msg_complete","type":"message","role":"assistant","model":"glm-4.7","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2}}`
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}, "x-request-id": {"native-full-body"}},
+		Body:       io.NopCloser(strings.NewReader(providerBody)),
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+	account := adaptiveProtocolTestAccount(PlatformZhipu, nil)
+	account.Credentials["api_protocol"] = APIProtocolAnthropic
+	account.Credentials["base_url"] = "http://anthropic.example"
+	c := adaptiveProtocolTestContext("/v1/messages", body)
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.True(t, result.CaptureResponseComplete, "successful full-body JSON read proves non-stream completion")
 }
 
 func TestAdaptiveProtocolConvertsKimiResponsesToChatCompletions(t *testing.T) {

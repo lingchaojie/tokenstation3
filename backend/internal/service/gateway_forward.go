@@ -954,6 +954,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 		}
+		responseComplete = true
 	}
 
 	result = &ForwardResult{

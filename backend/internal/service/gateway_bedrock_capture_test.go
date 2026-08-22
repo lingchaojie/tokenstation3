@@ -73,6 +73,7 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 	result, err := svc.Forward(context.Background(), c, account, parsed)
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.CaptureResponseComplete, "successful Bedrock full-body read must prove completion")
 	require.NotEmpty(t, upstream.lastBody)
 	require.Nil(t, result.UpstreamRequest)
 	require.Nil(t, result.CaptureRequest)
@@ -95,8 +96,10 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 	require.NotContains(t, strings.ToLower(string(attempt.RequestHeaderBytes())), "x-amz-security-token")
 	require.Contains(t, string(attempt.ResponseHeaderBytes()), "X-Amzn-Requestid")
 	require.NotContains(t, string(attempt.ResponseHeaderBytes()), "X-Request-Id", "capture must not synthesize provider response headers")
-	require.Empty(t, attempt.TerminalStates(), "the handler-side usage sink owns commit")
-	AbortCaptureAttempt(c)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempt.Finals(), 1)
+	require.True(t, attempt.Finals()[0].ResponseComplete)
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 type bedrockCloseReleasedReader struct {

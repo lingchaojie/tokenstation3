@@ -64,6 +64,7 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.False(t, result.Stream)
+	require.True(t, result.CaptureResponseComplete, "successful full-body JSON read proves non-stream completion")
 }
 
 func TestForwardResponses_PassthroughFlagWithUnsupportedResponsesUsesAccountMapping(t *testing.T) {

@@ -321,6 +321,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			finishCapture()
 			return failedForwardResultForError(c, resp, input.OriginalModel, input.RequestModel, false, input.StartTime, err), err
 		}
+		responseComplete = true
 	}
 	if usage == nil {
 		usage = &ClaudeUsage{}

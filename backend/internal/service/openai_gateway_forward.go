@@ -1028,6 +1028,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			imageResults = nonStreamResult.imageResults
+			captureResponseComplete = true
 		}
 		if responseErr == nil {
 			s.bindHTTPResponseAccount(ctx, c, account, responseID)

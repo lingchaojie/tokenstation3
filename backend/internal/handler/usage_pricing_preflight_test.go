@@ -14,41 +14,65 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFinalizeGatewayUsagePricingValidationDoesNotInferProviderCompletion(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	result := &service.ForwardResult{Stream: false}
+func TestFinalizeGatewayUsagePricingValidationPreservesProviderCompletionProof(t *testing.T) {
+	tests := []struct {
+		name     string
+		stream   bool
+		complete bool
+	}{
+		{name: "verified nonstream", complete: true},
+		{name: "streaming clean EOF", stream: true, complete: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			result := &service.ForwardResult{Stream: tt.stream, CaptureResponseComplete: tt.complete}
 
-	require.False(t, finalizeGatewayUsagePricingValidation(c, result, errors.New("model price not found")))
-	require.True(t, result.CaptureTerminalError)
-	require.False(t, result.CaptureResponseComplete)
-	require.False(t, result.UpstreamFailed, "local pricing configuration must not penalize the upstream account")
+			require.False(t, finalizeGatewayUsagePricingValidation(c, result, errors.New("model price not found")))
+			require.True(t, result.CaptureTerminalError)
+			require.Equal(t, tt.complete, result.CaptureResponseComplete)
+			require.False(t, result.UpstreamFailed, "local pricing configuration must not penalize the upstream account")
 
-	marked, ok := service.GetOpsStreamError(c)
-	require.True(t, ok)
-	require.Equal(t, "api_error", marked.ErrType)
-	require.Equal(t, "usage_pricing_unavailable", marked.Code)
-	require.Equal(t, "Unable to price upstream usage", marked.Message)
-	require.Equal(t, http.StatusBadGateway, marked.IntendedStatus)
-	require.True(t, marked.CountTowardsSLA)
-	require.False(t, marked.Stream)
+			marked, ok := service.GetOpsStreamError(c)
+			require.True(t, ok)
+			require.Equal(t, "api_error", marked.ErrType)
+			require.Equal(t, "usage_pricing_unavailable", marked.Code)
+			require.Equal(t, "Unable to price upstream usage", marked.Message)
+			require.Equal(t, http.StatusBadGateway, marked.IntendedStatus)
+			require.True(t, marked.CountTowardsSLA)
+			require.Equal(t, tt.stream, marked.Stream)
+		})
+	}
 }
 
-func TestFinalizeOpenAIUsagePricingValidationPreservesStreamModeWithoutInferringCompletion(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	result := &service.OpenAIForwardResult{Stream: true}
+func TestFinalizeOpenAIUsagePricingValidationPreservesProviderCompletionProof(t *testing.T) {
+	tests := []struct {
+		name     string
+		stream   bool
+		complete bool
+	}{
+		{name: "verified nonstream", complete: true},
+		{name: "streaming clean EOF", stream: true, complete: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			result := &service.OpenAIForwardResult{Stream: tt.stream, CaptureResponseComplete: tt.complete}
 
-	require.False(t, finalizeOpenAIUsagePricingValidation(c, result, errors.New("model price not found")))
-	require.True(t, result.CaptureTerminalError)
-	require.False(t, result.CaptureResponseComplete)
-	require.False(t, result.UpstreamFailed)
+			require.False(t, finalizeOpenAIUsagePricingValidation(c, result, errors.New("model price not found")))
+			require.True(t, result.CaptureTerminalError)
+			require.Equal(t, tt.complete, result.CaptureResponseComplete)
+			require.False(t, result.UpstreamFailed)
 
-	marked, ok := service.GetOpsStreamError(c)
-	require.True(t, ok)
-	require.Equal(t, "api_error", marked.ErrType)
-	require.Equal(t, "usage_pricing_unavailable", marked.Code)
-	require.True(t, marked.Stream)
+			marked, ok := service.GetOpsStreamError(c)
+			require.True(t, ok)
+			require.Equal(t, "api_error", marked.ErrType)
+			require.Equal(t, "usage_pricing_unavailable", marked.Code)
+			require.Equal(t, tt.stream, marked.Stream)
+		})
+	}
 }
 
 func TestFinalizeUsagePricingValidationSuccessIsNoop(t *testing.T) {
@@ -84,11 +108,12 @@ func TestGatewayBufferedCaptureReevaluatesOutcomeAfterPricingFailure(t *testing.
 		name          string
 		success       bool
 		terminal      bool
+		complete      bool
 		initialPolicy *service.CaptureContentPolicy
 		wantCapture   bool
 	}{
 		{name: "success enabled terminal disabled", success: true, terminal: false, initialPolicy: &service.CaptureContentPolicy{RawRequest: true, RawResponse: true}, wantCapture: false},
-		{name: "success disabled terminal enabled", success: false, terminal: true, initialPolicy: nil, wantCapture: true},
+		{name: "terminal enabled verified nonstream", success: false, terminal: true, complete: true, initialPolicy: nil, wantCapture: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -106,13 +131,16 @@ func TestGatewayBufferedCaptureReevaluatesOutcomeAfterPricingFailure(t *testing.
 			result := &service.ForwardResult{
 				RequestID: "gateway-pricing-failure", Model: "claude-test", UpstreamModel: "claude-test",
 				UpstreamRequest: []byte(`{"model":"claude-test"}`), CaptureResponse: []byte(`{"type":"message"}`),
-				CaptureContentPolicy: tt.initialPolicy,
+				CaptureContentPolicy: tt.initialPolicy, CaptureResponseComplete: tt.complete,
 			}
 
 			require.False(t, finalizeGatewayUsagePricingValidation(c, result, errors.New("unpriced")))
 			h.submitGatewayResultCaptureForRequest(c, result, &service.Account{ID: 1, Platform: service.PlatformAnthropic}, nil, "/v1/messages")
 
 			require.Equal(t, tt.wantCapture, len(records) == 1)
+			if tt.wantCapture {
+				require.False(t, (<-records).Truncated, "verified non-stream pricing failure must remain a complete capture")
+			}
 		})
 	}
 }
@@ -122,11 +150,12 @@ func TestOpenAIBufferedCaptureReevaluatesOutcomeAfterPricingFailure(t *testing.T
 		name          string
 		success       bool
 		terminal      bool
+		complete      bool
 		initialPolicy *service.CaptureContentPolicy
 		wantCapture   bool
 	}{
 		{name: "success enabled terminal disabled", success: true, terminal: false, initialPolicy: &service.CaptureContentPolicy{RawRequest: true, RawResponse: true}, wantCapture: false},
-		{name: "success disabled terminal enabled", success: false, terminal: true, initialPolicy: nil, wantCapture: true},
+		{name: "terminal enabled verified nonstream", success: false, terminal: true, complete: true, initialPolicy: nil, wantCapture: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -143,13 +172,16 @@ func TestOpenAIBufferedCaptureReevaluatesOutcomeAfterPricingFailure(t *testing.T
 			result := &service.OpenAIForwardResult{
 				RequestID: "openai-pricing-failure", Model: "gpt-test", UpstreamModel: "gpt-test",
 				UpstreamRequest: []byte(`{"model":"gpt-test"}`), CaptureResponse: []byte(`{"id":"resp"}`),
-				CaptureContentPolicy: tt.initialPolicy,
+				CaptureContentPolicy: tt.initialPolicy, CaptureResponseComplete: tt.complete,
 			}
 
 			require.False(t, finalizeOpenAIUsagePricingValidation(c, result, errors.New("unpriced")))
 			h.submitCapture(c, result, &service.Account{ID: 1, Platform: service.PlatformOpenAI}, nil, "/v1/responses")
 
 			require.Equal(t, tt.wantCapture, len(records) == 1)
+			if tt.wantCapture {
+				require.False(t, (<-records).Truncated, "verified non-stream pricing failure must remain a complete capture")
+			}
 		})
 	}
 }

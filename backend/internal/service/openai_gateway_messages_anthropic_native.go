@@ -232,14 +232,15 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &OpenAIForwardResult{
-		RequestID:        resp.Header.Get("x-request-id"),
-		Usage:            claudeUsageToOpenAIUsage(usage),
-		Model:            originalModel,
-		BillingModel:     billingModel,
-		UpstreamModel:    upstreamModel,
-		UpstreamEndpoint: "/v1/messages",
-		Stream:           false,
-		Duration:         time.Since(startTime),
+		RequestID:               resp.Header.Get("x-request-id"),
+		Usage:                   claudeUsageToOpenAIUsage(usage),
+		Model:                   originalModel,
+		BillingModel:            billingModel,
+		UpstreamModel:           upstreamModel,
+		UpstreamEndpoint:        "/v1/messages",
+		Stream:                  false,
+		Duration:                time.Since(startTime),
+		CaptureResponseComplete: true,
 	}, nil
 }
 

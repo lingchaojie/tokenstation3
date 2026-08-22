@@ -370,6 +370,7 @@ func TestAntigravityGatewayService_ForwardGemini_PreservesServerSideToolInvocati
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "provider finishReason must prove the stream-to-buffer response complete")
 	require.Len(t, upstream.requestBodies, 1)
 
 	var wrapped map[string]any
@@ -1110,7 +1111,7 @@ func TestAntigravityGatewayService_Forward_MissingUsageIsProviderFailure(t *test
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}],"max_tokens":16,"stream":true}`)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}],"max_tokens":16,"stream":false}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{{
 		StatusCode: http.StatusOK,
@@ -1131,6 +1132,7 @@ func TestAntigravityGatewayService_Forward_MissingUsageIsProviderFailure(t *test
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "provider finishReason must prove the Claude stream-to-buffer response complete")
 	marked, ok := GetOpsStreamError(c)
 	require.True(t, ok)
 	require.Equal(t, "upstream_usage_missing", marked.Code)
@@ -1154,6 +1156,7 @@ func TestAntigravityForwardUpstream_MissingUsageIsProviderFailure(t *testing.T) 
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "successful full-body read must survive missing-usage terminalization")
 	marked, ok := GetOpsStreamError(c)
 	require.True(t, ok)
 	require.Equal(t, "upstream_usage_missing", marked.Code)

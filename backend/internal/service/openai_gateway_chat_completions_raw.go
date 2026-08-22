@@ -950,6 +950,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		ServiceTier:                   serviceTier,
 		Stream:                        false,
 		Duration:                      time.Since(startTime),
+		CaptureResponseComplete:       true,
 	}, nil
 }
 

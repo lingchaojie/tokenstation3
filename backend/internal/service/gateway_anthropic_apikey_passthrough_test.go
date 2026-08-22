@@ -1282,6 +1282,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuc
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 5, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+	require.True(t, result.CaptureResponseComplete)
 	require.Equal(t, upstreamJSON, rec.Body.String())
 }
 
@@ -1499,13 +1500,16 @@ func TestAnthropicAPIKeyPassthroughCapturePreservesRawStreamFraming(t *testing.T
 		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", true, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.CaptureResponseComplete, "successful passthrough full-body read must prove completion")
 	require.Nil(t, result.CaptureResponse)
 	attempts := transport.Attempts()
 	require.Len(t, attempts, 1)
 	require.Equal(t, body, attempts[0].RequestBytes())
 	require.Equal(t, raw, attempts[0].ResponseBytes())
-	require.Empty(t, attempts[0].TerminalStates())
-	AbortCaptureAttempt(c)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete)
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
 }
 
 func TestAnthropicAPIKeyPassthroughCapturePreservesRawNonStreamResponse(t *testing.T) {

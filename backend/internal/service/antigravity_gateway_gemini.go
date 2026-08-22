@@ -455,6 +455,7 @@ handleSuccess:
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		captureResponseComplete = streamRes.terminalObserved
 	}
 
 	if usage == nil {

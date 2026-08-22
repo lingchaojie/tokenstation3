@@ -173,6 +173,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		c.Header("Content-Type", resp.Header.Get("Content-Type"))
 		c.Status(http.StatusOK)
 		_, _ = c.Writer.Write(respBody)
+		captureResponseComplete = true
 	}
 
 	// 构建计费结果

@@ -460,6 +460,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		captureResponseComplete = streamRes.terminalObserved
 	}
 
 	finishCaptureResponse(resp)

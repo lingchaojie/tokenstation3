@@ -344,6 +344,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 		imageResults = result.imageResults
+		captureResponseComplete = true
 	}
 	if responseErr == nil {
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)

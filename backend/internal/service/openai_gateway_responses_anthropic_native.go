@@ -166,11 +166,13 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	terminalObserved := false
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
 			RequestID: requestID, Usage: claudeUsageToOpenAIUsage(&usage), Model: originalModel,
 			BillingModel: billingModel, UpstreamModel: upstreamModel, UpstreamEndpoint: "/v1/messages",
 			ReasoningEffort: reasoningEffort, Stream: false, Duration: time.Since(startTime),
+			CaptureResponseComplete: terminalObserved,
 		}
 	}
 
@@ -232,6 +234,9 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
+		}
+		if event.Type == "message_stop" {
+			terminalObserved = true
 		}
 
 		if event.Type == "message_start" && event.Message != nil {
@@ -298,15 +303,16 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 	}
 
 	return &OpenAIForwardResult{
-		RequestID:        requestID,
-		Usage:            claudeUsageToOpenAIUsage(&usage),
-		Model:            originalModel,
-		BillingModel:     billingModel,
-		UpstreamModel:    upstreamModel,
-		UpstreamEndpoint: "/v1/messages",
-		ReasoningEffort:  reasoningEffort,
-		Stream:           false,
-		Duration:         time.Since(startTime),
+		RequestID:               requestID,
+		Usage:                   claudeUsageToOpenAIUsage(&usage),
+		Model:                   originalModel,
+		BillingModel:            billingModel,
+		UpstreamModel:           upstreamModel,
+		UpstreamEndpoint:        "/v1/messages",
+		ReasoningEffort:         reasoningEffort,
+		Stream:                  false,
+		Duration:                time.Since(startTime),
+		CaptureResponseComplete: terminalObserved,
 	}, nil
 }
 

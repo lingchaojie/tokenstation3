@@ -155,6 +155,7 @@ func (s *GatewayService) forwardBedrock(
 		if err != nil {
 			return failedForwardResultForError(c, resp, reqModel, mappedModel, false, startTime, err), err
 		}
+		responseComplete = true
 	}
 	if usage == nil {
 		usage = &ClaudeUsage{}

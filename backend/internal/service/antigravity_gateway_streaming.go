@@ -413,6 +413,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	var lastWithParts map[string]any
 	var collectedImageParts []map[string]any // 收集所有包含图片的 parts
 	var collectedTextParts []string          // 收集所有文本片段
+	var terminalObserved bool
 
 	for {
 		line, ok, err := lineReader.Next()
@@ -457,6 +458,9 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 		}
 
 		last = parsed
+		if strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" {
+			terminalObserved = true
+		}
 		// 提取 usage
 		if u := extractGeminiUsage(inner); u != nil {
 			usage = u
@@ -512,7 +516,7 @@ returnResponse:
 	}
 	c.Data(http.StatusOK, "application/json", respBody)
 
-	return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+	return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, terminalObserved: terminalObserved}, nil
 }
 
 // getOrCreateGeminiParts 获取 Gemini 响应的 parts 结构，返回深拷贝和更新回调
@@ -810,6 +814,7 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 	var lastWithParts map[string]any
 	var collectedParts []map[string]any // 收集所有 parts（包括 text、thinking、functionCall、inlineData 等）
 	var meaningfulResponse bool
+	var terminalObserved bool
 
 	for {
 		line, ok, err := lineReader.Next()
@@ -831,6 +836,7 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 
 		payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 		if payload == "[DONE]" {
+			terminalObserved = true
 			continue
 		}
 		if payload == "" {
@@ -858,7 +864,11 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 			// 收集所有 parts（text、thinking、functionCall、inlineData 等）
 			collectedParts = append(collectedParts, parts...)
 		}
-		if len(parts) > 0 || strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" ||
+		finishReason := strings.TrimSpace(extractGeminiFinishReason(parsed))
+		if finishReason != "" {
+			terminalObserved = true
+		}
+		if len(parts) > 0 || finishReason != "" ||
 			strings.TrimSpace(gjson.GetBytes(inner, "promptFeedback.blockReason").String()) != "" {
 			meaningfulResponse = true
 			if firstTokenMs == nil {
@@ -906,7 +916,7 @@ returnResponse:
 		ImageOutputTokens:        agUsage.ImageOutputTokens,
 	}
 
-	return claudeResp, &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+	return claudeResp, &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, terminalObserved: terminalObserved}, nil
 }
 
 // handleClaudeStreamToNonStreaming 收集上游流式响应，转换为 Claude 非流式格式返回

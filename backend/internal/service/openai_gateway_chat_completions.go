@@ -614,6 +614,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
 		Stream:                        false,
 		Duration:                      time.Since(startTime),
+		CaptureResponseComplete:       true,
 		ImageCount:                    len(imageResults),
 		ImageOutputSizes:              openAIResponsesImageResultSizes(imageResults),
 		imageResults:                  imageResults,

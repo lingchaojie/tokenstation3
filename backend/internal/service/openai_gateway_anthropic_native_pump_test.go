@@ -332,4 +332,60 @@ func TestCCBufferedFromNativeAnthropic_HappyPathStillConverts(t *testing.T) {
 	if res.Usage.InputTokens != 10 || res.Usage.OutputTokens != 5 {
 		t.Fatalf("expected usage 10/5, got %+v", res.Usage)
 	}
+	if !res.CaptureResponseComplete {
+		t.Fatalf("official message_stop must prove buffered provider completion")
+	}
+}
+
+func TestNativeAnthropicBufferedCompletionRequiresMessageStop(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*OpenAIGatewayService, *http.Response, *gin.Context) (*OpenAIForwardResult, error)
+	}{
+		{
+			name: "chat completions",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleCCBufferedFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now())
+			},
+		},
+		{
+			name: "responses",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleResponsesBufferedFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, terminal := range []bool{false, true} {
+				name := "clean EOF"
+				if terminal {
+					name = "official message_stop"
+				}
+				t.Run(name, func(t *testing.T) {
+					gin.SetMode(gin.TestMode)
+					svc := newNativeAnthropicHangTestService(5)
+					rec := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(rec)
+					c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+					providerBody := miniAnthropicSSEStream()
+					if !terminal {
+						providerBody = strings.Replace(providerBody, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "", 1)
+					}
+					resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(providerBody))}
+
+					result, err := tc.run(svc, resp, c)
+
+					if err != nil {
+						t.Fatalf("unexpected error: %v", err)
+					}
+					if result == nil {
+						t.Fatal("expected result")
+					}
+					if result.CaptureResponseComplete != terminal {
+						t.Fatalf("CaptureResponseComplete = %v, want %v", result.CaptureResponseComplete, terminal)
+					}
+				})
+			}
+		})
+	}
 }

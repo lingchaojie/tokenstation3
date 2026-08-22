@@ -309,7 +309,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		clientDisconnect = streamRes.clientDisconnect
 		captureResponseComplete = streamRes.terminalObserved
 	} else if useUpstreamStream {
-		collected, usageObj, err := collectGeminiSSE(resp, account.Type == AccountTypeOAuth, s.cfg)
+		collected, usageObj, terminalObserved, err := collectGeminiSSE(resp, account.Type == AccountTypeOAuth, s.cfg)
 		if err != nil {
 			finishCapture()
 			var failoverErr *UpstreamFailoverError
@@ -328,6 +328,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		}
 		c.JSON(http.StatusOK, chatResp)
 		usage = usageObj2
+		captureResponseComplete = terminalObserved
 	} else {
 		usageResp, err := s.handleChatCompletionsNonStreamingResponseFromGemini(c, resp, originalModel, account.Type == AccountTypeOAuth)
 		if err != nil {
@@ -335,8 +336,6 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 			return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 		}
 		usage = usageResp
-	}
-	if !clientStream {
 		captureResponseComplete = true
 	}
 
