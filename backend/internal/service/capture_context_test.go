@@ -83,6 +83,20 @@ func TestCaptureDecisionRequiresBothRequestScopeFilters(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestCaptureMayApplyForClientDisconnectWhenOrdinaryOutcomesAreOff(t *testing.T) {
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Outcomes.Success = false
+	policy.Outcomes.TerminalError = false
+	c, _, _, _ := newFinalAttemptFixture(t, policy)
+	SetCaptureRequestedModel(c, "claude-opus-5")
+
+	require.True(t, CaptureMayApplyFor(c, PlatformAnthropic))
+	content, ok := captureContentPolicyForAttempt(c, PlatformAnthropic)
+	require.True(t, ok)
+	require.Equal(t, policy.Content, content)
+}
+
 func TestTypedWireCaptureDeclaresProviderRawPayloadFormat(t *testing.T) {
 	tests := []struct {
 		name     string

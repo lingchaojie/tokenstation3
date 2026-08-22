@@ -195,8 +195,12 @@ func CaptureDecisionFor(c *gin.Context, platform string, outcome CaptureOutcome)
 }
 
 // CaptureMayApplyFor is the allocation guard used before an upstream result is
-// known. It is true only when at least one configured terminal outcome matches.
+// known. It is true when a configured terminal outcome or possible client
+// disconnect matches.
 func CaptureMayApplyFor(c *gin.Context, platform string) bool {
+	if _, ok := CaptureDecisionFor(c, platform, captureOutcomeClientDisconnect); ok {
+		return true
+	}
 	if _, ok := CaptureDecisionFor(c, platform, CaptureOutcomeSuccess); ok {
 		return true
 	}
@@ -205,6 +209,9 @@ func CaptureMayApplyFor(c *gin.Context, platform string) bool {
 }
 
 func captureContentPolicyForAttempt(c *gin.Context, platform string) (CaptureContentPolicy, bool) {
+	if content, ok := CaptureDecisionFor(c, platform, captureOutcomeClientDisconnect); ok {
+		return content, true
+	}
 	if content, ok := CaptureDecisionFor(c, platform, CaptureOutcomeSuccess); ok {
 		return content, true
 	}
