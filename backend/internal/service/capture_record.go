@@ -2516,7 +2516,6 @@ func ExtractCaptureMetadataForCompatibility(record *CaptureRecord) (model.Extrac
 			OutputTokens:        captureUInt32(record.OutputTokens),
 			CacheReadTokens:     captureUInt32(record.CacheReadTokens),
 			CacheCreationTokens: captureUInt32(record.CacheCreationTokens),
-			StopReason:          record.StopReason,
 		},
 	})
 }

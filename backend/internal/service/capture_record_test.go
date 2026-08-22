@@ -1658,7 +1658,7 @@ func TestCompatibilityExtractionMatchesExistingFixtures(t *testing.T) {
 			want: model.Extracted{ThinkingType: "enabled", StopReason: "end_turn", InputTokens: 71, OutputTokens: 13, CacheReadTokens: 8, CacheCreationTokens: 4},
 		},
 		{
-			name: "trusted prefill survives omitted payload fields",
+			name: "trusted usage prefill survives while stop reason requires response bytes",
 			record: &CaptureRecord{
 				RawResponse:         []byte(`{"provider":"opaque"}`),
 				StopReason:          "prefilled",
@@ -1668,7 +1668,7 @@ func TestCompatibilityExtractionMatchesExistingFixtures(t *testing.T) {
 				CacheCreationTokens: 2,
 				SignaturePresent:    true,
 			},
-			want: model.Extracted{StopReason: "prefilled", InputTokens: 61, OutputTokens: 12, CacheReadTokens: 3, CacheCreationTokens: 2, SignaturePresent: true},
+			want: model.Extracted{InputTokens: 61, OutputTokens: 12, CacheReadTokens: 3, CacheCreationTokens: 2, SignaturePresent: true},
 		},
 		{
 			name: "nested content fields do not override metadata",

@@ -291,7 +291,6 @@ func (p *ConversationCapturePool) Submit(record *CaptureRecord) {
 		OutputTokens:        boundedCaptureUint32(record.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(record.CacheReadTokens),
 		CacheCreationTokens: boundedCaptureUint32(record.CacheCreationTokens),
-		StopReason:          record.StopReason,
 		ResponseComplete:    !record.Truncated,
 	}) {
 		attempt.Abort()

@@ -391,6 +391,19 @@ func TestConversationCapturePoolSubmitPreservesSessionID(t *testing.T) {
 	require.Equal(t, "capture-session", transport.Attempts()[0].begin.SessionID)
 }
 
+func TestConversationCapturePoolSubmitDoesNotForwardRecordStopReason(t *testing.T) {
+	transport := &recordingCaptureTransport{}
+	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+
+	pool.Submit(&CaptureRecord{
+		CapturedAt: time.Now().UTC(),
+		StopReason: "gateway_custom_value",
+	})
+
+	require.Len(t, transport.Attempts(), 1)
+	require.Equal(t, []model.Final{{ResponseComplete: true}}, transport.Attempts()[0].Finals())
+}
+
 func TestRecordSinkCompatibilityPreservesSessionID(t *testing.T) {
 	records := make(chan *CaptureRecord, 1)
 	pool := newConversationCapturePoolForRecords(records)

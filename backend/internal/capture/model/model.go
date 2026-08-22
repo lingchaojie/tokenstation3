@@ -52,8 +52,10 @@ type Final struct {
 	OutputTokens        uint32 `json:"output_tokens"`
 	CacheReadTokens     uint32 `json:"cache_read_tokens"`
 	CacheCreationTokens uint32 `json:"cache_creation_tokens"`
-	StopReason          string `json:"stop_reason"`
-	ResponseComplete    bool   `json:"response_complete"`
+	// StopReason is retained for wire compatibility. Extraction intentionally
+	// ignores it; new producers must not set it.
+	StopReason       string `json:"stop_reason"`
+	ResponseComplete bool   `json:"response_complete"`
 }
 
 type Extracted struct {
