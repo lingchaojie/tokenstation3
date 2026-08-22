@@ -48,8 +48,9 @@ type Stream interface {
 }
 
 // Input is the reader-based fixture and compatibility surface. Initial seeds
-// trusted legacy columns: payload fields overwrite a seed only when they are
-// actually observed, including when the observed value is zero.
+// trusted legacy columns except StopReason, which is always cleared and must
+// come from an observed response payload. Other payload fields overwrite a seed
+// only when they are actually observed, including when the observed value is zero.
 type Input struct {
 	Format   model.PayloadFormat
 	Request  io.Reader
