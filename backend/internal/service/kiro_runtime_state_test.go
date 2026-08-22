@@ -546,6 +546,59 @@ func TestKiroRuntimeCleanEOFWithoutNativeTerminalIsCaptureIncomplete(t *testing.
 	require.False(t, result.CaptureResponseComplete, "synthetic translated terminal must not prove native provider completion")
 }
 
+func TestKiroRuntimeNonStreamingCompletenessRequiresNativeTerminal(t *testing.T) {
+	tests := []struct {
+		name         string
+		withTerminal bool
+	}{
+		{name: "official_message_stop", withTerminal: true},
+		{name: "clean_eof_without_message_stop"},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			account := newKiroCacheTransactionAccount(int64(620+index), "NONSTREAMTERMINAL")
+			requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), "anthropic")
+			require.NoError(t, err)
+			parsed.Group = &Group{Platform: PlatformKiro}
+
+			var providerFrames bytes.Buffer
+			_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"assistantResponseEvent": map[string]any{"content": "non-stream answer"},
+			}))
+			_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+				"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 3, "outputTokens": 4}},
+			}))
+			if test.withTerminal {
+				_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+					"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+				}))
+			}
+			svc := &GatewayService{
+				httpUpstream: &queuedHTTPUpstream{responses: []*http.Response{{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+					Body:       io.NopCloser(bytes.NewReader(providerFrames.Bytes())),
+				}}},
+				kiroCooldownStore:   &stubKiroCooldownStore{},
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+				rateLimitService:    &RateLimitService{},
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+			result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, test.withTerminal, result.CaptureResponseComplete)
+			require.NotContains(t, recorder.Body.String(), "message_stop", "non-streaming client JSON must not invent streaming evidence")
+		})
+	}
+}
+
 func TestKiroCacheDirectCommitsOnlyAfterUpstreamSuccess(t *testing.T) {
 	resetKiroCacheTracker()
 	account := newKiroCacheTransactionAccount(614, "DIRECT")

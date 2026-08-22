@@ -378,9 +378,6 @@ func (s *WebChatService) dispatchChatCompletions(c *gin.Context, input webChatDi
 
 func markWebChatGatewayUsagePricingFailure(c *gin.Context, result *ForwardResult, err error) {
 	if result != nil {
-		if !result.CaptureTerminalError && !result.UpstreamFailed {
-			result.CaptureResponseComplete = true
-		}
 		result.CaptureTerminalError = true
 	}
 	MarkOpsPostResponseFailure(c, "api_error", "usage_pricing_unavailable", "Unable to price upstream usage", http.StatusBadGateway, result != nil && result.Stream)
@@ -389,9 +386,6 @@ func markWebChatGatewayUsagePricingFailure(c *gin.Context, result *ForwardResult
 
 func markWebChatOpenAIUsagePricingFailure(c *gin.Context, result *OpenAIForwardResult, err error) {
 	if result != nil {
-		if !result.CaptureTerminalError && !result.UpstreamFailed {
-			result.CaptureResponseComplete = true
-		}
 		result.CaptureTerminalError = true
 	}
 	MarkOpsPostResponseFailure(c, "api_error", "usage_pricing_unavailable", "Unable to price upstream usage", http.StatusBadGateway, result != nil && result.Stream)

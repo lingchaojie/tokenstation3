@@ -165,6 +165,7 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	require.ErrorContains(t, err, "upstream response missing billable usage")
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
+	require.False(t, result.CaptureResponseComplete, "clean EOF and missing usage must not synthesize provider completion")
 	require.Zero(t, result.Usage.InputTokens)
 	require.Zero(t, result.Usage.OutputTokens)
 	require.Nil(t, result.CaptureResponse)

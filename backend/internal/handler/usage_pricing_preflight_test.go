@@ -14,14 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFinalizeGatewayUsagePricingValidationMarksDurableBillingFailure(t *testing.T) {
+func TestFinalizeGatewayUsagePricingValidationDoesNotInferProviderCompletion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	result := &service.ForwardResult{Stream: false}
 
 	require.False(t, finalizeGatewayUsagePricingValidation(c, result, errors.New("model price not found")))
 	require.True(t, result.CaptureTerminalError)
-	require.True(t, result.CaptureResponseComplete)
+	require.False(t, result.CaptureResponseComplete)
 	require.False(t, result.UpstreamFailed, "local pricing configuration must not penalize the upstream account")
 
 	marked, ok := service.GetOpsStreamError(c)
@@ -34,14 +34,14 @@ func TestFinalizeGatewayUsagePricingValidationMarksDurableBillingFailure(t *test
 	require.False(t, marked.Stream)
 }
 
-func TestFinalizeOpenAIUsagePricingValidationPreservesStreamMode(t *testing.T) {
+func TestFinalizeOpenAIUsagePricingValidationPreservesStreamModeWithoutInferringCompletion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	result := &service.OpenAIForwardResult{Stream: true}
 
 	require.False(t, finalizeOpenAIUsagePricingValidation(c, result, errors.New("model price not found")))
 	require.True(t, result.CaptureTerminalError)
-	require.True(t, result.CaptureResponseComplete)
+	require.False(t, result.CaptureResponseComplete)
 	require.False(t, result.UpstreamFailed)
 
 	marked, ok := service.GetOpsStreamError(c)

@@ -1170,6 +1170,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 			}
 		}
+		captureResponseComplete = true
 	}
 
 	// 图片生成计费
@@ -1783,6 +1784,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			}
 			usage = usageResp
 		}
+		captureResponseComplete = true
 	}
 
 	if usage == nil {

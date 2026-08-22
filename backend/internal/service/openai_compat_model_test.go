@@ -2055,6 +2055,7 @@ func TestForwardAsAnthropic_MissingUsageAfterOutputReturnsBillingErrorWithoutFai
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.False(t, result.ClientDisconnect)
+	require.False(t, result.CaptureResponseComplete, "clean EOF and missing usage must not synthesize provider completion")
 	require.True(t, c.Writer.Written())
 	require.Contains(t, rec.Body.String(), "event: message_start")
 	require.Contains(t, rec.Body.String(), "partial")

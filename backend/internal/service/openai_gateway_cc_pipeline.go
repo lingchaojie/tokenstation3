@@ -296,6 +296,11 @@ type stagedConvertedClientWriteError struct{ err error }
 func (e *stagedConvertedClientWriteError) Error() string { return e.err.Error() }
 func (e *stagedConvertedClientWriteError) Unwrap() error { return e.err }
 
+func isStagedConvertedClientWriteError(err error) bool {
+	var deliveryErr *stagedConvertedClientWriteError
+	return errors.As(err, &deliveryErr)
+}
+
 type stagedConvertedTrackingWriter struct {
 	w       io.Writer
 	err     error

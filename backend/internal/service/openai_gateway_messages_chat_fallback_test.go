@@ -461,22 +461,27 @@ func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *
 
 func TestForwardMessagesRawCCSkipsMalformedChunksAndRequiresUsage(t *testing.T) {
 	for _, tt := range []struct {
-		name     string
-		sse      string
-		wantText string
+		name          string
+		sse           string
+		wantText      string
+		wantComplete  bool
+		wantTruncated bool
 	}{
 		{
-			name: "empty converted delta remains retryable",
-			sse:  "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"\",\"arguments\":\"\"}}]}}]}\n\n",
+			name:          "empty converted delta remains retryable",
+			sse:           "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"\",\"arguments\":\"\"}}]}}]}\n\n",
+			wantTruncated: true,
 		},
 		{
-			name: "malformed before output is terminal and retryable",
-			sse:  "data: {not-json}\n\ndata: [DONE]\n\n",
+			name:         "malformed before output is terminal and retryable",
+			sse:          "data: {not-json}\n\ndata: [DONE]\n\n",
+			wantComplete: true,
 		},
 		{
-			name:     "malformed after converted text does not disconnect",
-			sse:      "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
-			wantText: `"text":"hello"`,
+			name:         "malformed after converted text does not disconnect",
+			sse:          "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
+			wantText:     `"text":"hello"`,
+			wantComplete: true,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -498,12 +503,12 @@ func TestForwardMessagesRawCCSkipsMalformedChunksAndRequiresUsage(t *testing.T) 
 			require.NotNil(t, result)
 			require.True(t, result.UpstreamFailed)
 			require.True(t, result.CaptureTerminalError)
-			require.True(t, result.CaptureResponseComplete)
+			require.Equal(t, tt.wantComplete, result.CaptureResponseComplete)
 			if tt.wantText != "" {
 				require.Contains(t, recorder.Body.String(), tt.wantText)
 			}
 			require.Nil(t, result.CaptureResponse)
-			capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
+			capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), tt.wantTruncated)
 		})
 	}
 }

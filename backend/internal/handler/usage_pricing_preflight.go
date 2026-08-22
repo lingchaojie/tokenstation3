@@ -20,9 +20,6 @@ func finalizeGatewayUsagePricingValidation(c *gin.Context, result *service.Forwa
 		return true
 	}
 	if result != nil {
-		if !result.CaptureTerminalError && !result.UpstreamFailed {
-			result.CaptureResponseComplete = true
-		}
 		result.CaptureTerminalError = true
 	}
 	stream := result != nil && result.Stream
@@ -42,9 +39,6 @@ func finalizeOpenAIUsagePricingValidation(c *gin.Context, result *service.OpenAI
 		return true
 	}
 	if result != nil {
-		if !result.CaptureTerminalError && !result.UpstreamFailed {
-			result.CaptureResponseComplete = true
-		}
 		result.CaptureTerminalError = true
 	}
 	stream := result != nil && result.Stream

@@ -318,12 +318,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			c.Header("request-id", claudeReqID)
 			c.Data(http.StatusOK, "application/json", webSearchResult.ResponseBody)
 			result := &ForwardResult{
-				RequestID:     webSearchResult.RequestID,
-				Usage:         webSearchResult.Usage,
-				Model:         originalModel,
-				UpstreamModel: upstreamModel,
-				Stream:        false,
-				Duration:      time.Since(startTime),
+				RequestID:               webSearchResult.RequestID,
+				Usage:                   webSearchResult.Usage,
+				Model:                   originalModel,
+				UpstreamModel:           upstreamModel,
+				Stream:                  false,
+				Duration:                time.Since(startTime),
+				CaptureResponseComplete: webSearchResult.ProviderTerminalObserved,
 			}
 			finalizeKiroCapture(c, result)
 			return result, nil
@@ -419,12 +420,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	upstreamModel := resolveKiroUpstreamModel(mappedModel)
 
 	result := &ForwardResult{
-		RequestID:     requestID,
-		Usage:         kiroUsageToClaude(parseResult.Usage, inputTokens),
-		Model:         originalModel,
-		UpstreamModel: upstreamModel,
-		Stream:        false,
-		Duration:      time.Since(startTime),
+		RequestID:               requestID,
+		Usage:                   kiroUsageToClaude(parseResult.Usage, inputTokens),
+		Model:                   originalModel,
+		UpstreamModel:           upstreamModel,
+		Stream:                  false,
+		Duration:                time.Since(startTime),
+		CaptureResponseComplete: parseResult.ProviderTerminalObserved,
 	}
 	finalizeKiroCapture(c, result)
 	return result, nil
@@ -449,10 +451,15 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		translatorDone := make(chan struct{})
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
+		translatedBody := &kiroTranslatedStreamBody{
+			PipeReader: pr, done: translatorDone, cancel: cancelTranslator,
+			stageSyntheticWebSearchEvents: true,
+		}
 		go func() {
 			defer close(translatorDone)
 			defer cancelTranslator()
-			streamErr := s.streamKiroWebSearchAsAnthropic(translatorCtx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cachePlan)
+			streamResult, streamErr := s.streamKiroWebSearchAsAnthropic(translatorCtx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cachePlan)
+			translatedBody.setProviderTerminalObservation(streamResult != nil && streamResult.ProviderTerminalObserved)
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
 				return
@@ -465,10 +472,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 			// The inner WebSearch loop owns and publishes the provider-native
 			// AWS response. Use the same marker as the normal KIRO translator so
 			// the outer Anthropic stream reader cannot overwrite it with SSE.
-			Body: &kiroTranslatedStreamBody{
-				PipeReader: pr, done: translatorDone, cancel: cancelTranslator,
-				stageSyntheticWebSearchEvents: true,
-			},
+			Body: translatedBody,
 		}, inputTokens, nil
 	}
 

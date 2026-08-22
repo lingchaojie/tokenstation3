@@ -497,7 +497,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 		}
 		result.UpstreamFailed = captureOnlyFailure
-		result.CaptureTerminalError = true
+		if !isStagedConvertedClientWriteError(handleErr) {
+			result.CaptureTerminalError = true
+		}
 		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 	}
 
@@ -946,15 +948,16 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			return
 		}
 		stagedWriteErr = err
-		var deliveryErr *stagedConvertedClientWriteError
-		if !errors.As(err, &deliveryErr) && !staged.committed {
+		if isStagedConvertedClientWriteError(err) {
+			clientDisconnected = true
+			return
+		}
+		if !staged.committed {
 			streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "OpenAI messages first-output staging failed: "+sanitizeStreamError(err), resp)
 			return
 		}
 		clientDisconnected = true
-		if staged.committed {
-			streamNonFailoverErr = fmt.Errorf("OpenAI messages downstream delivery failed: %w", err)
-		}
+		streamNonFailoverErr = fmt.Errorf("OpenAI messages downstream staging failed: %w", err)
 	}
 
 	// processDataLine handles a single "data: ..." SSE line from upstream.
@@ -1452,6 +1455,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				logger.L().Info("openai messages stream: keepalive delivery or staging failed",
 					zap.String("request_id", requestID),
 				)
+				if isStagedConvertedClientWriteError(err) {
+					continue
+				}
 				return finalizeStream()
 			}
 			clientOutputStarted = staged.committed

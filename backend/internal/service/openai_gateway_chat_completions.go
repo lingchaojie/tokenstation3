@@ -384,7 +384,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			}
 		}
 		result.UpstreamFailed = captureOnlyFailure
-		result.CaptureTerminalError = true
+		if !isStagedConvertedClientWriteError(handleErr) {
+			result.CaptureTerminalError = true
+		}
 		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 	}
 
@@ -1269,11 +1271,13 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			// Keep pre-semantic comments inside the attempt stage.
 			if err := staged.write(c, writeStreamHeaders, ":\n\n", staged.committed); err != nil {
 				stagedWriteErr = err
-				var deliveryErr *stagedConvertedClientWriteError
-				clientDisconnected = errors.As(err, &deliveryErr) || staged.committed
+				clientDisconnected = isStagedConvertedClientWriteError(err) || staged.committed
 				logger.L().Info("openai chat_completions stream: keepalive delivery or staging failed",
 					zap.String("request_id", requestID),
 				)
+				if isStagedConvertedClientWriteError(err) {
+					continue
+				}
 				return finalizeStream()
 			}
 			c.Writer.Flush()

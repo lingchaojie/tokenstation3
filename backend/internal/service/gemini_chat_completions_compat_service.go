@@ -336,6 +336,9 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		}
 		usage = usageResp
 	}
+	if !clientStream {
+		captureResponseComplete = true
+	}
 
 	if usage == nil {
 		usage = &ClaudeUsage{}

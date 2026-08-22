@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFinalizeGeminiForwardResultMissingUsageMarksDurableFailure(t *testing.T) {
+func TestFinalizeGeminiForwardResultMissingUsageMarksDurableFailureWithoutInferringCompletion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	result := &ForwardResult{Model: "gemini-test", Stream: false}
@@ -21,7 +21,7 @@ func TestFinalizeGeminiForwardResultMissingUsageMarksDurableFailure(t *testing.T
 	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
 	require.True(t, result.UpstreamFailed)
 	require.True(t, result.CaptureTerminalError)
-	require.True(t, result.CaptureResponseComplete)
+	require.False(t, result.CaptureResponseComplete)
 	marked, ok := GetOpsStreamError(c)
 	require.True(t, ok)
 	require.Equal(t, "upstream_error", marked.ErrType)

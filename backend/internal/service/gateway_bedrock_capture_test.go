@@ -256,7 +256,7 @@ func TestGatewayService_BedrockClientDisconnectDoesNotHideProviderReadError(t *t
 	result, err := svc.Forward(context.Background(), c, account, parsed)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	require.NotNil(t, result)
-	require.True(t, result.UpstreamFailed)
+	require.False(t, result.UpstreamFailed, "billable partial usage remains eligible for accounting")
 	require.True(t, result.CaptureTerminalError)
 	require.False(t, result.CaptureResponseComplete)
 }

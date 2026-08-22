@@ -202,19 +202,20 @@ func TestForwardResponsesRawCCDoesNotRequireDoneButRequiresUsage(t *testing.T) {
 			if tt.committed {
 				require.NoError(t, err)
 				require.NotNil(t, result)
+				require.False(t, result.CaptureResponseComplete, "usage without an official terminal must remain incomplete")
 				require.Nil(t, result.UpstreamRequest)
 				require.Nil(t, result.CaptureResponse)
-				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
 				require.Contains(t, recorder.Body.String(), `"delta":"hi"`)
 			} else {
 				require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
 				require.NotNil(t, result)
 				require.True(t, result.UpstreamFailed)
 				require.True(t, result.CaptureTerminalError)
-				require.True(t, result.CaptureResponseComplete)
+				require.False(t, result.CaptureResponseComplete)
 				var fo *UpstreamFailoverError
 				require.False(t, errors.As(err, &fo))
-				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
+				capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), true)
 			}
 		})
 	}
@@ -222,22 +223,27 @@ func TestForwardResponsesRawCCDoesNotRequireDoneButRequiresUsage(t *testing.T) {
 
 func TestForwardResponsesRawCCSkipsMalformedChunksAndRequiresUsage(t *testing.T) {
 	for _, tt := range []struct {
-		name     string
-		sse      string
-		wantText string
+		name          string
+		sse           string
+		wantText      string
+		wantComplete  bool
+		wantTruncated bool
 	}{
 		{
-			name: "empty converted delta remains retryable",
-			sse:  "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"\",\"arguments\":\"\"}}]}}]}\n\n",
+			name:          "empty converted delta remains retryable",
+			sse:           "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"\",\"arguments\":\"\"}}]}}]}\n\n",
+			wantTruncated: true,
 		},
 		{
-			name: "malformed before output is terminal and retryable",
-			sse:  "data: {not-json}\n\ndata: [DONE]\n\n",
+			name:         "malformed before output is terminal and retryable",
+			sse:          "data: {not-json}\n\ndata: [DONE]\n\n",
+			wantComplete: true,
 		},
 		{
-			name:     "malformed after converted text does not disconnect",
-			sse:      "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
-			wantText: `"delta":"hello"`,
+			name:         "malformed after converted text does not disconnect",
+			sse:          "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {not-json}\n\ndata: [DONE]\n\n",
+			wantText:     `"delta":"hello"`,
+			wantComplete: true,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -259,12 +265,12 @@ func TestForwardResponsesRawCCSkipsMalformedChunksAndRequiresUsage(t *testing.T)
 			require.NotNil(t, result)
 			require.True(t, result.UpstreamFailed)
 			require.True(t, result.CaptureTerminalError)
-			require.True(t, result.CaptureResponseComplete)
+			require.Equal(t, tt.wantComplete, result.CaptureResponseComplete)
 			if tt.wantText != "" {
 				require.Contains(t, recorder.Body.String(), tt.wantText)
 			}
 			require.Nil(t, result.CaptureResponse)
-			capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), false)
+			capture.commit(t, c, result, upstream.lastBody, []byte(tt.sse), tt.wantTruncated)
 		})
 	}
 }
