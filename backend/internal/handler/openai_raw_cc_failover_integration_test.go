@@ -259,8 +259,8 @@ func TestOpenAIChatCompletionsCommitsPreCommitDisconnectExactlyOnce(t *testing.T
 	require.Equal(t, []int64{9201}, upstream.calls(), "a client disconnect must not replay the provider request")
 	require.Len(t, got.captures, 1)
 	require.Equal(t, providerSSE, string(got.captures[0].RawResponse))
-	require.Equal(t, "pre_commit_disconnect", got.captures[0].StopReason)
-	require.True(t, got.captures[0].Truncated, "a pre-commit disconnect is necessarily incomplete")
+	require.Equal(t, "completed", got.captures[0].StopReason, "archive stop reason must come from the provider response")
+	require.False(t, got.captures[0].Truncated, "provider completion must survive the downstream pre-commit disconnect")
 }
 
 func TestOpenAIChatCompletionsCommitsFinalHTTPErrorExactlyOnce(t *testing.T) {
