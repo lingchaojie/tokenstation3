@@ -617,7 +617,7 @@ type ForwardResult struct {
 	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
 	UpstreamFailed                bool // final provider attempt was consumed but could not produce a valid response
 	CaptureTerminalError          bool // archive this exchange under terminal_error even when partial usage remains billable
-	CaptureResponseComplete       bool // final provider response bytes were fully consumed despite a terminal error
+	CaptureResponseComplete       bool // final provider terminal boundary was observed for any outcome, including a successful drain after downstream disconnect
 	ReasoningEffort               *string
 	// ServiceTier records the billable request tier. OpenAI uses service_tier;
 	// Anthropic speed=fast is normalized to "fast".

@@ -892,18 +892,126 @@ func TestFinalAttemptLocalSyntheticErrorAborts(t *testing.T) {
 	require.Equal(t, []captureTerminalState{captureAborted}, transport.Attempts()[0].TerminalStates())
 }
 
-func TestPreCommitDisconnectCommitsIncompleteAttemptWithReason(t *testing.T) {
-	policy := DefaultCaptureRuntimePolicy()
-	policy.Enabled = true
-	c, svc, transport, account := newFinalAttemptFixture(t, policy)
-	svc.captureOutboundRequest(c, account, httptest.NewRequest(http.MethodPost, "https://upstream.test/v1/messages", nil), []byte(`{"model":"mapped","stream":true}`))
-	require.True(t, captureAttemptForRequest(c).WriteResponse([]byte("partial")))
+func TestCaptureTerminalOutcome(t *testing.T) {
+	tests := []struct {
+		name                 string
+		upstreamFailed       bool
+		terminalError        bool
+		clientDisconnect     bool
+		explicitlyComplete   bool
+		wantOutcome          CaptureOutcome
+		wantResponseComplete bool
+		wantCommit           bool
+	}{
+		{"success", false, false, false, false, CaptureOutcomeSuccess, true, true},
+		{"disconnect partial", false, false, true, false, captureOutcomeClientDisconnect, false, true},
+		{"disconnect drained terminal", false, false, true, true, captureOutcomeClientDisconnect, true, true},
+		{"upstream failure beats disconnect", true, false, true, false, CaptureOutcomeTerminalError, false, false},
+		{"semantic terminal error beats disconnect", false, true, true, true, CaptureOutcomeTerminalError, true, false},
+	}
 
-	require.True(t, CommitCapturePreCommitDisconnect(c, PlatformAnthropic, model.Final{HTTPStatus: 200}))
+	for _, family := range []string{"anthropic", "openai"} {
+		t.Run(family, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					require.Equal(t, tt.wantOutcome, captureTerminalOutcome(tt.upstreamFailed, tt.terminalError, tt.clientDisconnect))
+					require.Equal(t, tt.wantResponseComplete, captureFinalResponseComplete(tt.upstreamFailed, tt.terminalError, tt.clientDisconnect, tt.explicitlyComplete))
 
-	recording := transport.Attempts()[0]
-	require.Equal(t, []captureTerminalState{captureCommitted}, recording.TerminalStates())
-	require.Equal(t, []model.Final{{HTTPStatus: 200, StopReason: "pre_commit_disconnect", ResponseComplete: false}}, recording.Finals())
+					policy := DefaultCaptureRuntimePolicy()
+					policy.Enabled = true
+					if tt.clientDisconnect {
+						policy.Outcomes.Success = false
+						policy.Outcomes.TerminalError = false
+					}
+					if family == "openai" {
+						policy.Platforms.OpenAI = true
+					}
+
+					c, svc, transport, account := newFinalAttemptFixture(t, policy)
+					var committed bool
+					switch family {
+					case "anthropic":
+						svc.captureOutboundRequest(c, account, httptest.NewRequest(http.MethodPost, "https://upstream.test/v1/messages", nil), []byte(`{"model":"mapped","stream":true}`))
+						require.True(t, captureAttemptForRequest(c).WriteResponse([]byte("partial")))
+						committed = CommitForwardCaptureAttempt(c, PlatformAnthropic, &ForwardResult{
+							UpstreamFailed:          tt.upstreamFailed,
+							CaptureTerminalError:    tt.terminalError,
+							ClientDisconnect:        tt.clientDisconnect,
+							CaptureResponseComplete: tt.explicitlyComplete,
+						})
+					case "openai":
+						pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+						beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, PlatformOpenAI, httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil), []byte(`{"model":"gpt-5","stream":true}`), 1<<20)
+						require.True(t, captureAttemptForRequest(c).WriteResponse([]byte("partial")))
+						committed = CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, &OpenAIForwardResult{
+							UpstreamFailed:          tt.upstreamFailed,
+							CaptureTerminalError:    tt.terminalError,
+							ClientDisconnect:        tt.clientDisconnect,
+							CaptureResponseComplete: tt.explicitlyComplete,
+							UpstreamHTTPStatus:      http.StatusOK,
+						})
+					}
+
+					require.Equal(t, tt.wantCommit, committed, "outcome %q", tt.wantOutcome)
+					recording := transport.Attempts()[0]
+					if !tt.wantCommit {
+						require.Equal(t, []captureTerminalState{captureAborted}, recording.TerminalStates())
+						require.Empty(t, recording.Finals())
+						return
+					}
+					require.Equal(t, []captureTerminalState{captureCommitted}, recording.TerminalStates())
+					require.Equal(t, []model.Final{{HTTPStatus: http.StatusOK, ResponseComplete: tt.wantResponseComplete}}, recording.Finals())
+				})
+			}
+		})
+	}
+}
+
+func TestClientDisconnectCommitPolicyKeepsUpstreamFailureTerminal(t *testing.T) {
+	for _, family := range []string{"anthropic", "openai"} {
+		t.Run(family, func(t *testing.T) {
+			policy := DefaultCaptureRuntimePolicy()
+			policy.Enabled = true
+			policy.Outcomes.Success = false
+			policy.Outcomes.TerminalError = false
+			if family == "openai" {
+				policy.Platforms.OpenAI = true
+			}
+
+			c, svc, transport, account := newFinalAttemptFixture(t, policy)
+			var start func()
+			var commit func(upstreamFailed, clientDisconnect bool) bool
+			switch family {
+			case "anthropic":
+				start = func() {
+					svc.captureOutboundRequest(c, account, httptest.NewRequest(http.MethodPost, "https://upstream.test/v1/messages", nil), []byte(`{"model":"mapped","stream":true}`))
+					require.True(t, captureAttemptForRequest(c).WriteResponse([]byte("partial")))
+				}
+				commit = func(upstreamFailed, clientDisconnect bool) bool {
+					return CommitForwardCaptureAttempt(c, PlatformAnthropic, &ForwardResult{UpstreamFailed: upstreamFailed, ClientDisconnect: clientDisconnect})
+				}
+			case "openai":
+				pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+				start = func() {
+					beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, PlatformOpenAI, httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil), []byte(`{"model":"gpt-5","stream":true}`), 1<<20)
+					require.True(t, captureAttemptForRequest(c).WriteResponse([]byte("partial")))
+				}
+				commit = func(upstreamFailed, clientDisconnect bool) bool {
+					return CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, &OpenAIForwardResult{UpstreamFailed: upstreamFailed, ClientDisconnect: clientDisconnect, UpstreamHTTPStatus: http.StatusOK})
+				}
+			}
+
+			start()
+			require.True(t, commit(false, true))
+			require.Equal(t, []model.Final{{HTTPStatus: http.StatusOK, ResponseComplete: false}}, transport.Attempts()[0].Finals())
+			require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
+
+			start()
+			require.False(t, commit(true, true))
+			require.Equal(t, []captureTerminalState{captureAborted}, transport.Attempts()[1].TerminalStates())
+			require.Empty(t, transport.Attempts()[1].Finals())
+		})
+	}
 }
 
 func TestFinalAttemptOutcomePolicyOffAbortsWithoutCommit(t *testing.T) {
@@ -942,30 +1050,26 @@ func TestFinalAttemptGatewaySideEffectSinkCommitsUsageMetadata(t *testing.T) {
 	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
 }
 
-func TestPreCommitOpenAISideEffectSinkClassifiesDisconnect(t *testing.T) {
+func TestUpstreamFailureDisconnectFloodAlwaysAborts(t *testing.T) {
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
-	policy.Platforms.OpenAI = true
-	c, _, transport, _ := newFinalAttemptFixture(t, policy)
-	account := &Account{Platform: PlatformOpenAI}
-	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
-	beginCaptureAttemptForWireRequest(c.Request.Context(), c, pool, PlatformOpenAI, httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil), []byte(`{"model":"gpt-5","stream":true}`), 1<<20)
-	result := &OpenAIForwardResult{
-		Usage:              OpenAIUsage{InputTokens: 13, OutputTokens: 5, CacheReadInputTokens: 4, CacheCreationInputTokens: 1},
-		ClientDisconnect:   true,
-		UpstreamHTTPStatus: 200,
+	policy.Outcomes.TerminalError = false
+	c, svc, transport, account := newFinalAttemptFixture(t, policy)
+
+	for i := 0; i < 50; i++ {
+		svc.captureOutboundRequest(c, account, httptest.NewRequest(http.MethodPost, "https://upstream.test/v1/messages", nil), []byte(`{"model":"mapped","stream":true}`))
+		require.True(t, captureAttemptForRequest(c).WriteResponse([]byte("partial")))
+		require.False(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, &ForwardResult{
+			UpstreamFailed:    true,
+			ClientDisconnect:  i%2 == 0,
+			CaptureHTTPStatus: http.StatusServiceUnavailable,
+		}))
 	}
 
-	require.True(t, CommitOpenAIForwardCaptureAttempt(c, string(account.Platform), result))
-
-	require.Equal(t, []model.Final{{
-		HTTPStatus:          200,
-		InputTokens:         13,
-		OutputTokens:        5,
-		CacheReadTokens:     4,
-		CacheCreationTokens: 1,
-		StopReason:          "pre_commit_disconnect",
-		ResponseComplete:    false,
-	}}, transport.Attempts()[0].Finals())
-	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 50)
+	for _, attempt := range attempts {
+		require.Equal(t, []captureTerminalState{captureAborted}, attempt.TerminalStates())
+		require.Empty(t, attempt.Finals())
+	}
 }

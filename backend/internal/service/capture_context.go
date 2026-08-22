@@ -377,12 +377,21 @@ func CommitCaptureAttempt(c *gin.Context, platform string, outcome CaptureOutcom
 	return attempt.Commit()
 }
 
-// CommitCapturePreCommitDisconnect preserves the naturally observed partial
-// provider exchange while identifying that no client-visible commit occurred.
-func CommitCapturePreCommitDisconnect(c *gin.Context, platform string, final model.Final) bool {
-	final.StopReason = "pre_commit_disconnect"
-	final.ResponseComplete = false
-	return CommitCaptureAttempt(c, platform, CaptureOutcomeTerminalError, final)
+func captureTerminalOutcome(upstreamFailed, terminalError, clientDisconnect bool) CaptureOutcome {
+	if upstreamFailed || terminalError {
+		return CaptureOutcomeTerminalError
+	}
+	if clientDisconnect {
+		return captureOutcomeClientDisconnect
+	}
+	return CaptureOutcomeSuccess
+}
+
+func captureFinalResponseComplete(upstreamFailed, terminalError, clientDisconnect, explicitlyComplete bool) bool {
+	if explicitlyComplete {
+		return true
+	}
+	return !upstreamFailed && !terminalError && !clientDisconnect
 }
 
 // CommitTerminalErrorCaptureAttempt commits only an observed final provider
@@ -428,10 +437,6 @@ func CommitForwardCaptureAttempt(c *gin.Context, platform string, result *Forwar
 		AbortCaptureAttempt(c)
 		return false
 	}
-	responseComplete := !result.UpstreamFailed && !result.CaptureTerminalError && !result.ClientDisconnect
-	if result.CaptureResponseComplete && !result.ClientDisconnect {
-		responseComplete = true
-	}
 	httpStatus := result.HTTPStatusForCapture()
 	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
 		httpStatus = observed
@@ -442,15 +447,14 @@ func CommitForwardCaptureAttempt(c *gin.Context, platform string, result *Forwar
 		OutputTokens:        boundedCaptureUint32(result.Usage.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
-		ResponseComplete:    responseComplete,
+		ResponseComplete: captureFinalResponseComplete(
+			result.UpstreamFailed,
+			result.CaptureTerminalError,
+			result.ClientDisconnect,
+			result.CaptureResponseComplete,
+		),
 	}
-	if result.ClientDisconnect {
-		return CommitCapturePreCommitDisconnect(c, platform, final)
-	}
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	return CommitCaptureAttempt(c, platform, outcome, final)
 }
 
@@ -461,10 +465,6 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 		AbortCaptureAttempt(c)
 		return false
 	}
-	responseComplete := !result.UpstreamFailed && !result.CaptureTerminalError && !result.ClientDisconnect
-	if result.CaptureResponseComplete && !result.ClientDisconnect {
-		responseComplete = true
-	}
 	httpStatus := result.HTTPStatusForCapture()
 	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
 		httpStatus = observed
@@ -475,15 +475,14 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 		OutputTokens:        boundedCaptureUint32(result.Usage.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
-		ResponseComplete:    responseComplete,
+		ResponseComplete: captureFinalResponseComplete(
+			result.UpstreamFailed,
+			result.CaptureTerminalError,
+			result.ClientDisconnect,
+			result.CaptureResponseComplete,
+		),
 	}
-	if result.ClientDisconnect {
-		return CommitCapturePreCommitDisconnect(c, platform, final)
-	}
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	return CommitCaptureAttempt(c, platform, outcome, final)
 }
 

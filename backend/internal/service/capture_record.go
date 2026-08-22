@@ -1678,10 +1678,7 @@ func attachCaptureToForwardResult(c *gin.Context, result *ForwardResult) *Forwar
 			result.CaptureTruncated = bridge.Truncated
 		}
 		if platform := firstNonEmpty(bridge.Platform, platformFromCaptureEndpoint(bridge.UpstreamEndpoint)); platform != "" {
-			outcome := CaptureOutcomeSuccess
-			if result.UpstreamFailed || result.CaptureTerminalError {
-				outcome = CaptureOutcomeTerminalError
-			}
+			outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 			if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 				result.CaptureContentPolicy = &content
 			}
@@ -1699,10 +1696,7 @@ func RefreshForwardCaptureContentPolicy(c *gin.Context, platform string, result 
 		return
 	}
 	result.CaptureContentPolicy = nil
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 		result.CaptureContentPolicy = &content
 	}
@@ -1715,10 +1709,7 @@ func RefreshOpenAIForwardCaptureContentPolicy(c *gin.Context, platform string, r
 		return
 	}
 	result.CaptureContentPolicy = nil
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 		result.CaptureContentPolicy = &content
 	}
@@ -1891,10 +1882,7 @@ func attachCaptureToOpenAIForwardResult(c *gin.Context, result *OpenAIForwardRes
 			result.RequestID = providerRequestID
 		}
 		if platform := firstNonEmpty(bridge.Platform, platformFromCaptureEndpoint(bridge.UpstreamEndpoint)); platform != "" {
-			outcome := CaptureOutcomeSuccess
-			if result.UpstreamFailed || result.CaptureTerminalError {
-				outcome = CaptureOutcomeTerminalError
-			}
+			outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 			if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 				result.CaptureContentPolicy = &content
 			}
