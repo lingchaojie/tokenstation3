@@ -870,6 +870,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	var clientDisconnect bool
+	var responseComplete bool
 	if reqStream {
 		writerSizeBeforeStream := c.Writer.Size()
 		streamOwnsResponseBody = true
@@ -947,6 +948,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
+		responseComplete = streamResult.responseComplete
 	} else {
 		usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, reqModel)
 		if err != nil {
@@ -965,6 +967,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       responseComplete,
 	}
 	return attachCaptureToForwardResult(c, result), nil
 }

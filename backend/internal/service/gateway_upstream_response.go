@@ -768,6 +768,7 @@ type streamingResult struct {
 	firstTokenMs     *int
 	clientDisconnect bool // 客户端是否在流式传输过程中断开
 	semanticOutput   bool // 是否已向客户端提交实际文本/工具等语义输出
+	responseComplete bool // 是否观测到上游官方 terminal 事件
 }
 
 // partialStreamUsageResult 在流式转发中途出错时，把已经提交语义输出的部分结果包装为
@@ -796,6 +797,7 @@ func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult 
 		FirstTokenMs:                  streamResult.firstTokenMs,
 		ClientDisconnect:              streamResult.clientDisconnect,
 		CaptureTerminalError:          true,
+		CaptureResponseComplete:       streamResult.responseComplete,
 	})
 }
 
@@ -1267,7 +1269,13 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 
 	streamResult := func() *streamingResult {
-		return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, semanticOutput: semanticOutput}
+		return &streamingResult{
+			usage:            usage,
+			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnected,
+			semanticOutput:   semanticOutput,
+			responseComplete: sawTerminalEvent,
+		}
 	}
 	preOutputFailover := func(message string, retryable bool) error {
 		failure := newIncompleteProviderStreamFailover(resp, message)

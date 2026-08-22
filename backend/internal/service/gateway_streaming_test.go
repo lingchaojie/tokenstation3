@@ -47,6 +47,22 @@ func (w *signalWriteResponseWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+type signalFailWriteResponseWriter struct {
+	gin.ResponseWriter
+	failed chan struct{}
+	once   sync.Once
+}
+
+func (w *signalFailWriteResponseWriter) Write([]byte) (int, error) {
+	w.once.Do(func() { close(w.failed) })
+	return 0, errors.New("client disconnected")
+}
+
+func (w *signalFailWriteResponseWriter) WriteString(string) (int, error) {
+	w.once.Do(func() { close(w.failed) })
+	return 0, errors.New("client disconnected")
+}
+
 func newBlockingAfterPayloadBody(payload []byte) *blockingAfterPayloadBody {
 	return &blockingAfterPayloadBody{
 		reader:  bytes.NewReader(payload),
@@ -1347,9 +1363,105 @@ func TestHandleStreamingResponse_ClientDisconnectDoesNotHideProviderErrorEvent(t
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.False(t, result.responseComplete)
 	var sseErr *sseStreamErrorEventError
 	require.ErrorAs(t, err, &sseErr)
 	require.Equal(t, errorJSON, sseErr.RawData)
+}
+
+func TestHandleStreamingResponse_ClientDisconnectCompleteCapturesLateProviderTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+	svc.cfg.Gateway.Capture.Enabled = true
+	svc.cfg.Gateway.Capture.MaxBodyBytes = 1 << 20
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	failed := make(chan struct{})
+	c.Writer = &signalFailWriteResponseWriter{ResponseWriter: c.Writer, failed: failed}
+
+	reader, writer := io.Pipe()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       reader,
+	}
+	prefix := anthropicTestSemanticPrefix(4, "first")
+	late := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" late\"}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		_, _ = io.WriteString(writer, prefix)
+		<-failed
+		_, _ = io.WriteString(writer, late)
+		_ = writer.Close()
+	}()
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, time.Now(), "model", "model", false)
+	<-writeDone
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.True(t, result.responseComplete)
+
+	captured, ok := takeCaptureResult(c)
+	require.True(t, ok)
+	require.Equal(t, []byte(prefix+late), captured.Response)
+	require.Contains(t, string(captured.Response), `"text":" late"`)
+	require.Contains(t, string(captured.Response), `"type":"message_stop"`)
+}
+
+func TestHandleStreamingResponse_ClientDisconnectCanceledProviderIsIncomplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &streamReadCloser{
+			payload: []byte(anthropicTestSemanticPrefix(4, "partial")),
+			err:     context.Canceled,
+		},
+	}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformAnthropic}, time.Now(), "model", "model", false)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.False(t, result.responseComplete)
+}
+
+func TestGatewayService_Forward_ClientDisconnectCompletePropagatesProviderTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+	require.NoError(t, err)
+	body := anthropicTestSemanticPrefix(5, "hello") +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}}
+	svc := newForwardPartialUsageServiceForTest(upstream)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+
+	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.True(t, result.CaptureResponseComplete)
 }
 
 // 对抗用例：上游发 event:error 但 data 行不是合法 JSON。

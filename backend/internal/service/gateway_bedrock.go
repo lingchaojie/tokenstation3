@@ -133,17 +133,23 @@ func (s *GatewayService) forwardBedrock(
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	var clientDisconnect bool
+	var responseComplete bool
 	if reqStream {
 		streamResult, err := s.handleBedrockStreamingResponse(ctx, resp, c, account, startTime, reqModel)
 		if err != nil {
 			if streamResult == nil {
 				return failedForwardResultForError(c, resp, reqModel, mappedModel, true, startTime, err), err
 			}
-			return streamErrorForwardResult(c, resp, reqModel, mappedModel, startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err), err
+			result := streamErrorForwardResult(c, resp, reqModel, mappedModel, startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err)
+			if result != nil {
+				result.CaptureResponseComplete = streamResult.responseComplete
+			}
+			return result, err
 		}
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
+		responseComplete = streamResult.responseComplete
 	} else {
 		usage, err = s.handleBedrockNonStreamingResponse(ctx, resp, c, account)
 		if err != nil {
@@ -156,14 +162,15 @@ func (s *GatewayService) forwardBedrock(
 
 	finishCaptureResponse(resp)
 	return finalizeForwardResult(c, &ForwardResult{
-		RequestID:        resp.Header.Get("x-amzn-requestid"),
-		Usage:            *usage,
-		Model:            reqModel,
-		UpstreamModel:    mappedModel,
-		Stream:           reqStream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		RequestID:               resp.Header.Get("x-amzn-requestid"),
+		Usage:                   *usage,
+		Model:                   reqModel,
+		UpstreamModel:           mappedModel,
+		Stream:                  reqStream,
+		Duration:                time.Since(startTime),
+		FirstTokenMs:            firstTokenMs,
+		ClientDisconnect:        clientDisconnect,
+		CaptureResponseComplete: responseComplete,
 	}), nil
 }
 

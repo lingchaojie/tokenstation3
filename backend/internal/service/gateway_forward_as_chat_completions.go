@@ -503,15 +503,16 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:        requestID,
-			Usage:            usage,
-			Model:            originalModel,
-			UpstreamModel:    mappedModel,
-			ReasoningEffort:  reasoningEffort,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: clientDisconnected,
+			RequestID:               requestID,
+			Usage:                   usage,
+			Model:                   originalModel,
+			UpstreamModel:           mappedModel,
+			ReasoningEffort:         reasoningEffort,
+			Stream:                  true,
+			Duration:                time.Since(startTime),
+			FirstTokenMs:            firstTokenMs,
+			ClientDisconnect:        clientDisconnected,
+			CaptureResponseComplete: terminalObserved,
 		}
 	}
 

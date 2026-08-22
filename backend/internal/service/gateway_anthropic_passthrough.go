@@ -290,6 +290,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	var clientDisconnect bool
+	var responseComplete bool
 	if input.RequestStream {
 		// The streaming reader must close the body itself to interrupt a blocked
 		// Scanner and join its goroutine. Transfer ownership before entering it so
@@ -313,6 +314,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
+		responseComplete = streamResult.responseComplete
 	} else {
 		usage, err = s.handleNonStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account)
 		if err != nil {
@@ -336,6 +338,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		Duration:                      time.Since(input.StartTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       responseComplete,
 	}), nil
 }
 
@@ -467,6 +470,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	clientDisconnected := false
 	semanticOutput := false
 	providerPayloadObserved := false
+	terminalObserved := false
 
 	stagedOutput := newDefaultOpenAIFirstOutputStage()
 	defer func() { _ = stagedOutput.Close() }()
@@ -576,6 +580,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			firstTokenMs:     firstTokenMs,
 			clientDisconnect: clientDisconnected,
 			semanticOutput:   semanticOutput,
+			responseComplete: terminalObserved,
 		}
 	}
 	preOutputFailover := func(message string, retryable bool, responseBody []byte) error {
@@ -682,6 +687,9 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 
 		eventHasSemanticOutput := anthropicSSEEventHasSemanticOutput(data)
 		terminal := anthropicStreamEventIsTerminal(eventName, data)
+		if terminal {
+			terminalObserved = true
+		}
 		wasSemanticOutput := semanticOutput
 		if !wasSemanticOutput {
 			if _, err := commitStageDelivery(eventStage, stagedOutput, "event"); err != nil {

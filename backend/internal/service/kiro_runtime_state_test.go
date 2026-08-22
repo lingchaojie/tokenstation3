@@ -444,6 +444,70 @@ func TestOpenKiroAnthropicStreamResponseNormalPathSkipsStandaloneTranslatedEstim
 	require.Len(t, upstream.requests, 1)
 }
 
+func TestKiroRuntimeClientDisconnectCompleteAfterProviderTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newKiroCacheTransactionAccount(612, "DISCONNECTCOMPLETE")
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), "anthropic")
+	require.NoError(t, err)
+	parsed.Group = &Group{Platform: PlatformKiro}
+
+	svc := &GatewayService{
+		httpUpstream:        &queuedHTTPUpstream{responses: []*http.Response{newKiroCacheTransactionSuccessResponse(t, "complete after disconnect")}},
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		rateLimitService:    &RateLimitService{},
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.True(t, result.CaptureResponseComplete)
+}
+
+func TestKiroRuntimeClientDisconnectCanceledProviderIsIncomplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newKiroCacheTransactionAccount(613, "DISCONNECTCANCELED")
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), "anthropic")
+	require.NoError(t, err)
+	parsed.Group = &Group{Platform: PlatformKiro}
+
+	var providerFrames bytes.Buffer
+	_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "partial before cancel"},
+	}))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+		Body: &bedrockFramesThenError{
+			frames: bytes.NewReader(providerFrames.Bytes()),
+			err:    context.Canceled,
+		},
+	}}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		rateLimitService:    &RateLimitService{},
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.False(t, result.CaptureResponseComplete)
+}
+
 func TestKiroCacheDirectCommitsOnlyAfterUpstreamSuccess(t *testing.T) {
 	resetKiroCacheTracker()
 	account := newKiroCacheTransactionAccount(614, "DIRECT")

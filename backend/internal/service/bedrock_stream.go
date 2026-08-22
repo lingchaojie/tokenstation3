@@ -46,6 +46,7 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 	clientDisconnected := false
+	terminalObserved := false
 
 	// Bedrock EventStream 使用 application/vnd.amazon.eventstream 二进制格式。
 	// 每个帧结构：total_length(4) + headers_length(4) + prelude_crc(4) + headers + payload + message_crc(4)
@@ -115,16 +116,16 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 				if !clientDisconnected {
 					flusher.Flush()
 				}
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, responseComplete: terminalObserved}, nil
 			}
 			if ev.err != nil {
 				if clientDisconnected {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, responseComplete: terminalObserved}, nil
 				}
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, responseComplete: terminalObserved}, nil
 				}
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("bedrock stream read error: %w", ev.err)
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, responseComplete: terminalObserved}, fmt.Errorf("bedrock stream read error: %w", ev.err)
 			}
 
 			// payload 是 JSON，提取 chunk.bytes（base64 编码的 Claude SSE 事件数据）
@@ -147,6 +148,9 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 确定 SSE event type
 			eventType := gjson.GetBytes(sseData, "type").String()
+			if eventType == "message_stop" {
+				terminalObserved = true
+			}
 
 			// 写入标准 SSE 格式
 			if !clientDisconnected {
@@ -170,13 +174,13 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 				continue
 			}
 			if clientDisconnected {
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, responseComplete: terminalObserved}, nil
 			}
 			logger.LegacyPrintf("service.gateway", "[Bedrock] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, model, streamInterval)
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, model)
 			}
-			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
+			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, responseComplete: terminalObserved}, fmt.Errorf("stream data interval timeout")
 		}
 	}
 }

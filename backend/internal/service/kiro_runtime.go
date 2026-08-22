@@ -258,14 +258,15 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}
 		requestID := buildKiroRequestID(resp)
 		result := &ForwardResult{
-			RequestID:        requestID,
-			Usage:            *streamResult.usage,
-			Model:            originalModel,
-			UpstreamModel:    upstreamModel,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     streamResult.firstTokenMs,
-			ClientDisconnect: streamResult.clientDisconnect,
+			RequestID:               requestID,
+			Usage:                   *streamResult.usage,
+			Model:                   originalModel,
+			UpstreamModel:           upstreamModel,
+			Stream:                  true,
+			Duration:                time.Since(startTime),
+			FirstTokenMs:            streamResult.firstTokenMs,
+			ClientDisconnect:        streamResult.clientDisconnect,
+			CaptureResponseComplete: streamResult.responseComplete,
 		}
 		// 归档：tee 已在 handleStreamingResponse 内累积翻译后的 Anthropic SSE 并写入 gin.Context 桥；
 		// 此处取回填入 result，头用暂存的真实上游头（非 pipe 合成头）。汇入 gateway_handler submit 块统一提交。
