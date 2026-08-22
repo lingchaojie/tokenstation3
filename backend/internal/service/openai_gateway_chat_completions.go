@@ -864,6 +864,15 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 
 	finalizeStream := func() (*OpenAIForwardResult, error) {
+		if streamFailoverErr != nil {
+			if c == nil || c.Writer == nil || !c.Writer.Written() {
+				return nil, streamFailoverErr
+			}
+			return resultWithUsage(), streamFailoverErr
+		}
+		if streamNonFailoverErr != nil {
+			return resultWithUsage(), streamNonFailoverErr
+		}
 		if stagedWriteErr != nil {
 			var deliveryErr *stagedConvertedClientWriteError
 			if errors.As(stagedWriteErr, &deliveryErr) && providerTerminalObserved {
@@ -873,15 +882,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "OpenAI chat_completions first-output staging failed: "+sanitizeStreamError(stagedWriteErr), resp)
 			}
 			return resultWithUsage(), stagedWriteErr
-		}
-		if streamFailoverErr != nil {
-			if c == nil || c.Writer == nil || !c.Writer.Written() {
-				return nil, streamFailoverErr
-			}
-			return resultWithUsage(), streamFailoverErr
-		}
-		if streamNonFailoverErr != nil {
-			return resultWithUsage(), streamNonFailoverErr
 		}
 		if finalChunks := apicompat.FinalizeResponsesChatStream(state); len(finalChunks) > 0 && !clientDisconnected {
 			for _, chunk := range finalChunks {

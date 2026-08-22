@@ -1429,8 +1429,66 @@ func TestGeminiStreamingClientDisconnectReturnsCollectedProviderResult(t *testin
 			require.NoError(t, err)
 			switch typed := result.(type) {
 			case *geminiStreamResult:
+				require.True(t, typed.clientDisconnect)
 				require.True(t, typed.terminalObserved)
 			case *geminiNativeStreamResult:
+				require.True(t, typed.clientDisconnect)
+				require.True(t, typed.terminalObserved)
+			default:
+				t.Fatalf("unexpected streaming result type %T", result)
+			}
+		})
+	}
+}
+
+func TestGeminiClientDisconnectReadErrorSnapshotsTerminalState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	providerBody := []byte(`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":5}}` + "\n\n")
+	forcedErr := errors.New("forced post-disconnect Gemini read failure")
+	for _, tc := range []struct {
+		name string
+		run  func(*GeminiMessagesCompatService, *gin.Context, *http.Response) (any, error)
+	}{
+		{
+			name: "messages compatibility",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleStreamingResponse(c, resp, time.Now(), "claude-3-5-sonnet")
+			},
+		},
+		{
+			name: "native oauth",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleNativeStreamingResponse(c, resp, time.Now(), true)
+			},
+		},
+		{
+			name: "chat completions compatibility",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleChatCompletionsStreamingResponseFromGemini(context.Background(), c, resp, time.Now(), "gemini-2.5-pro", true, false)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &geminiPartialThenErrorBody{data: providerBody, err: forcedErr},
+			}
+
+			result, err := tc.run(&GeminiMessagesCompatService{}, c, resp)
+
+			require.ErrorIs(t, err, forcedErr)
+			require.NotNil(t, result)
+			switch typed := result.(type) {
+			case *geminiStreamResult:
+				require.True(t, typed.clientDisconnect)
+				require.True(t, typed.terminalObserved)
+			case *geminiNativeStreamResult:
+				require.True(t, typed.clientDisconnect)
 				require.True(t, typed.terminalObserved)
 			default:
 				t.Fatalf("unexpected streaming result type %T", result)
@@ -1452,6 +1510,7 @@ func TestGeminiMessagesStreamingResponseHonorsProviderIdleTimeout(t *testing.T) 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
 	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
 
 	type outcome struct {
@@ -1468,6 +1527,8 @@ func TestGeminiMessagesStreamingResponseHonorsProviderIdleTimeout(t *testing.T) 
 	case got := <-done:
 		require.NotNil(t, got.result)
 		require.ErrorContains(t, got.err, "stream data interval timeout")
+		require.True(t, got.result.clientDisconnect)
+		require.False(t, got.result.terminalObserved)
 	case <-time.After(2 * time.Second):
 		_ = body.Close()
 		<-done
@@ -1489,6 +1550,7 @@ func TestGeminiNativeStreamingResponseHonorsProviderIdleTimeout(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini:streamGenerateContent", nil)
+	c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
 	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
 
 	type outcome struct {
@@ -1505,6 +1567,8 @@ func TestGeminiNativeStreamingResponseHonorsProviderIdleTimeout(t *testing.T) {
 	case got := <-done:
 		require.NotNil(t, got.result)
 		require.ErrorContains(t, got.err, "stream data interval timeout")
+		require.True(t, got.result.clientDisconnect)
+		require.False(t, got.result.terminalObserved)
 	case <-time.After(2 * time.Second):
 		_ = body.Close()
 		<-done
@@ -1552,6 +1616,7 @@ func TestGeminiChatCompatibilityStreamingResponseHonorsProviderIdleTimeout(t *te
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
 	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
 
 	type outcome struct {
@@ -1570,6 +1635,8 @@ func TestGeminiChatCompatibilityStreamingResponseHonorsProviderIdleTimeout(t *te
 	case got := <-done:
 		require.NotNil(t, got.result)
 		require.ErrorContains(t, got.err, "stream data interval timeout")
+		require.True(t, got.result.clientDisconnect)
+		require.False(t, got.result.terminalObserved)
 	case <-time.After(2 * time.Second):
 		_ = body.Close()
 		<-done

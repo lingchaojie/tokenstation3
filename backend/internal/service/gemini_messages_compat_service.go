@@ -2313,6 +2313,20 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		c.Status(http.StatusOK)
 	}
 	wireWriter := &stagedSemanticWriter{stage: &staged, c: c, writeHeaders: writeHeaders, semantic: &semanticOutput, terminal: &commitTerminal}
+	resultSnapshot := func(forceSemanticOutput bool) *geminiStreamResult {
+		clientDisconnect := false
+		var clientWriteErr *stagedConvertedClientWriteError
+		if wireWriter.err != nil && errors.As(wireWriter.err, &clientWriteErr) {
+			clientDisconnect = true
+		}
+		return &geminiStreamResult{
+			usage:            &usage,
+			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnect,
+			semanticOutput:   semanticOutput || forceSemanticOutput,
+			terminalObserved: terminalObserved,
+		}
+	}
 	writeStart = func() {
 		if startWritten {
 			return
@@ -2365,7 +2379,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		unwrappedBytes, err := unwrapGeminiResponse([]byte(payload))
 		if err != nil {
 			if staged.committed {
-				return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
+				return resultSnapshot(true), fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
 		}
@@ -2379,7 +2393,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		geminiResp, err := decodeGeminiCompatResponse(unwrappedBytes)
 		if err != nil {
 			if staged.committed {
-				return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini provider JSON: %w", err)
+				return resultSnapshot(true), fmt.Errorf("invalid Gemini provider JSON: %w", err)
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
 		}
@@ -2538,14 +2552,14 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
-			result := &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
+			result := resultSnapshot(false)
 			if staged.committed || semanticOutput {
 				return result, fmt.Errorf("gemini stream data interval timeout")
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini stream timed out before semantic output")
 		}
 		if staged.committed {
-			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("stream read error: %w", scanErr)
+			return resultSnapshot(true), fmt.Errorf("stream read error: %w", scanErr)
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream read failed before semantic output: "+sanitizeStreamError(scanErr))
 	}
@@ -2556,12 +2570,12 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	if wireWriter.err != nil {
 		var clientWriteErr *stagedConvertedClientWriteError
 		if errors.As(wireWriter.err, &clientWriteErr) {
-			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, clientDisconnect: true, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
+			return resultSnapshot(false), nil
 		}
 		if !staged.committed {
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini pre-output stage exceeded limit")
 		}
-		return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, wireWriter.err
+		return resultSnapshot(true), wireWriter.err
 	}
 	commitTerminal = true
 	writeStart()
@@ -2603,7 +2617,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	})
 	flusher.Flush()
 
-	return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
+	return resultSnapshot(false), nil
 }
 
 func writeSSE(w io.Writer, event string, data any) {
@@ -2987,6 +3001,20 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 		c.Status(resp.StatusCode)
 	}
 	wireWriter := &stagedSemanticWriter{stage: &staged, c: c, writeHeaders: writeHeaders, semantic: &semanticOutput, terminal: &commitTerminal}
+	resultSnapshot := func(forceSemanticOutput bool) *geminiNativeStreamResult {
+		clientDisconnect := false
+		var clientWriteErr *stagedConvertedClientWriteError
+		if wireWriter.err != nil && errors.As(wireWriter.err, &clientWriteErr) {
+			clientDisconnect = true
+		}
+		return &geminiNativeStreamResult{
+			usage:            usage,
+			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnect,
+			semanticOutput:   semanticOutput || forceSemanticOutput,
+			terminalObserved: terminalObserved,
+		}
+	}
 	emit := func(output string) {
 		_, _ = io.WriteString(wireWriter, output)
 		if staged.committed {
@@ -3036,7 +3064,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 						innerBytes, err := unwrapGeminiResponse([]byte(payload))
 						if err != nil {
 							if staged.committed {
-								return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
+								return resultSnapshot(true), fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
 							}
 							return nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
 						}
@@ -3083,14 +3111,14 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
-			result := &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
+			result := resultSnapshot(false)
 			if staged.committed || semanticOutput {
 				return result, fmt.Errorf("gemini native stream data interval timeout")
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream timed out before semantic output")
 		}
 		if staged.committed {
-			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, scanErr
+			return resultSnapshot(true), scanErr
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream read failed before semantic output: "+sanitizeStreamError(scanErr))
 	}
@@ -3100,19 +3128,19 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	if wireWriter.err != nil {
 		var clientWriteErr *stagedConvertedClientWriteError
 		if errors.As(wireWriter.err, &clientWriteErr) {
-			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
+			return resultSnapshot(false), nil
 		}
 		if !staged.committed {
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini native pre-output stage exceeded limit")
 		}
-		return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, wireWriter.err
+		return resultSnapshot(true), wireWriter.err
 	}
 	if !staged.committed {
 		if err := staged.write(c, writeHeaders, "", true); err != nil {
 			return nil, err
 		}
 	}
-	return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
+	return resultSnapshot(false), nil
 }
 
 // ForwardAIStudioGET forwards a GET request to AI Studio (generativelanguage.googleapis.com) for

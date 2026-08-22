@@ -326,6 +326,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	firstChunk := true
 	clientDisconnected := false
 	sawTerminalEvent := false
+	var providerErr error
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -439,6 +440,9 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 				return onIdle()
 			}
 			logReadErr(rerr)
+			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+				providerErr = rerr
+			}
 			break
 		}
 		if _, ok := extractOpenAISSEEventLine(line); !ok {
@@ -452,6 +456,9 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			}
 			// EOF / 读错误：事件行后流终止，进入 finalize。
 			logReadErr(rerr)
+			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+				providerErr = rerr
+			}
 			break
 		}
 		payload, ok := extractOpenAISSEDataLine(dataLine)
@@ -461,7 +468,8 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			continue
+			providerErr = fmt.Errorf("invalid Anthropic provider JSON: %w", err)
+			break
 		}
 
 		if processAnthropicEvent(&event) {
@@ -487,5 +495,5 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 		c.Writer.Flush()
 	}
 
-	return resultWithUsage(), nil
+	return resultWithUsage(), providerErr
 }
