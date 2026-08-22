@@ -705,6 +705,12 @@ func FinalizeForwardUsage(result *ForwardResult, forwardErr error) error {
 	if result == nil || result.HasBillableUsage() {
 		return forwardErr
 	}
+	// A causally proven client disconnect is capture-only, not an upstream
+	// usage-integrity failure. The leaf classifier must already have rejected
+	// provider-side cancellations by leaving CaptureTerminalError set.
+	if result.ClientDisconnect && !result.CaptureTerminalError && forwardErr != nil {
+		return forwardErr
+	}
 	result.UpstreamFailed = true
 	result.CaptureTerminalError = true
 	if forwardErr != nil {

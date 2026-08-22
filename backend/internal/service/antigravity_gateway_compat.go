@@ -359,7 +359,7 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 	streamResult, err := s.consumeAntigravityCompatSuccess(c, call, resp)
 	if err != nil {
 		if call.request.clientStream && streamResult != nil {
-			result := streamErrorForwardResult(c, resp, call.request.originalModel, call.billingModel, call.request.startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err)
+			result := streamErrorForwardResult(ctx, c, resp, call.request.originalModel, call.billingModel, call.request.startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err)
 			if result != nil {
 				result.CaptureResponseComplete = streamResult.terminalObserved
 			}

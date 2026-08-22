@@ -298,7 +298,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
 			}
-			result := streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			result := streamErrorForwardResult(ctx, c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
 			if result != nil {
 				result.CaptureResponseComplete = streamRes.terminalObserved
 			}

@@ -880,7 +880,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			// the commit boundary before translating the typed error into a failover:
 			// once semantic bytes are visible, replay would duplicate user-visible
 			// output and the partial result owns billing/capture even with zero usage.
-			partial := partialStreamUsageResult(c, resp, streamResult, originalModel, mappedModel, startTime, err)
+			partial := partialStreamUsageResult(ctx, c, resp, streamResult, originalModel, mappedModel, startTime, err)
 			var sseErr *sseStreamErrorEventError
 			if errors.As(err, &sseErr) {
 				// 上游 HTTP 200 + SSE 流体内出现 event:error 帧。

@@ -258,7 +258,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				// observed usage/capture and surface a plain visible error instead.
 				resultErr = fmt.Errorf("kiro committed stream failed: %s", sanitizeUpstreamErrorMessage(err.Error()))
 			}
-			partial := partialStreamUsageResult(c, resp, streamResult, originalModel, upstreamModel, startTime, resultErr)
+			partial := partialStreamUsageResult(ctx, c, resp, streamResult, originalModel, upstreamModel, startTime, resultErr)
 			if partial == nil {
 				if errors.As(err, &failoverErr) {
 					// A translated KIRO pipe can fail before semantic output for two

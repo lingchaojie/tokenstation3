@@ -300,7 +300,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		if err != nil {
 			// 流中断时保留已观测到的 usage 与错误一起返回，避免上游已计量的请求
 			// 完全漏记漏计费（issue #5148）。
-			if partial := partialStreamUsageResult(c, resp, streamResult, input.OriginalModel, input.RequestModel, input.StartTime, err); partial != nil {
+			if partial := partialStreamUsageResult(ctx, c, resp, streamResult, input.OriginalModel, input.RequestModel, input.StartTime, err); partial != nil {
 				return partial, err
 			}
 			// Preserve a real HTTP exchange for the final-account terminal sink.
@@ -831,7 +831,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			}
 			cleanupErr := discardPendingEvent()
 			clientDisconnected = true
-			if !semanticOutput {
+			if !semanticOutput && !CaptureMayApplyFor(c, string(account.Platform)) {
 				return nil, errors.Join(
 					preOutputFailover("upstream stream canceled: "+sanitizeStreamError(cancelErr), false, nil),
 					cleanupErr,

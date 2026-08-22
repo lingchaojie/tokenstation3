@@ -105,9 +105,10 @@ func (cw *antigravityClientWriter) markDisconnected() {
 
 // handleStreamReadError 处理上游读取错误的通用逻辑。
 // 返回 (clientDisconnect, handled)：handled=true 表示错误已处理，调用方应返回已收集的 usage。
-func handleStreamReadError(err error, clientDisconnected bool, prefix string) (disconnect bool, handled bool) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		logger.LegacyPrintf("service.antigravity_gateway", "Context canceled during streaming (%s), returning collected usage", prefix)
+func handleStreamReadError(ctx context.Context, err error, clientDisconnected bool, prefix string) (disconnect bool, handled bool) {
+	requestCanceled := ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+	if isClientCausalCancellation(ctx, err, clientDisconnected || requestCanceled) {
+		logger.LegacyPrintf("service.antigravity_gateway", "Client request canceled during streaming (%s), returning collected usage", prefix)
 		return true, true
 	}
 	if clientDisconnected {
@@ -275,7 +276,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 					}
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity gemini stream read failed after an uncommitted terminal event")
 				}
-				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity gemini"); handled {
+				if disconnect, handled := handleStreamReadError(c.Request.Context(), ev.err, cw.Disconnected(), "antigravity gemini"); handled {
 					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
 				}
 				if !staged.committed {
@@ -1127,7 +1128,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 					}
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity claude stream read failed after an uncommitted terminal event")
 				}
-				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity claude"); handled {
+				if disconnect, handled := handleStreamReadError(c.Request.Context(), ev.err, cw.Disconnected(), "antigravity claude"); handled {
 					return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, clientDisconnect: disconnect, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
 				}
 				if !staged.committed {

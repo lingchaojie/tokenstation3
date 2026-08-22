@@ -443,7 +443,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatReadError(
 	if !session.hasMeaningfulData() && !session.writer.Disconnected() {
 		return nil, antigravityCompatEmptyStreamError(resp)
 	}
-	if disconnect, handled := handleStreamReadError(err, session.writer.Disconnected(), prefix); handled {
+	if disconnect, handled := handleStreamReadError(c.Request.Context(), err, session.writer.Disconnected(), prefix); handled {
 		return session.collectResult(disconnect), fmt.Errorf("stream read error: %w", err)
 	}
 	if errors.Is(err, bufio.ErrTooLong) {

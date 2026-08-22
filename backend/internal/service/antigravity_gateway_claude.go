@@ -441,7 +441,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, billingModel, true, startTime, err), err
 			}
-			result := streamErrorForwardResult(c, resp, originalModel, billingModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			result := streamErrorForwardResult(ctx, c, resp, originalModel, billingModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
 			if result != nil {
 				result.CaptureResponseComplete = streamRes.terminalObserved
 			}

@@ -777,8 +777,12 @@ type streamingResult struct {
 //
 // 不变式：UpstreamFailoverError 必须保持 result=nil——failover 重试成功后按成功请求
 // 计费，若同时返回部分 usage 会造成双重计费，此处显式拦截兜底。
-func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult *streamingResult, model, upstreamModel string, startTime time.Time, err error) *ForwardResult {
-	if streamResult == nil || !streamResult.semanticOutput {
+func partialStreamUsageResult(ctx context.Context, c *gin.Context, resp *http.Response, streamResult *streamingResult, model, upstreamModel string, startTime time.Time, err error) *ForwardResult {
+	if streamResult == nil {
+		return nil
+	}
+	clientCancellation := isClientCausalCancellation(ctx, err, streamResult.clientDisconnect)
+	if !streamResult.semanticOutput && !clientCancellation {
 		return nil
 	}
 	var failoverErr *UpstreamFailoverError
@@ -796,9 +800,13 @@ func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult 
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  streamResult.firstTokenMs,
 		ClientDisconnect:              streamResult.clientDisconnect,
-		CaptureTerminalError:          true,
+		CaptureTerminalError:          !clientCancellation,
 		CaptureResponseComplete:       streamResult.responseComplete,
 	})
+}
+
+func isClientCausalCancellation(ctx context.Context, err error, clientDisconnect bool) bool {
+	return clientDisconnect && ctx != nil && errors.Is(ctx.Err(), context.Canceled) && errors.Is(err, context.Canceled)
 }
 
 // anthropicSSEEventHasSemanticOutput reports whether an Anthropic SSE event
@@ -1405,7 +1413,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if cancelErr == nil {
 				cancelErr = context.Canceled
 			}
-			if !semanticOutput {
+			clientDisconnected = true
+			if !semanticOutput && !CaptureMayApplyFor(c, string(account.Platform)) {
 				return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(cancelErr), false)
 			}
 			return streamResult(), fmt.Errorf("stream usage incomplete: %w", cancelErr)

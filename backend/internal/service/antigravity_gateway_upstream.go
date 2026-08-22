@@ -145,7 +145,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, originalModel, true, startTime, streamErr), streamErr
 			}
-			result := streamErrorForwardResult(c, resp, originalModel, originalModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, streamErr)
+			result := streamErrorForwardResult(ctx, c, resp, originalModel, originalModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, streamErr)
 			if result != nil {
 				result.CaptureResponseComplete = streamRes.terminalObserved
 			}
@@ -320,7 +320,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 					}
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream read failed after an uncommitted terminal event")
 				}
-				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity upstream"); handled {
+				if disconnect, handled := handleStreamReadError(c.Request.Context(), ev.err, cw.Disconnected(), "antigravity upstream"); handled {
 					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
 				}
 				if !staged.committed && !cw.Disconnected() {

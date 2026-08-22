@@ -1829,6 +1829,7 @@ func terminalHTTPErrorForwardResult(c *gin.Context, resp *http.Response, model, 
 // typed failover errors keep result=nil, while terminal local/parse failures
 // produce a capture-only UpstreamFailed result.
 func streamErrorForwardResult(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	model string,
@@ -1840,7 +1841,8 @@ func streamErrorForwardResult(
 	semanticOutput bool,
 	err error,
 ) *ForwardResult {
-	if !semanticOutput {
+	clientCancellation := isClientCausalCancellation(ctx, err, clientDisconnect)
+	if !semanticOutput && !clientCancellation {
 		return failedForwardResultForError(c, resp, model, upstreamModel, true, startedAt, err)
 	}
 	finishCaptureResponse(resp)
@@ -1852,7 +1854,7 @@ func streamErrorForwardResult(
 		FirstTokenMs:            firstTokenMs,
 		ClientDisconnect:        clientDisconnect,
 		CaptureResponseComplete: false, // Provider-specific callers overwrite this only after an official terminal event.
-		CaptureTerminalError:    true,
+		CaptureTerminalError:    !clientCancellation,
 	}
 	if usage != nil {
 		result.Usage = *usage

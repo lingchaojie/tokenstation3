@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
@@ -506,6 +507,126 @@ func TestKiroRuntimeClientDisconnectCanceledProviderIsIncomplete(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.ClientDisconnect)
 	require.False(t, result.CaptureResponseComplete)
+}
+
+func TestGatewayForward_KiroClientCausalCancellationCommitsDisconnectCapture(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		withOutput bool
+	}{
+		{name: "before_semantic_output"},
+		{name: "after_semantic_output", withOutput: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			account := newKiroCacheTransactionAccount(633, "CLIENTCANCEL")
+			requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+			require.NoError(t, err)
+			parsed.Group = &Group{Platform: PlatformKiro}
+
+			var providerFrames bytes.Buffer
+			if test.withOutput {
+				_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+					"assistantResponseEvent": map[string]any{"content": "client canceled"},
+				}))
+			}
+			providerBody := newBlockingCaptureBody(providerFrames.Bytes())
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+				Body:       providerBody,
+			}}}
+			transport := &recordingCaptureTransport{}
+			svc := &GatewayService{
+				cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{
+					Enabled: true, MaxBodyBytes: 64 * 1024, MaxHeaderBytes: 1 << 20,
+				}}},
+				httpUpstream:        upstream,
+				capturePool:         newConversationCapturePoolForTransport(transport, func() bool { return true }),
+				kiroCooldownStore:   &stubKiroCooldownStore{},
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+				rateLimitService:    &RateLimitService{},
+			}
+			t.Cleanup(svc.capturePool.Stop)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
+			installDisconnectOnlyCapturePolicy(t, c)
+			if test.withOutput {
+				c.Writer = &cancelOnSemanticWriteCloser{ResponseWriter: c.Writer, cancel: cancel}
+			} else {
+				cancel()
+			}
+
+			result, forwardErr := svc.Forward(ctx, c, account, parsed)
+
+			require.ErrorIs(t, forwardErr, context.Canceled)
+			require.NotNil(t, result)
+			require.True(t, result.ClientDisconnect)
+			require.False(t, result.CaptureTerminalError)
+			require.False(t, result.CaptureResponseComplete)
+			require.True(t, CommitForwardCaptureAttempt(c, PlatformKiro, result))
+			attempts := transport.Attempts()
+			require.Len(t, attempts, 1)
+			require.Equal(t, providerFrames.Bytes(), attempts[0].ResponseBytes())
+			require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
+			finals := attempts[0].Finals()
+			require.Len(t, finals, 1)
+			require.False(t, finals[0].ResponseComplete)
+			require.Empty(t, finals[0].StopReason)
+		})
+	}
+}
+
+func TestGatewayForward_KiroProviderCancellationRemainsTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newKiroCacheTransactionAccount(634, "PROVIDERCANCEL")
+	requestBody := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+	require.NoError(t, err)
+	parsed.Group = &Group{Platform: PlatformKiro}
+	var providerFrames bytes.Buffer
+	_, _ = providerFrames.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "provider canceled"},
+	}))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+		Body:       &bedrockFramesThenError{frames: bytes.NewReader(providerFrames.Bytes()), err: context.Canceled},
+	}}}
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{
+			Enabled: true, MaxBodyBytes: 64 * 1024, MaxHeaderBytes: 1 << 20,
+		}}},
+		httpUpstream:        upstream,
+		capturePool:         newConversationCapturePoolForTransport(transport, func() bool { return true }),
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		rateLimitService:    &RateLimitService{},
+	}
+	t.Cleanup(svc.capturePool.Stop)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+	installDisconnectOnlyCapturePolicy(t, c)
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+	require.Error(t, forwardErr)
+	require.NotNil(t, result)
+	require.False(t, result.ClientDisconnect)
+	require.True(t, result.CaptureTerminalError)
+	require.False(t, result.CaptureResponseComplete)
+	require.False(t, CommitForwardCaptureAttempt(c, PlatformKiro, result))
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, providerFrames.Bytes(), attempts[0].ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureAborted}, attempts[0].TerminalStates())
+	require.Empty(t, attempts[0].Finals())
 }
 
 func TestKiroRuntimeCleanEOFWithoutNativeTerminalIsCaptureIncomplete(t *testing.T) {

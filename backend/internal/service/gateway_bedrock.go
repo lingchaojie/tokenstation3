@@ -140,7 +140,7 @@ func (s *GatewayService) forwardBedrock(
 			if streamResult == nil {
 				return failedForwardResultForError(c, resp, reqModel, mappedModel, true, startTime, err), err
 			}
-			result := streamErrorForwardResult(c, resp, reqModel, mappedModel, startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err)
+			result := streamErrorForwardResult(ctx, c, resp, reqModel, mappedModel, startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err)
 			if result != nil {
 				result.CaptureResponseComplete = streamResult.responseComplete
 			}

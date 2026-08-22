@@ -436,7 +436,7 @@ handleSuccess:
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, forwardedModel, true, startTime, err), err
 			}
-			result := streamErrorForwardResult(c, resp, originalModel, forwardedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			result := streamErrorForwardResult(ctx, c, resp, originalModel, forwardedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
 			if result != nil {
 				result.CaptureResponseComplete = streamRes.terminalObserved
 			}
