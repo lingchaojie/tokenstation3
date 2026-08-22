@@ -1294,6 +1294,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	if ctx != nil {
 		ctxDone = ctx.Done()
 	}
+	var kiroCancellationTimer *time.Timer
+	var kiroCancellationTimeout <-chan time.Time
+	var kiroCancellationErr error
+	defer func() {
+		if kiroCancellationTimer != nil {
+			kiroCancellationTimer.Stop()
+		}
+	}()
 
 	for {
 		select {
@@ -1301,6 +1309,12 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if !ok {
 				providerScanFinished = true
 				pendingEventLines = nil
+				if kiroCancellationErr != nil {
+					if !semanticOutput && !captureAttemptUsableForRequest(c) {
+						return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(kiroCancellationErr), false)
+					}
+					return streamResult(), fmt.Errorf("stream usage incomplete: %w", kiroCancellationErr)
+				}
 				// 上游完成，返回结果
 				return streamResult(), nil
 			}
@@ -1308,7 +1322,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				requestCanceled := ctx != nil && errors.Is(ctx.Err(), context.Canceled)
 				if isClientCausalCancellation(ctx, ev.err, clientDisconnected || requestCanceled) {
 					clientDisconnected = true
-					if !semanticOutput && captureAttemptForRequest(c) == nil {
+					if !semanticOutput && !captureAttemptUsableForRequest(c) {
 						return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(ev.err), false)
 					}
 					return streamResult(), fmt.Errorf("stream usage incomplete: %w", ev.err)
@@ -1422,10 +1436,31 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				cancelErr = context.Canceled
 			}
 			clientDisconnected = true
-			if !semanticOutput && captureAttemptForRequest(c) == nil {
+			if providerNativeCapture {
+				// KIRO translates a context-bound native AWS body through an
+				// io.Pipe. Give the translated pipe its bounded opportunity to
+				// publish CloseWithError before classifying the same cancellation
+				// from the outer context. While this drain is active ctxDone is
+				// disabled, so a buffered pipe/provider error deterministically
+				// owns classification; the existing provider terminal-tail grace
+				// prevents a misbehaving transport from blocking forever.
+				kiroCancellationErr = cancelErr
+				ctxDone = nil
+				intervalCh = nil
+				kiroCancellationTimer = time.NewTimer(providerTerminalTailDrainGrace)
+				kiroCancellationTimeout = kiroCancellationTimer.C
+				continue
+			}
+			if !semanticOutput && !captureAttemptUsableForRequest(c) {
 				return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(cancelErr), false)
 			}
 			return streamResult(), fmt.Errorf("stream usage incomplete: %w", cancelErr)
+
+		case <-kiroCancellationTimeout:
+			if !semanticOutput && !captureAttemptUsableForRequest(c) {
+				return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(kiroCancellationErr), false)
+			}
+			return streamResult(), fmt.Errorf("stream usage incomplete: %w", kiroCancellationErr)
 
 		case <-intervalCh:
 			lastRead := readActivity.LastReadTime()

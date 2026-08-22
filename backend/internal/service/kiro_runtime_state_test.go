@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,44 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type orderedCancellationContext struct {
-	parent context.Context
-	done   chan struct{}
-	cause  chan struct{}
-	mu     sync.Mutex
-	err    error
-	once   sync.Once
-	cancel sync.Once
-}
-
-type orderedCancellationSignalKey struct{}
-
-func newOrderedCancellationContext() *orderedCancellationContext {
-	return &orderedCancellationContext{parent: context.Background(), done: make(chan struct{}), cause: make(chan struct{})}
-}
-
-func (c *orderedCancellationContext) Deadline() (time.Time, bool) { return time.Time{}, false }
-func (c *orderedCancellationContext) Done() <-chan struct{}       { return c.done }
-func (c *orderedCancellationContext) Value(key any) any {
-	if _, ok := key.(orderedCancellationSignalKey); ok {
-		return (<-chan struct{})(c.cause)
-	}
-	return c.parent.Value(key)
-}
-func (c *orderedCancellationContext) Err() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.err
-}
-func (c *orderedCancellationContext) publishCanceledCause() {
-	c.mu.Lock()
-	c.err = context.Canceled
-	c.mu.Unlock()
-	c.cancel.Do(func() { close(c.cause) })
-}
-func (c *orderedCancellationContext) closeDone() {
-	c.once.Do(func() { close(c.done) })
-}
+const contextBoundKiroCancelMarker = "context-bound KIRO provider body canceled"
 
 type contextBoundKiroCancelBody struct {
 	ctx         context.Context
@@ -78,19 +42,15 @@ func (b *contextBoundKiroCancelBody) Read(p []byte) (int, error) {
 		return b.frames.Read(p)
 	}
 	b.readOnce.Do(func() { close(b.readStarted) })
-	canceled, _ := b.ctx.Value(orderedCancellationSignalKey{}).(<-chan struct{})
-	if canceled == nil {
-		canceled = b.ctx.Done()
-	}
 	select {
-	case <-canceled:
+	case <-b.ctx.Done():
 		if err := b.ctx.Err(); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("%s: %w", contextBoundKiroCancelMarker, err)
 		}
-		return 0, context.Canceled
+		return 0, fmt.Errorf("%s: %w", contextBoundKiroCancelMarker, context.Canceled)
 	case <-b.release:
 		if err := b.ctx.Err(); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("%s: %w", contextBoundKiroCancelMarker, err)
 		}
 		return 0, io.ErrClosedPipe
 	}
@@ -799,8 +759,8 @@ func TestGatewayForward_KiroContextBoundCancellationCommitsDisconnectCapture(t *
 				rateLimitService:    &RateLimitService{},
 			}
 			t.Cleanup(svc.capturePool.Stop)
-			ctx := newOrderedCancellationContext()
-			t.Cleanup(ctx.closeDone)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
@@ -832,13 +792,12 @@ func TestGatewayForward_KiroContextBoundCancellationCommitsDisconnectCapture(t *
 			}
 			// The provider body is bound to the real outgoing request context and can
 			// unblock only when that request context is canceled (or during cleanup).
-			ctx.publishCanceledCause()
+			cancel()
 			select {
 			case <-providerBody.release:
 			case <-time.After(time.Second):
-				t.Fatal("KIRO translator did not publish its causal pipe error before outer Done")
+				t.Fatal("KIRO translator did not close its context-bound provider body")
 			}
-			ctx.closeDone()
 
 			var result *ForwardResult
 			var forwardErr error
@@ -849,6 +808,7 @@ func TestGatewayForward_KiroContextBoundCancellationCommitsDisconnectCapture(t *
 				t.Fatal("context-bound KIRO cancellation did not terminate forwarding")
 			}
 			require.ErrorIs(t, forwardErr, context.Canceled)
+			require.ErrorContains(t, forwardErr, contextBoundKiroCancelMarker, "shared reader must classify the translated pipe error, not race to outer ctxDone")
 			require.NotNil(t, result)
 			require.True(t, result.ClientDisconnect)
 			require.False(t, result.CaptureTerminalError)
@@ -890,8 +850,8 @@ func TestGatewayForward_KiroOnlyWebSearchContextBoundCancellationCommitsDisconne
 		rateLimitService:    &RateLimitService{},
 	}
 	t.Cleanup(svc.capturePool.Stop)
-	ctx := newOrderedCancellationContext()
-	t.Cleanup(ctx.closeDone)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
@@ -909,13 +869,12 @@ func TestGatewayForward_KiroOnlyWebSearchContextBoundCancellationCommitsDisconne
 	case <-time.After(time.Second):
 		t.Fatal("KIRO only-WebSearch translator did not block on its context-bound provider body")
 	}
-	ctx.publishCanceledCause()
+	cancel()
 	select {
 	case <-providerBody.release:
 	case <-time.After(time.Second):
-		t.Fatal("KIRO only-WebSearch translator did not publish its causal pipe error before outer Done")
+		t.Fatal("KIRO only-WebSearch translator did not close its context-bound provider body")
 	}
-	ctx.closeDone()
 
 	var result *ForwardResult
 	var forwardErr error
@@ -955,6 +914,15 @@ func TestGatewayForward_KiroPreSemanticCancellationWithoutLiveAttemptPreservesFa
 		{name: "ipc_begin_failed", set: func(svc *GatewayService) {
 			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{beginErr: errors.New("capture IPC unavailable")}, func() bool { return true })
 		}},
+		{name: "request_headers_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true })
+		}},
+		{name: "request_body_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 2}, func() bool { return true })
+		}},
+		{name: "response_headers_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 3}, func() bool { return true })
+		}},
 	} {
 		t.Run(admission.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
@@ -982,8 +950,8 @@ func TestGatewayForward_KiroPreSemanticCancellationWithoutLiveAttemptPreservesFa
 			if svc.capturePool != nil {
 				t.Cleanup(svc.capturePool.Stop)
 			}
-			ctx := newOrderedCancellationContext()
-			t.Cleanup(ctx.closeDone)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
@@ -1001,13 +969,12 @@ func TestGatewayForward_KiroPreSemanticCancellationWithoutLiveAttemptPreservesFa
 			case <-time.After(time.Second):
 				t.Fatal("KIRO translator did not start its provider read")
 			}
-			ctx.publishCanceledCause()
+			cancel()
 			select {
 			case <-providerBody.release:
 			case <-time.After(time.Second):
-				t.Fatal("KIRO translator did not publish its causal pipe error before outer Done")
+				t.Fatal("KIRO translator did not close its context-bound provider body")
 			}
-			ctx.closeDone()
 			result := <-resultCh
 			forwardErr := <-errCh
 
@@ -1036,13 +1003,14 @@ func TestGatewayForward_KiroPostSemanticCancellationWithoutLiveAttemptRemainsPar
 			Enabled: true, MaxBodyBytes: 64 * 1024, MaxHeaderBytes: 1 << 20,
 		}}},
 		httpUpstream:        upstream,
-		capturePool:         nil,
+		capturePool:         newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true }),
 		kiroCooldownStore:   &stubKiroCooldownStore{},
 		tlsFPProfileService: &TLSFingerprintProfileService{},
 		rateLimitService:    &RateLimitService{},
 	}
-	ctx := newOrderedCancellationContext()
-	t.Cleanup(ctx.closeDone)
+	t.Cleanup(svc.capturePool.Stop)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
@@ -1067,13 +1035,12 @@ func TestGatewayForward_KiroPostSemanticCancellationWithoutLiveAttemptRemainsPar
 	case <-time.After(time.Second):
 		t.Fatal("shared reader did not commit KIRO semantic output")
 	}
-	ctx.publishCanceledCause()
+	cancel()
 	select {
 	case <-providerBody.release:
 	case <-time.After(time.Second):
-		t.Fatal("KIRO translator did not publish its causal pipe error before outer Done")
+		t.Fatal("KIRO translator did not close its context-bound provider body")
 	}
-	ctx.closeDone()
 
 	var result *ForwardResult
 	var forwardErr error

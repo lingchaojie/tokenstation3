@@ -174,12 +174,13 @@ func newConversationCapturePoolForRecords(records chan<- *CaptureRecord) *Conver
 }
 
 type recordingCaptureTransport struct {
-	mu       sync.Mutex
-	beginErr error
-	status   model.Status
-	begins   int
-	closed   bool
-	attempts []*recordingCaptureAttempt
+	mu          sync.Mutex
+	beginErr    error
+	failWriteAt int
+	status      model.Status
+	begins      int
+	closed      bool
+	attempts    []*recordingCaptureAttempt
 }
 
 func (t *recordingCaptureTransport) Begin(_ context.Context, begin model.Begin) (protocol.Attempt, error) {
@@ -189,7 +190,7 @@ func (t *recordingCaptureTransport) Begin(_ context.Context, begin model.Begin) 
 	if t.beginErr != nil {
 		return nil, t.beginErr
 	}
-	attempt := &recordingCaptureAttempt{id: begin.CaptureID, begin: begin}
+	attempt := &recordingCaptureAttempt{id: begin.CaptureID, begin: begin, failWriteAt: t.failWriteAt}
 	t.attempts = append(t.attempts, attempt)
 	return attempt, nil
 }
@@ -238,6 +239,7 @@ type recordingCaptureAttempt struct {
 	terminals       []captureTerminalState
 
 	failNextWrite bool
+	failWriteAt   int
 	failCommit    bool
 	writeCalls    int
 }
@@ -267,6 +269,9 @@ func (a *recordingCaptureAttempt) write(dst *[]byte, p []byte) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.writeCalls++
+	if a.failWriteAt > 0 && a.writeCalls == a.failWriteAt {
+		return false
+	}
 	if a.failNextWrite {
 		a.failNextWrite = false
 		return false

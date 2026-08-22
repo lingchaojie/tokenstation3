@@ -220,6 +220,15 @@ func TestGatewayForward_PreSemanticClientCancellationWithoutLiveAttemptPreserves
 		{name: "ipc_begin_failed", set: func(svc *GatewayService) {
 			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{beginErr: errors.New("capture IPC unavailable")}, func() bool { return true })
 		}},
+		{name: "request_headers_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true })
+		}},
+		{name: "request_body_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 2}, func() bool { return true })
+		}},
+		{name: "response_headers_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 3}, func() bool { return true })
+		}},
 	}
 	for _, family := range families {
 		for _, admission := range admissions {
@@ -284,7 +293,8 @@ func TestGatewayForward_PostSemanticClientCancellationWithoutLiveAttemptRemainsP
 				Body:       newBlockingCaptureBody(prefix),
 			}}
 			svc := newForwardPartialUsageServiceForTest(upstream)
-			svc.capturePool = nil
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true })
+			t.Cleanup(svc.capturePool.Stop)
 
 			result, forwardErr := svc.Forward(ctx, c, family.account(), parsed)
 

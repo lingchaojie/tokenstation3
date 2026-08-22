@@ -296,6 +296,11 @@ func captureAttemptForRequest(c *gin.Context) *CaptureAttempt {
 	return slot.attempt
 }
 
+func captureAttemptUsableForRequest(c *gin.Context) bool {
+	attempt := captureAttemptForRequest(c)
+	return attempt != nil && attempt.usable()
+}
+
 func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 	slot := captureAttemptSlotForRequest(c, next != nil)
 	if slot == nil {

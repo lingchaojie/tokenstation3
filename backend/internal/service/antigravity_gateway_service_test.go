@@ -183,6 +183,15 @@ func TestAntigravityForwardGemini_PreSemanticCancellationWithoutLiveAttemptPrese
 		{name: "ipc_begin_failed", set: func(svc *AntigravityGatewayService, _ *config.Config) {
 			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{beginErr: errors.New("capture IPC unavailable")}, func() bool { return true })
 		}},
+		{name: "request_headers_write_failed", set: func(svc *AntigravityGatewayService, _ *config.Config) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true })
+		}},
+		{name: "request_body_write_failed", set: func(svc *AntigravityGatewayService, _ *config.Config) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 2}, func() bool { return true })
+		}},
+		{name: "response_headers_write_failed", set: func(svc *AntigravityGatewayService, _ *config.Config) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 3}, func() bool { return true })
+		}},
 	} {
 		t.Run(admission.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
@@ -255,8 +264,9 @@ func TestAntigravityForwardGemini_PostSemanticCancellationWithoutLiveAttemptRema
 		settingService: NewSettingService(&antigravitySettingRepoStub{}, cfg),
 		tokenProvider:  &AntigravityTokenProvider{},
 		httpUpstream:   upstream,
-		capturePool:    nil,
+		capturePool:    newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true }),
 	}
+	t.Cleanup(svc.capturePool.Stop)
 	account := &Account{
 		ID: 110, Name: "native-gemini-postsemantic-no-attempt", Platform: PlatformAntigravity, Type: AccountTypeOAuth, Status: StatusActive, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "token", "project_id": "project-110", "model_mapping": map[string]any{"gemini-2.5-flash": "gemini-2.5-flash"}},
