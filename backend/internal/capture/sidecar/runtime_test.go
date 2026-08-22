@@ -178,6 +178,9 @@ func TestRetryableUploadTimeoutKeepsLiveWorkerAndDrainsPendingAndLaterRecords(t 
 	require.Eventually(t, func() bool {
 		return uploader.uploadCount() == 1 && runtime.Status().UploadRetries == 1
 	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(clock.deliveryDelaysSnapshot()) == 1
+	}, time.Second, time.Millisecond, "retry checkpoint must be followed by timer registration before advancing the manual clock")
 	require.Equal(t, []time.Duration{minimumRetryDelay}, clock.deliveryDelaysSnapshot())
 	firstAttempts := uploader.batchIDs()
 	require.Len(t, firstAttempts, 1)
@@ -186,14 +189,15 @@ func TestRetryableUploadTimeoutKeepsLiveWorkerAndDrainsPendingAndLaterRecords(t 
 	seedRuntimeRecord(t, store, "queued after timeout")
 	clock.Advance(minimumRetryDelay)
 	require.Eventually(t, func() bool {
-		return uploader.uploadCount() == 3 && store.Snapshot().ReadyRecords == 0
+		return uploader.uploadCount() == 3 &&
+			store.Snapshot().ReadyRecords == 0 &&
+			runtime.Status().CurrentBatchID == ""
 	}, time.Second, time.Millisecond)
 	attempts := uploader.batchIDs()
 	require.Len(t, attempts, 3)
 	require.Equal(t, attempts[0], attempts[1], "retry must preserve the exact pending batch")
 	require.NotEqual(t, attempts[1], attempts[2], "later records must follow the pending batch")
 	require.Empty(t, store.PendingBatches())
-	require.Empty(t, runtime.Status().CurrentBatchID)
 	select {
 	case runErr := <-done:
 		t.Fatalf("live runtime stopped after retryable upload timeout: %v", runErr)
