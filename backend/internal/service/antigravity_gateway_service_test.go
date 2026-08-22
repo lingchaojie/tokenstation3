@@ -2003,6 +2003,7 @@ func TestStreamUpstreamResponse_ClientDisconnectDrainsUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.True(t, result.terminalObserved)
 	require.NotNil(t, result.usage)
 	require.Equal(t, 20, result.usage.OutputTokens)
 }
@@ -2089,6 +2090,7 @@ func TestStreamUpstreamResponse_TimeoutAfterClientDisconnect(t *testing.T) {
 	require.ErrorContains(t, err, "stream data interval timeout")
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.False(t, result.terminalObserved)
 }
 
 func TestStreamUpstreamResponse_ReadErrorAfterClientDisconnectIsTerminalPartial(t *testing.T) {
@@ -2122,6 +2124,7 @@ func TestStreamUpstreamResponse_ReadErrorAfterClientDisconnectIsTerminalPartial(
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.False(t, result.terminalObserved)
 }
 
 // TestHandleGeminiStreamingResponse_ClientDisconnect
@@ -2248,6 +2251,7 @@ func TestAntigravityNativeClientDisconnectDoesNotHideProviderReadError(t *testin
 			result, err := tc.run(svc, c, resp)
 			require.NotNil(t, result)
 			require.True(t, result.clientDisconnect)
+			require.False(t, result.terminalObserved)
 			require.ErrorContains(t, err, "stream read error")
 			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 		})

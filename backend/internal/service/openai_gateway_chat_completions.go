@@ -654,6 +654,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	defer func() { _ = staged.close() }()
 	var stagedWriteErr error
 	providerTerminalObserved := false
+	captureResponseComplete := false
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
@@ -695,6 +696,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			ImageOutputSizes:              openAIResponsesImageResultSizes(imageResults),
 			imageResults:                  append([]openAIResponsesImageResult(nil), imageResults...),
 			ClientDisconnect:              clientDisconnected,
+			CaptureResponseComplete:       captureResponseComplete,
 		}
 		return out
 	}
@@ -939,6 +941,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		if strings.TrimSpace(payload) == "[DONE]" {
+			captureResponseComplete = true
 			return false
 		}
 		return processDataLine(payload)
@@ -969,7 +972,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					}
 					return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 				}
-				if !ok || strings.TrimSpace(frame.Data) == "[DONE]" {
+				if !ok {
+					continue
+				}
+				if strings.TrimSpace(frame.Data) == "[DONE]" {
+					captureResponseComplete = true
 					continue
 				}
 				if processFrame(frame) {
@@ -991,7 +998,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 			} else if complete {
 				hadPendingProviderData = false
-				if strings.TrimSpace(frame.Data) != "[DONE]" && processFrame(frame) {
+				if strings.TrimSpace(frame.Data) == "[DONE]" {
+					captureResponseComplete = true
+				} else if processFrame(frame) {
 					return finalizeStream()
 				}
 			}
@@ -1017,6 +1026,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				continue
 			}
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
+				captureResponseComplete = true
 				if providerTerminalObserved {
 					if openAICompatHasKnownFiniteBody(resp) {
 						continue
@@ -1026,10 +1036,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return missingTerminalErr()
 			}
 			if processFrame(frame) {
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil && openAICompatHasKnownFiniteBody(resp) {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) && openAICompatHasKnownFiniteBody(resp) {
 					continue
 				}
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) {
 					return finishOpenTerminal()
 				}
 				return finalizeStream()
@@ -1053,6 +1063,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 		} else if ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
+				captureResponseComplete = true
 				return missingTerminalErr()
 			}
 			if processFrame(frame) {
@@ -1146,6 +1157,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 				} else if ok {
 					if strings.TrimSpace(frame.Data) == "[DONE]" {
+						captureResponseComplete = true
 						hadPendingProviderData = false
 						if !providerTerminalObserved {
 							return missingTerminalErr()
@@ -1198,6 +1210,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				continue
 			}
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
+				captureResponseComplete = true
 				if providerTerminalObserved {
 					if openAICompatHasKnownFiniteBody(resp) {
 						continue
@@ -1208,10 +1221,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return missingTerminalErr()
 			}
 			if processFrame(frame) {
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil && openAICompatHasKnownFiniteBody(resp) {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) && openAICompatHasKnownFiniteBody(resp) {
 					continue
 				}
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) {
 					armTerminalTail()
 					continue
 				}

@@ -1841,13 +1841,14 @@ func streamErrorForwardResult(
 	}
 	finishCaptureResponse(resp)
 	result := &ForwardResult{
-		Model:                model,
-		UpstreamModel:        upstreamModel,
-		Stream:               true,
-		Duration:             time.Since(startedAt),
-		FirstTokenMs:         firstTokenMs,
-		ClientDisconnect:     clientDisconnect,
-		CaptureTerminalError: true,
+		Model:                   model,
+		UpstreamModel:           upstreamModel,
+		Stream:                  true,
+		Duration:                time.Since(startedAt),
+		FirstTokenMs:            firstTokenMs,
+		ClientDisconnect:        clientDisconnect,
+		CaptureResponseComplete: false, // Provider-specific callers overwrite this only after an official terminal event.
+		CaptureTerminalError:    true,
 	}
 	if usage != nil {
 		result.Usage = *usage

@@ -251,6 +251,7 @@ func TestOpenAIStreamingPassthroughNonRetryableFailedBeforeOutputFlushesAtBounda
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr))
 	require.NotNil(t, result)
+	require.False(t, result.terminalObserved)
 	require.Equal(t, upstream, recorder.Body.String())
 	require.Equal(t, []int{len(upstream)}, writer.flushBodyLengths)
 	require.Equal(t, 6, result.usage.InputTokens)
@@ -269,6 +270,7 @@ func TestOpenAIStreamingPassthroughFailedAfterOutputFlushesAtBoundaryAndKeepsUsa
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr))
 	require.NotNil(t, result)
+	require.False(t, result.terminalObserved)
 	require.Equal(t, upstream, recorder.Body.String())
 	require.Equal(t, []int{len(firstOutput), len(upstream)}, writer.flushBodyLengths)
 	require.Equal(t, 7, result.usage.InputTokens)
@@ -287,6 +289,8 @@ func TestOpenAIStreamingPassthroughClientDisconnectStillDrainsTerminalUsage(t *t
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.True(t, result.terminalObserved)
 	require.Equal(t, firstOutput, recorder.Body.String())
 	require.Equal(t, []int{len(firstOutput)}, writer.flushBodyLengths)
 	require.Equal(t, 1, writer.failedWrites)

@@ -432,6 +432,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	var clientDisconnect bool
+	var captureResponseComplete bool
 	if claudeReq.Stream {
 		// 客户端要求流式，直接透传转换
 		streamRes, err := s.handleClaudeStreamingResponse(c, resp, startTime, originalModel)
@@ -440,11 +441,16 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, billingModel, true, startTime, err), err
 			}
-			return streamErrorForwardResult(c, resp, originalModel, billingModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err), err
+			result := streamErrorForwardResult(c, resp, originalModel, billingModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			if result != nil {
+				result.CaptureResponseComplete = streamRes.terminalObserved
+			}
+			return result, err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
 		clientDisconnect = streamRes.clientDisconnect
+		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		// 客户端要求非流式，收集流式响应后转换返回
 		streamRes, err := s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel)
@@ -468,6 +474,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 	}), nil
 }
 

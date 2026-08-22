@@ -1390,7 +1390,12 @@ func (w *geminiPartialClientWriteErrorWriter) Write(p []byte) (int, error) {
 func TestGeminiStreamingClientDisconnectReturnsCollectedProviderResult(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	providerBody := "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n"
+	providerBody := strings.Join([]string{
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}`,
+		"",
+		`data: {"candidates":[{"index":0,"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":5}}`,
+		"",
+	}, "\n")
 	for _, tc := range []struct {
 		name string
 		run  func(*GeminiMessagesCompatService, *gin.Context, *http.Response) (any, error)
@@ -1422,6 +1427,14 @@ func TestGeminiStreamingClientDisconnectReturnsCollectedProviderResult(t *testin
 			result, err := tc.run(&GeminiMessagesCompatService{}, c, resp)
 			require.NotNil(t, result)
 			require.NoError(t, err)
+			switch typed := result.(type) {
+			case *geminiStreamResult:
+				require.True(t, typed.terminalObserved)
+			case *geminiNativeStreamResult:
+				require.True(t, typed.terminalObserved)
+			default:
+				t.Fatalf("unexpected streaming result type %T", result)
+			}
 		})
 	}
 }

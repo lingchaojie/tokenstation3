@@ -325,6 +325,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	var firstTokenMs *int
 	firstChunk := true
 	clientDisconnected := false
+	sawTerminalEvent := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -335,17 +336,18 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
-			RequestID:        requestID,
-			Usage:            claudeUsageToOpenAIUsage(&usage),
-			Model:            originalModel,
-			BillingModel:     billingModel,
-			UpstreamModel:    upstreamModel,
-			UpstreamEndpoint: "/v1/messages",
-			ReasoningEffort:  reasoningEffort,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: clientDisconnected,
+			RequestID:               requestID,
+			Usage:                   claudeUsageToOpenAIUsage(&usage),
+			Model:                   originalModel,
+			BillingModel:            billingModel,
+			UpstreamModel:           upstreamModel,
+			UpstreamEndpoint:        "/v1/messages",
+			ReasoningEffort:         reasoningEffort,
+			Stream:                  true,
+			Duration:                time.Since(startTime),
+			FirstTokenMs:            firstTokenMs,
+			ClientDisconnect:        clientDisconnected,
+			CaptureResponseComplete: sawTerminalEvent,
 		}
 	}
 
@@ -394,6 +396,9 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	}
 
 	processAnthropicEvent := func(event *apicompat.AnthropicStreamEvent) bool {
+		if event.Type == "message_stop" {
+			sawTerminalEvent = true
+		}
 		if firstChunk {
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())

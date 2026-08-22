@@ -230,17 +230,18 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 
 	scan := s.scanCCStream(ctx, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
 	result := &OpenAIForwardResult{
-		RequestID:        requestID,
-		Usage:            scan.Usage,
-		Model:            originalModel,
-		BillingModel:     billingModel,
-		UpstreamModel:    upstreamModel,
-		ReasoningEffort:  reasoningEffort,
-		ServiceTier:      serviceTier,
-		Stream:           true,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     scan.FirstTokenMs,
-		ClientDisconnect: clientDisconnected,
+		RequestID:               requestID,
+		Usage:                   scan.Usage,
+		Model:                   originalModel,
+		BillingModel:            billingModel,
+		UpstreamModel:           upstreamModel,
+		ReasoningEffort:         reasoningEffort,
+		ServiceTier:             serviceTier,
+		Stream:                  true,
+		Duration:                time.Since(startTime),
+		FirstTokenMs:            scan.FirstTokenMs,
+		ClientDisconnect:        clientDisconnected,
+		CaptureResponseComplete: scan.SawDone,
 	}
 	if scan.Err != nil {
 		var failoverErr *UpstreamFailoverError
@@ -272,6 +273,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		}
 	}
 	result.ClientDisconnect = clientDisconnected
+	result.CaptureResponseComplete = scan.SawDone
 	if !scan.SawDone {
 		logCCStreamMissingDoneSentinel("openai messages chat fallback", requestID)
 	}

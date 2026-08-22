@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 type antigravityCompatStreamAdapter interface {
@@ -107,14 +108,15 @@ type antigravityCompatScanEvent struct {
 }
 
 type antigravityCompatStreamSession struct {
-	processor      *antigravity.StreamingProcessor
-	adapter        antigravityCompatStreamAdapter
-	writer         *antigravityClientWriter
-	usage          *ClaudeUsage
-	pendingEvents  []apicompat.AnthropicStreamEvent
-	firstTokenMs   *int
-	startTime      time.Time
-	meaningfulData bool
+	processor        *antigravity.StreamingProcessor
+	adapter          antigravityCompatStreamAdapter
+	writer           *antigravityClientWriter
+	usage            *ClaudeUsage
+	pendingEvents    []apicompat.AnthropicStreamEvent
+	firstTokenMs     *int
+	startTime        time.Time
+	meaningfulData   bool
+	terminalObserved bool
 }
 
 func newAntigravityCompatStreamSession(
@@ -164,6 +166,7 @@ func (s *antigravityCompatStreamSession) result(clientDisconnect bool) *antigrav
 		firstTokenMs:     s.firstTokenMs,
 		clientDisconnect: clientDisconnect,
 		semanticOutput:   s.meaningfulData,
+		terminalObserved: s.terminalObserved,
 	}
 }
 
@@ -316,6 +319,15 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 			}
 			resetAntigravityCompatTimer(timeoutTimer, timeout)
 			s.observeAntigravityGeminiSSELine(c, event.line)
+			if data, ok := extractOpenAISSEDataLine(event.line); ok {
+				payload := strings.TrimSpace(data)
+				if payload == "[DONE]" {
+					session.terminalObserved = true
+				} else if inner, err := s.unwrapV1InternalResponse([]byte(payload)); err == nil &&
+					strings.TrimSpace(gjson.GetBytes(inner, "candidates.0.finishReason").String()) != "" {
+					session.terminalObserved = true
+				}
+			}
 			session.consume(event.line)
 
 		case <-timeoutCh:

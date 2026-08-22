@@ -14,6 +14,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,9 +117,54 @@ func TestResponsesStreamingFromNativeAnthropic_ClientDisconnectDrainsUsage(t *te
 	require.NoError(t, err, "断开排水至上游自然结束应返回 nil error（usage 走成功路径落账）")
 	require.NotNil(t, res)
 	require.True(t, res.ClientDisconnect)
+	require.True(t, res.CaptureResponseComplete)
 	require.Equal(t, 10, res.Usage.InputTokens, "input_tokens 应来自 message_start")
 	require.Equal(t, 5, res.Usage.OutputTokens,
 		"output_tokens 必须来自排水读到的末尾 message_delta（断开即弃时会是 1）")
+}
+
+func TestOpenAINativeAnthropicClientDisconnectWithoutMessageStopIsIncomplete(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*OpenAIGatewayService, *http.Response, *gin.Context) (*OpenAIForwardResult, error)
+	}{
+		{
+			name: "responses",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleResponsesStreamingFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
+			},
+		},
+		{
+			name: "chat completions",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleCCStreamingFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), true)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			svc := newNativeAnthropicHangTestService(5)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			c.Writer = &failingGinWriter{ResponseWriter: c.Writer, failAfter: 0}
+			providerBody := strings.Replace(miniAnthropicSSEStream(), "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "", 1)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body: &openAIStreamReadThenErrorCloser{
+					reader: strings.NewReader(providerBody),
+					err:    context.Canceled,
+				},
+			}
+
+			result, err := tc.run(svc, resp, c)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.True(t, result.ClientDisconnect)
+			require.False(t, result.CaptureResponseComplete)
+		})
+	}
 }
 
 func TestHandle403_CNProviderHTMLBodySkipsAccountPenalty(t *testing.T) {

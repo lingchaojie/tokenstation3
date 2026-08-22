@@ -1126,16 +1126,24 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	var clientDisconnect bool
+	var captureResponseComplete bool
 	if req.Stream {
 		streamRes, err := s.handleStreamingResponse(c, resp, startTime, originalModel)
 		if err != nil {
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
 			}
-			return streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, false, streamRes.semanticOutput, err), err
+			result := streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			if result != nil {
+				result.CaptureResponseComplete = streamRes.terminalObserved
+			}
+			return result, err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		clientDisconnect = streamRes.clientDisconnect
+		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		if useUpstreamStream {
 			collected, usageObj, err := collectGeminiSSE(resp, true, s.cfg)
@@ -1180,6 +1188,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		Stream:                        req.Stream,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
@@ -1731,6 +1741,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	var clientDisconnect bool
+	var captureResponseComplete bool
 
 	if stream {
 		streamRes, err := s.handleNativeStreamingResponse(c, resp, startTime, isOAuth)
@@ -1738,10 +1750,16 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
 			}
-			return streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, false, streamRes.semanticOutput, err), err
+			result := streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			if result != nil {
+				result.CaptureResponseComplete = streamRes.terminalObserved
+			}
+			return result, err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		clientDisconnect = streamRes.clientDisconnect
+		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		if useUpstreamStream {
 			collected, usageObj, err := collectGeminiSSE(resp, isOAuth, s.cfg)
@@ -1787,6 +1805,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		Stream:                        stream,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
@@ -2216,6 +2236,7 @@ func mapGeminiStatusToClaudeErrorType(status string) string {
 type geminiStreamResult struct {
 	usage            *ClaudeUsage
 	firstTokenMs     *int
+	clientDisconnect bool
 	semanticOutput   bool
 	terminalObserved bool
 }
@@ -2281,6 +2302,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	sawToolUse := false
 	semanticOutput := false
 	commitTerminal := false
+	terminalObserved := false
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
 	writeHeaders := func() {
@@ -2335,6 +2357,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		if payload == "" || payload == "[DONE]" {
 			if payload == "[DONE]" {
 				commitTerminal = true
+				terminalObserved = true
 			}
 			continue
 		}
@@ -2363,6 +2386,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		if fr := extractGeminiFinishReason(geminiResp); fr != "" {
 			finishReason = fr
 			commitTerminal = true
+			terminalObserved = true
 		}
 
 		parts := extractGeminiParts(geminiResp)
@@ -2532,7 +2556,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	if wireWriter.err != nil {
 		var clientWriteErr *stagedConvertedClientWriteError
 		if errors.As(wireWriter.err, &clientWriteErr) {
-			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, clientDisconnect: true, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 		}
 		if !staged.committed {
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini pre-output stage exceeded limit")
@@ -2579,7 +2603,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	})
 	flusher.Flush()
 
-	return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+	return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 }
 
 func writeSSE(w io.Writer, event string, data any) {
@@ -2804,6 +2828,7 @@ func mergeCollectedTextParts(response map[string]any, textParts []string) map[st
 type geminiNativeStreamResult struct {
 	usage            *ClaudeUsage
 	firstTokenMs     *int
+	clientDisconnect bool
 	semanticOutput   bool
 	terminalObserved bool
 }
@@ -2948,6 +2973,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	var firstTokenMs *int
 	semanticOutput := false
 	commitTerminal := false
+	terminalObserved := false
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
 	writeHeaders := func() {
@@ -2994,6 +3020,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 				if payload == "" || payload == "[DONE]" {
 					if payload == "[DONE]" {
 						commitTerminal = true
+						terminalObserved = true
 					}
 					if isOAuth {
 						emit(line + "\n\n")
@@ -3026,6 +3053,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					}
 					if fr := gjson.GetBytes(rawBytes, "candidates.0.finishReason").String(); strings.TrimSpace(fr) != "" {
 						commitTerminal = true
+						terminalObserved = true
 					}
 					observer.ObserveGemini(rawBytes)
 					observeGeminiImageOutputs(c, rawBytes)
@@ -3072,7 +3100,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	if wireWriter.err != nil {
 		var clientWriteErr *stagedConvertedClientWriteError
 		if errors.As(wireWriter.err, &clientWriteErr) {
-			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 		}
 		if !staged.committed {
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini native pre-output stage exceeded limit")
@@ -3084,7 +3112,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 			return nil, err
 		}
 	}
-	return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+	return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 }
 
 // ForwardAIStudioGET forwards a GET request to AI Studio (generativelanguage.googleapis.com) for

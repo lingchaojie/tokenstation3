@@ -28,6 +28,8 @@ import (
 type openaiStreamingResult struct {
 	usage            *OpenAIUsage
 	firstTokenMs     *int
+	clientDisconnect bool
+	terminalObserved bool
 	responseID       string
 	imageCount       int
 	imageOutputSizes []string
@@ -234,6 +236,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	clientDisconnected := false // 客户端断开后继续 drain 上游以收集 usage
 	sawTerminalEvent := false
 	sawFailedEvent := false
+	sawSuccessfulTerminalEvent := false
 	capacityFailoverSuppressedLogged := false
 	failedMessage := ""
 	clientOutputStarted := false
@@ -336,6 +339,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		return &openaiStreamingResult{
 			usage:            usage,
 			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnected,
+			terminalObserved: sawSuccessfulTerminalEvent,
 			responseID:       responseID,
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
@@ -482,6 +487,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			case "response.completed", "response.done":
 				if terminalFailed {
 					sawFailedEvent = true
+				} else {
+					sawSuccessfulTerminalEvent = true
 				}
 			case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 				sawTerminalEvent = true

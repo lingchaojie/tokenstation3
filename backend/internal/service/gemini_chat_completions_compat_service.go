@@ -289,6 +289,8 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	var clientDisconnect bool
+	var captureResponseComplete bool
 	if clientStream {
 		streamRes, err := s.handleChatCompletionsStreamingResponseFromGemini(ctx, c, resp, startTime, originalModel, account.Type == AccountTypeOAuth, includeUsage)
 		if err != nil {
@@ -296,10 +298,16 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
 			}
-			return streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, false, streamRes.semanticOutput, err), err
+			result := streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			if result != nil {
+				result.CaptureResponseComplete = streamRes.terminalObserved
+			}
+			return result, err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		clientDisconnect = streamRes.clientDisconnect
+		captureResponseComplete = streamRes.terminalObserved
 	} else if useUpstreamStream {
 		collected, usageObj, err := collectGeminiSSE(resp, account.Type == AccountTypeOAuth, s.cfg)
 		if err != nil {
@@ -341,18 +349,19 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 	}
 
 	result := &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    mappedModel,
-		Stream:           clientStream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ReasoningEffort:  reasoningEffort,
-		ImageCount:       imageCount,
-		ImageSize:        imageSize,
-		ImageInputSize:   imageInputSize,
-		ClientDisconnect: false,
+		RequestID:               requestID,
+		Usage:                   *usage,
+		Model:                   originalModel,
+		UpstreamModel:           mappedModel,
+		Stream:                  clientStream,
+		Duration:                time.Since(startTime),
+		FirstTokenMs:            firstTokenMs,
+		ReasoningEffort:         reasoningEffort,
+		ImageCount:              imageCount,
+		ImageSize:               imageSize,
+		ImageInputSize:          imageInputSize,
+		ClientDisconnect:        clientDisconnect,
+		CaptureResponseComplete: captureResponseComplete,
 	}
 	finishCapture()
 	return finalizeForwardResult(c, result), nil
@@ -657,7 +666,7 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 			Usage:      apicompat.AnthropicUsage{},
 		},
 	}) {
-		return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs}, nil
+		return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, terminalObserved: terminalObserved}, nil
 	}
 
 	finishReason := ""
@@ -925,7 +934,7 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 		flusher.Flush()
 	}
 
-	return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+	return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 }
 
 func (s *GeminiMessagesCompatService) writeGeminiChatCompletionsMappedError(

@@ -899,6 +899,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var streamFailoverErr error
 	var streamNonFailoverErr error
 	providerTerminalObserved := false
+	captureResponseComplete := false
 
 	readActivity := newProviderBodyReadActivity(resp.Body)
 	scanner := s.newUpstreamSSEScanner(readActivity)
@@ -936,6 +937,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
 			ClientDisconnect:              clientDisconnected,
+			CaptureResponseComplete:       captureResponseComplete,
 		}
 		return out
 	}
@@ -986,6 +988,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		isBareErrorEvent := eventType == "error"
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
 		terminalFailed, _ := openAIResponsesTerminalFailureStatus([]byte(payload), eventType)
+		if (eventType == "response.completed" || eventType == "response.done") && !terminalFailed {
+			captureResponseComplete = true
+		}
 		if isTerminalEvent {
 			providerTerminalObserved = true
 			if event.Response != nil {

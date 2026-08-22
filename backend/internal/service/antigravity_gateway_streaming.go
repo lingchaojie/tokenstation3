@@ -265,7 +265,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, semanticOutput: semanticOutput}, nil
 					}
 				}
-				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 			}
 			if ev.err != nil {
 				if terminalObserved {
@@ -1107,7 +1107,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 						return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, semanticOutput: true}, stagedErr
 					}
 				}
-				return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
+				return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 			}
 			if ev.err != nil {
 				if terminalObserved {

@@ -309,6 +309,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	var imageOutputSizes []string
 	var imageResults []openAIResponsesImageResult
 	var responseErr error
+	var clientDisconnect bool
+	var captureResponseComplete bool
 	if reqStream {
 		stopCompactKeepalive()
 		result, streamErr := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
@@ -329,6 +331,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 		imageResults = result.imageResults
+		clientDisconnect = result.clientDisconnect
+		captureResponseComplete = result.terminalObserved
 	} else {
 		result, err := s.handleNonStreamingResponsePassthrough(ctx, resp, c, reqModel, upstreamPassthroughModel, stopCompactKeepalive)
 		finishOpenAIHTTPCapture(resp)
@@ -371,6 +375,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		CaptureTerminalError:          responseErr != nil,
+		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 		imageResults:                  append([]openAIResponsesImageResult(nil), imageResults...),
 	}
 	if imageCount > 0 {
@@ -988,6 +994,8 @@ func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
 type openaiStreamingResultPassthrough struct {
 	usage            *OpenAIUsage
 	firstTokenMs     *int
+	clientDisconnect bool
+	terminalObserved bool
 	responseID       string
 	imageCount       int
 	imageOutputSizes []string
@@ -1686,6 +1694,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		return &openaiStreamingResultPassthrough{
 			usage:            usage,
 			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnected,
+			terminalObserved: validProviderTerminalObserved,
 			responseID:       responseID,
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
@@ -1938,7 +1948,6 @@ scanLoop:
 			return resultWithUsage(), err
 		}
 	}
-	_ = validProviderTerminalObserved
 	if validProviderTerminalObserved && !sawFailedEvent {
 		s.clearOpenAIProxyStreamDisconnect(account)
 	}
