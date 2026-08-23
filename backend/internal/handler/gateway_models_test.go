@@ -198,6 +198,51 @@ func TestGatewayModels_CursorDisabledOnlySnapshotReturnsNoModels(t *testing.T) {
 	require.Empty(t, modelIDsForTest(got.Data))
 }
 
+func TestGatewayModels_CursorCachedSnapshotIsRemovedWhenAccountBecomesDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(6104)
+	repo := &gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {
+				{
+					ID: 1, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
+					Status: service.StatusActive, Schedulable: true,
+					Extra: map[string]any{"cursor_observed_models": map[string]any{
+						"models": []any{"cached-cursor-model"},
+					}},
+				},
+			},
+		},
+	}
+	h := newGatewayModelsHandlerForTest(repo)
+
+	requestModels := func() []string {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+			Group: &service.Group{ID: groupID, Platform: service.PlatformCursor},
+		})
+		h.Models(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var got gatewayModelsResponseForTest
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+		return modelIDsForTest(got.Data)
+	}
+
+	require.Equal(t, []string{"cached-cursor-model"}, requestModels())
+	repo.byGroup[groupID] = []service.Account{{
+		ID: 1, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
+		Status: service.StatusDisabled, Schedulable: false,
+		Extra: map[string]any{"cursor_observed_models": map[string]any{
+			"models": []any{"cached-cursor-model"},
+		}},
+	}}
+
+	require.Empty(t, requestModels())
+}
+
 func TestGatewayModels_KiroGroupFallsBackToKiroModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -338,13 +338,12 @@ func (s *AccountTestService) testCursorAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, "No Cursor access token available")
 	}
 
-	baseURL, err := s.validateUpstreamBaseURL(account.GetCursorBaseURL())
+	targetURL, err := cursorAvailableModelsURL(account.GetCursorBaseURL(), s.cfg)
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Cursor base URL: %s", err.Error()))
+		return s.sendErrorAndEnd(c, "Invalid Cursor base URL")
 	}
-	targetURL := strings.TrimRight(baseURL, "/") + cursorpkg.EndpointAvailableModels
 	req, err := http.NewRequestWithContext(
-		ctx,
+		WithHTTPUpstreamRedirectsDisabled(ctx),
 		http.MethodPost,
 		targetURL,
 		bytes.NewReader(cursorpkg.EncodeAvailableModelsRequest(false, false)),

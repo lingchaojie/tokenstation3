@@ -17,6 +17,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 )
 
@@ -191,7 +192,7 @@ func (s *CursorObservedModelsService) syncAccount(ctx context.Context, account *
 		return err
 	}
 	req, err := http.NewRequestWithContext(
-		ctx,
+		WithHTTPUpstreamRedirectsDisabled(ctx),
 		http.MethodPost,
 		targetURL,
 		bytes.NewReader(cursorpkg.EncodeAvailableModelsRequest(false, false)),
@@ -227,10 +228,18 @@ func (s *CursorObservedModelsService) syncAccount(ctx context.Context, account *
 
 func cursorAvailableModelsURL(baseURL string, cfg *config.Config) (string, error) {
 	baseURL = strings.TrimSpace(baseURL)
+	parsedBase, err := url.Parse(baseURL)
+	if err != nil || parsedBase == nil || parsedBase.Host == "" || parsedBase.Hostname() == "" ||
+		parsedBase.User != nil || parsedBase.RawQuery != "" || parsedBase.ForceQuery || parsedBase.Fragment != "" ||
+		(!strings.EqualFold(parsedBase.Scheme, "https") && !strings.EqualFold(parsedBase.Scheme, "http")) {
+		return "", errors.New("invalid Cursor AvailableModels base URL")
+	}
+
 	var normalized string
-	var err error
 	if cfg == nil {
-		if strings.TrimRight(baseURL, "/") != cursorpkg.DefaultBaseURL {
+		if !strings.EqualFold(parsedBase.Scheme, "https") ||
+			!strings.EqualFold(parsedBase.Hostname(), "api2.cursor.sh") ||
+			parsedBase.Port() != "" || strings.Trim(parsedBase.Path, "/") != "" {
 			return "", errors.New("invalid Cursor AvailableModels base URL: security config is unavailable for a custom host")
 		}
 		normalized = cursorpkg.DefaultBaseURL
@@ -244,15 +253,15 @@ func cursorAvailableModelsURL(baseURL string, cfg *config.Config) (string, error
 		})
 	}
 	if err != nil {
-		return "", fmt.Errorf("invalid Cursor AvailableModels base URL: %w", err)
+		return "", errors.New("invalid Cursor AvailableModels base URL")
 	}
 	parsed, err := url.Parse(normalized)
-	if err != nil || parsed == nil || parsed.Host == "" || parsed.User != nil ||
+	if err != nil || parsed == nil || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
 		(!strings.EqualFold(parsed.Scheme, "https") && !strings.EqualFold(parsed.Scheme, "http")) {
 		return "", errors.New("invalid Cursor AvailableModels base URL")
 	}
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
+	parsed.RawPath = ""
 	parsed.Path = strings.TrimRight(parsed.Path, "/") + cursorpkg.EndpointAvailableModels
 	return parsed.String(), nil
 }
@@ -264,15 +273,17 @@ func cursorResolvedProxyURL(account *Account, now time.Time) (string, error) {
 	if account.Proxy == nil {
 		return "", errors.New("Cursor account proxy is configured but unresolved")
 	}
+	if *account.ProxyID <= 0 || account.Proxy.ID != *account.ProxyID {
+		return "", errors.New("Cursor account proxy association is invalid")
+	}
 	if !account.Proxy.IsActive() {
 		return "", errors.New("Cursor account proxy is disabled")
 	}
 	if account.Proxy.IsExpired(now) {
 		return "", errors.New("Cursor account proxy is expired")
 	}
-	proxyURL := strings.TrimSpace(account.Proxy.URL())
-	parsed, err := url.Parse(proxyURL)
-	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+	proxyURL, parsed, err := proxyurl.Parse(account.Proxy.URL())
+	if err != nil || parsed == nil {
 		return "", errors.New("Cursor account proxy is invalid")
 	}
 	return proxyURL, nil

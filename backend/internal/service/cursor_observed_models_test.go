@@ -5,12 +5,16 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	gocache "github.com/patrickmn/go-cache"
 	"github.com/stretchr/testify/require"
 )
 
@@ -104,6 +108,60 @@ func TestGatewayCursorDisabledOnlySnapshotIsExcluded(t *testing.T) {
 	require.NotContains(t, svc.GetSchedulablePlatforms(context.Background(), nil), PlatformCursor)
 }
 
+func TestGatewayCursorModelsBypassCacheWhenEligibilityChanges(t *testing.T) {
+	t.Run("Cursor platform", func(t *testing.T) {
+		repo := &cursorObservedModelsRepo{accounts: []Account{{
+			ID: 1, Platform: PlatformCursor, Type: AccountTypeOAuth,
+			Status: StatusActive, Schedulable: true,
+			Extra: cursorObservedExtra("enabled-cursor-model"),
+		}}}
+		svc := &GatewayService{
+			accountRepo: repo, modelsListCache: gocache.New(time.Minute, time.Minute), modelsListCacheTTL: time.Minute,
+		}
+
+		require.Equal(t, []string{"enabled-cursor-model"}, svc.GetAvailableModels(context.Background(), nil, PlatformCursor))
+		repo.replaceAccounts([]Account{{
+			ID: 1, Platform: PlatformCursor, Type: AccountTypeOAuth,
+			Status: StatusDisabled, Schedulable: false,
+			Extra: cursorObservedExtra("enabled-cursor-model"),
+		}})
+
+		require.Empty(t, svc.GetAvailableModels(context.Background(), nil, PlatformCursor))
+	})
+
+	t.Run("aggregate platform", func(t *testing.T) {
+		repo := &cursorObservedModelsRepo{accounts: []Account{
+			{
+				ID: 1, Platform: PlatformCursor, Type: AccountTypeOAuth,
+				Status: StatusActive, Schedulable: true,
+				Extra: cursorObservedExtra("enabled-cursor-model"),
+			},
+			{
+				ID: 2, Platform: PlatformAnthropic,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-model": "claude-upstream"}},
+			},
+		}}
+		svc := &GatewayService{
+			accountRepo: repo, modelsListCache: gocache.New(time.Minute, time.Minute), modelsListCacheTTL: time.Minute,
+		}
+
+		require.Equal(t, []string{"claude-model", "enabled-cursor-model"}, svc.GetAvailableModels(context.Background(), nil, ""))
+		repo.replaceAccounts([]Account{
+			{
+				ID: 1, Platform: PlatformCursor, Type: AccountTypeOAuth,
+				Status: StatusDisabled, Schedulable: false,
+				Extra: cursorObservedExtra("enabled-cursor-model"),
+			},
+			{
+				ID: 2, Platform: PlatformAnthropic,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-model": "claude-upstream"}},
+			},
+		})
+
+		require.Equal(t, []string{"claude-model"}, svc.GetAvailableModels(context.Background(), nil, ""))
+	})
+}
+
 func TestCursorObservedModelsSyncUsesRawUnaryAndPreservesAccountDocuments(t *testing.T) {
 	credentials := map[string]any{"access_token": "client-token", "refresh_token": "refresh-secret"}
 	repo := &cursorObservedModelsRepo{accounts: []Account{{
@@ -161,6 +219,84 @@ func TestCursorObservedModelsSyncConfiguredProxyFailsClosed(t *testing.T) {
 	require.Empty(t, repo.updatedAccountIDs())
 }
 
+func TestCursorObservedModelsSyncRejectsInvalidAssociatedProxyBeforeUpstream(t *testing.T) {
+	now := time.Now()
+	expiredAt := now.Add(-time.Minute)
+	tests := []struct {
+		name    string
+		proxyID int64
+		proxy   *Proxy
+	}{
+		{
+			name: "mismatched identity", proxyID: 9,
+			proxy: &Proxy{ID: 10, Protocol: "http", Host: "proxy.example", Port: 8080, Status: StatusActive},
+		},
+		{
+			name: "disabled", proxyID: 9,
+			proxy: &Proxy{ID: 9, Protocol: "http", Host: "proxy.example", Port: 8080, Status: StatusDisabled},
+		},
+		{
+			name: "expired", proxyID: 9,
+			proxy: &Proxy{ID: 9, Protocol: "http", Host: "proxy.example", Port: 8080, Status: StatusActive, ExpiresAt: &expiredAt},
+		},
+		{
+			name: "unsupported scheme", proxyID: 9,
+			proxy: &Proxy{ID: 9, Protocol: "ftp", Host: "proxy.example", Port: 21, Status: StatusActive},
+		},
+		{
+			name: "missing host", proxyID: 9,
+			proxy: &Proxy{ID: 9, Protocol: "http", Port: 8080, Status: StatusActive},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxyID := tt.proxyID
+			repo := &cursorObservedModelsRepo{accounts: []Account{{
+				ID: 10, Platform: PlatformCursor, Type: AccountTypeOAuth,
+				Status: StatusActive, Schedulable: true, ProxyID: &proxyID, Proxy: tt.proxy,
+				Credentials: map[string]any{"access_token": "client-token"},
+			}}}
+			upstream := &cursorObservedModelsUpstream{responseBody: cursorAvailableModelsResponse("auto")}
+			svc := NewCursorObservedModelsService(repo, nil, upstream, cursorObservedModelsTTL)
+
+			err := svc.runOnce(context.Background())
+			require.ErrorContains(t, err, "proxy")
+			require.Empty(t, upstream.requests())
+			require.Empty(t, repo.updatedAccountIDs())
+		})
+	}
+}
+
+func TestCursorObservedModelsSyncDoesNotFollowAvailableModelsRedirect(t *testing.T) {
+	var redirectedCalls atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectedCalls.Add(1)
+		_, _ = w.Write(cursorAvailableModelsResponse("redirect-injected-model"))
+	}))
+	t.Cleanup(target.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+
+	repo := &cursorObservedModelsRepo{accounts: []Account{{
+		ID: 11, Platform: PlatformCursor, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true,
+		Credentials: map[string]any{"access_token": "client-token", "base_url": redirector.URL},
+	}}}
+	upstream := &cursorRedirectAwareHTTPUpstream{client: &http.Client{}}
+	cfg := &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+		Enabled: false, AllowInsecureHTTP: true,
+	}}}
+	svc := NewCursorObservedModelsService(repo, nil, upstream, cursorObservedModelsTTL, cfg)
+
+	err := svc.runOnce(context.Background())
+	require.ErrorContains(t, err, "HTTP 307")
+	require.Zero(t, redirectedCalls.Load(), "redirect target must never receive the credential-bearing request")
+	require.Empty(t, repo.updatedAccountIDs(), "a redirect response must never publish a snapshot")
+}
+
 func TestCursorObservedModelsSyncRejectsResponseBeyondOneMiB(t *testing.T) {
 	repo := &cursorObservedModelsRepo{accounts: []Account{{
 		ID: 12, Platform: PlatformCursor, Type: AccountTypeOAuth,
@@ -173,6 +309,19 @@ func TestCursorObservedModelsSyncRejectsResponseBeyondOneMiB(t *testing.T) {
 	err := svc.runOnce(context.Background())
 	require.ErrorContains(t, err, "too large")
 	require.Empty(t, repo.updatedAccountIDs())
+}
+
+func TestCursorObservedModelsSyncAcceptsExactlyOneMiBResponse(t *testing.T) {
+	repo := &cursorObservedModelsRepo{accounts: []Account{{
+		ID: 14, Platform: PlatformCursor, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true,
+		Credentials: map[string]any{"access_token": "client-token"},
+	}}}
+	upstream := &cursorObservedModelsUpstream{responseBody: cursorAvailableModelsResponseAtExactOneMiB(t, "auto")}
+	svc := NewCursorObservedModelsService(repo, nil, upstream, cursorObservedModelsTTL)
+
+	require.NoError(t, svc.runOnce(context.Background()))
+	require.Equal(t, []string{"auto"}, CursorObservedModelIDs(repo.account(14).Extra))
 }
 
 func TestCursorObservedModelsSyncWithoutSecurityConfigOnlyUsesOfficialBaseURL(t *testing.T) {
@@ -190,6 +339,53 @@ func TestCursorObservedModelsSyncWithoutSecurityConfigOnlyUsesOfficialBaseURL(t 
 	err := svc.runOnce(context.Background())
 	require.ErrorContains(t, err, "base URL")
 	require.Empty(t, upstream.requests(), "unvalidated custom URLs must not reach the proxy-aware transport")
+}
+
+func TestCursorAvailableModelsURLRejectsAmbiguousOrSensitiveComponentsWithoutLeakingThem(t *testing.T) {
+	cfg := &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+		Enabled: true, UpstreamHosts: []string{"relay.example"}, AllowPrivateHosts: true,
+	}}}
+	tests := []struct {
+		name   string
+		raw    string
+		secret string
+	}{
+		{name: "userinfo", raw: "https://operator:USERINFO_SECRET@relay.example/base", secret: "USERINFO_SECRET"},
+		{name: "query", raw: "https://relay.example/base?token=QUERY_SECRET", secret: "QUERY_SECRET"},
+		{name: "fragment", raw: "https://relay.example/base#FRAGMENT_SECRET", secret: "FRAGMENT_SECRET"},
+		{name: "malformed", raw: "https://[MALFORMED_SECRET", secret: "MALFORMED_SECRET"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := cursorAvailableModelsURL(tt.raw, cfg)
+			require.Error(t, err)
+			require.Empty(t, got)
+			require.NotContains(t, err.Error(), tt.secret)
+			require.NotContains(t, err.Error(), tt.raw)
+		})
+	}
+}
+
+func TestCursorAvailableModelsURLUsesOfficialFallbackOrConfiguredAllowlist(t *testing.T) {
+	official, err := cursorAvailableModelsURL(cursorpkg.DefaultBaseURL+"/", nil)
+	require.NoError(t, err)
+	require.Equal(t, cursorpkg.DefaultBaseURL+cursorpkg.EndpointAvailableModels, official)
+
+	_, err = cursorAvailableModelsURL("https://relay.example/base", nil)
+	require.Error(t, err)
+
+	cfg := &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+		Enabled: true, UpstreamHosts: []string{"relay.example"}, AllowPrivateHosts: true,
+	}}}
+	allowed, err := cursorAvailableModelsURL("https://relay.example/base/", cfg)
+	require.NoError(t, err)
+	require.Equal(t, "https://relay.example/base"+cursorpkg.EndpointAvailableModels, allowed)
+
+	blocked, err := cursorAvailableModelsURL("https://blocked.example/base", cfg)
+	require.Error(t, err)
+	require.Empty(t, blocked)
+	require.NotContains(t, err.Error(), "blocked.example")
 }
 
 func TestCursorObservedModelsServiceStopCancelsInFlightSync(t *testing.T) {
@@ -245,6 +441,25 @@ func cursorAvailableModelsResponse(ids ...string) []byte {
 		response.WriteBytes(2, model.Bytes())
 	}
 	return response.Bytes()
+}
+
+func cursorAvailableModelsResponseAtExactOneMiB(t *testing.T, id string) []byte {
+	t.Helper()
+	const exactOneMiB = 1 << 20
+	base := cursorAvailableModelsResponse(id)
+	for paddingLength := exactOneMiB - len(base); paddingLength >= exactOneMiB-len(base)-16; paddingLength-- {
+		var padding cursorpkg.Writer
+		padding.WriteBytes(100, make([]byte, paddingLength))
+		body := append(append([]byte(nil), base...), padding.Bytes()...)
+		if len(body) == exactOneMiB {
+			models, err := cursorpkg.ParseAvailableModelsResponse(body)
+			require.NoError(t, err)
+			require.Equal(t, id, models[0].Name)
+			return body
+		}
+	}
+	t.Fatal("failed to construct an exact 1 MiB parseable AvailableModels response")
+	return nil
 }
 
 type cursorObservedModelsRepo struct {
@@ -311,6 +526,12 @@ func (r *cursorObservedModelsRepo) updatedAccountIDs() []int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]int64(nil), r.updated...)
+}
+
+func (r *cursorObservedModelsRepo) replaceAccounts(accounts []Account) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.accounts = cloneCursorObservedAccounts(accounts)
 }
 
 func cloneCursorObservedAccounts(accounts []Account) []Account {
@@ -395,4 +616,22 @@ func (u *cursorObservedModelsUpstream) sawCancellation() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.canceled
+}
+
+type cursorRedirectAwareHTTPUpstream struct {
+	client *http.Client
+}
+
+func (u *cursorRedirectAwareHTTPUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	client := *u.client
+	if HTTPUpstreamRedirectsDisabled(req.Context()) {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	return client.Do(req)
+}
+
+func (u *cursorRedirectAwareHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
 }

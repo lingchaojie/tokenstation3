@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,6 +69,72 @@ func TestCursorAccountTestRejectsAvailableModelsBeyondOneMiB(t *testing.T) {
 	err := h.service.TestAccountConnection(h.context, h.account.ID, "", "", "")
 	require.ErrorContains(t, err, "too large")
 	require.Nil(t, CursorObservedModelIDs(h.repo.account.Extra))
+}
+
+func TestCursorAccountTestAcceptsExactlyOneMiBAvailableModelsResponse(t *testing.T) {
+	h := newCursorAccountTestHarness(t, "client-token", cursorAvailableModelsResponseAtExactOneMiB(t, "auto"))
+
+	require.NoError(t, h.service.TestAccountConnection(h.context, h.account.ID, "", "", ""))
+	require.Equal(t, []string{"auto"}, CursorObservedModelIDs(h.repo.account.Extra))
+}
+
+func TestCursorAccountTestWithoutSecurityConfigAllowsOfficialAvailableModels(t *testing.T) {
+	h := newCursorAccountTestHarness(t, "client-token", cursorAvailableModelsResponse("auto"))
+	h.service.cfg = nil
+
+	require.NoError(t, h.service.TestAccountConnection(h.context, h.account.ID, "", "", ""))
+	require.Len(t, h.upstream.requests(), 1)
+	require.Equal(t, cursorpkg.EndpointAvailableModels, h.upstream.requests()[0].path)
+}
+
+func TestCursorAccountTestRejectsAmbiguousBaseURLWithoutLeakingSecrets(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		secret  string
+	}{
+		{name: "userinfo", baseURL: "https://operator:USERINFO_SECRET@api2.cursor.sh/base", secret: "USERINFO_SECRET"},
+		{name: "query", baseURL: "https://api2.cursor.sh/base?token=QUERY_SECRET", secret: "QUERY_SECRET"},
+		{name: "fragment", baseURL: "https://api2.cursor.sh/base#FRAGMENT_SECRET", secret: "FRAGMENT_SECRET"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newCursorAccountTestHarness(t, "client-token", cursorAvailableModelsResponse("redirect-injected-model"))
+			h.repo.setBaseURL(tt.baseURL)
+
+			err := h.service.TestAccountConnection(h.context, h.account.ID, "", "", "")
+			require.Error(t, err)
+			require.Empty(t, h.upstream.requests())
+			require.Nil(t, CursorObservedModelIDs(h.repo.account.Extra))
+			require.NotContains(t, err.Error(), tt.secret)
+			require.NotContains(t, h.recorder.Body.String(), tt.secret)
+			require.NotContains(t, h.recorder.Body.String(), tt.baseURL)
+		})
+	}
+}
+
+func TestCursorAccountTestDoesNotFollowAvailableModelsRedirect(t *testing.T) {
+	var redirectedCalls atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectedCalls.Add(1)
+		_, _ = w.Write(cursorAvailableModelsResponse("redirect-injected-model"))
+	}))
+	t.Cleanup(target.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+
+	h := newCursorAccountTestHarness(t, "client-token", nil)
+	h.repo.setBaseURL(redirector.URL)
+	h.service.cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	h.service.httpUpstream = &cursorRedirectAwareHTTPUpstream{client: &http.Client{}}
+
+	err := h.service.TestAccountConnection(h.context, h.account.ID, "", "", "")
+	require.ErrorContains(t, err, "HTTP 307")
+	require.Zero(t, redirectedCalls.Load(), "redirect target must never receive the credential-bearing request")
+	require.Nil(t, CursorObservedModelIDs(h.repo.account.Extra), "a redirect response must never publish a snapshot")
 }
 
 func TestCursorAccountTestDoesNotExposeUpstreamErrorBody(t *testing.T) {
@@ -156,6 +223,15 @@ func (r *cursorAccountTestRepo) UpdateExtra(_ context.Context, id int64, updates
 		r.account.Extra[key] = value
 	}
 	return nil
+}
+
+func (r *cursorAccountTestRepo) setBaseURL(baseURL string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.account.Credentials == nil {
+		r.account.Credentials = make(map[string]any)
+	}
+	r.account.Credentials["base_url"] = baseURL
 }
 
 func cloneCursorAccountTestAccount(account *Account) *Account {
