@@ -307,7 +307,7 @@ func (h *CursorOAuthHandler) createCursorAccountFromToken(ctx context.Context, r
 	name := cursorSSOImportAccountName(req.Name, info, index, total)
 	account, err := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
 		Name: name, Notes: req.Notes, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
-		Credentials: cursorSSOImportCredentials(h.cursorOAuthService.BuildAccountCredentials(info), req.Credentials), Extra: cloneGrokSSOMap(req.Extra), ProxyID: req.ProxyID,
+		Credentials: cursorSSOImportCredentials(h.cursorOAuthService.BuildAccountCredentials(info), req.Credentials), Extra: sanitizeCursorImportMap(req.Extra), ProxyID: req.ProxyID,
 		Concurrency: req.Concurrency, LoadFactor: req.LoadFactor, Priority: req.Priority, RateMultiplier: req.RateMultiplier, GroupIDs: append([]int64(nil), req.GroupIDs...), ExpiresAt: req.ExpiresAt, AutoPauseOnExpired: req.AutoPauseOnExpired,
 	})
 	if err != nil {
@@ -321,7 +321,9 @@ func cursorSSOImportCredentials(built, requested map[string]any) map[string]any 
 	operator := make(map[string]any)
 	for key, value := range requested {
 		if _, ok := allowed[key]; ok && !service.IsSensitiveCredentialKey(key) {
-			operator[key] = value
+			if sanitized, keep := sanitizeCursorImportValue(value); keep {
+				operator[key] = sanitized
+			}
 		}
 	}
 	credentials := service.MergeCredentials(operator, built)
@@ -334,6 +336,71 @@ func cursorSSOImportCredentials(built, requested map[string]any) map[string]any 
 		credentials["base_url"] = strings.TrimSpace(baseURL)
 	}
 	return service.SanitizeStoredCredentials(service.PlatformCursor, credentials)
+}
+
+// sanitizeCursorImportMap keeps non-secret operator metadata while recursively
+// removing credential-bearing map entries before either persistence or DTO
+// conversion. JSON request values are maps/lists, but the type switch also
+// covers common programmatic map shapes used by callers and tests.
+func sanitizeCursorImportMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	sanitized, _ := sanitizeCursorImportValue(input)
+	result, _ := sanitized.(map[string]any)
+	return result
+}
+
+func sanitizeCursorImportValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if cursorImportSensitiveOperatorKey(key) {
+				continue
+			}
+			if sanitized, keep := sanitizeCursorImportValue(item); keep {
+				result[key] = sanitized
+			}
+		}
+		return result, true
+	case map[string]string:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if !cursorImportSensitiveOperatorKey(key) {
+				result[key] = item
+			}
+		}
+		return result, true
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			if sanitized, keep := sanitizeCursorImportValue(item); keep {
+				result = append(result, sanitized)
+			}
+		}
+		return result, true
+	case []map[string]any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			if sanitized, keep := sanitizeCursorImportValue(item); keep {
+				result = append(result, sanitized)
+			}
+		}
+		return result, true
+	default:
+		return value, true
+	}
+}
+
+func cursorImportSensitiveOperatorKey(key string) bool {
+	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(key)))
+	switch normalized {
+	case "authorization", "proxyauthorization", "cookie", "setcookie", "xapikey", "apikey", "accesstoken", "refreshtoken", "websessiontoken", "password", "ssotoken", "token", "secret", "clientsecret":
+		return true
+	default:
+		return service.IsSensitiveCredentialKey(key)
+	}
 }
 
 func normalizeCursorImportTokens(tokens []string, single string) []string {
@@ -373,12 +440,9 @@ func cursorSSOImportAccountName(base string, info *service.CursorTokenInfo, inde
 }
 
 func cursorImportErrorMessage(err error) string {
-	status := infraerrors.FromError(err)
-	if status == nil {
-		return "credential import failed"
-	}
-	if status.Reason != "" {
-		return status.Reason + ": " + status.Message
-	}
-	return status.Message
+	// Provider and persistence errors may include a copied upstream body or a
+	// supplied credential. Bulk responses are audit-visible, so their contract
+	// is intentionally fixed rather than conditionally exposing status details.
+	_ = err
+	return "credential import failed"
 }
