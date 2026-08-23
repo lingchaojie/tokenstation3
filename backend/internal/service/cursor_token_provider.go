@@ -310,12 +310,18 @@ func cursorForceRefreshCacheKey(cacheKey string) string {
 }
 
 func cursorTokenFingerprint(token string) string {
-	token, _ = cursorpkg.ParseToken(token)
-	token = strings.TrimSpace(token)
-	if token == "" {
+	raw := strings.TrimSpace(token)
+	if raw == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(token))
+	parsed, _ := cursorpkg.ParseToken(raw)
+	if parsed = strings.TrimSpace(parsed); parsed != "" {
+		raw = parsed
+	}
+	// ParseToken has no error result. A non-empty wrapper such as "uid::"
+	// parses to an empty bearer; retain the raw value so rejection fails closed
+	// instead of silently omitting its marker.
+	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
 
