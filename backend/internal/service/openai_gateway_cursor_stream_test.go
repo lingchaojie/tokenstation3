@@ -192,6 +192,32 @@ func TestConsumeCursorAgentEventsNormalizesToolIdentityIndependentOfEventOrder(t
 	}
 }
 
+func TestConsumeCursorAgentEventsReservesGeneratedLookingIDBeforeSuppressingEmptyName(t *testing.T) {
+	var deltas []cursorDelta
+	outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			ID: "call_cursor_0", Name: "   ", Arguments: `{}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			Name: "valid_after_suppressed", Arguments: `{"value":1}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+	), time.Now(), 0, func(delta cursorDelta) error {
+		deltas = append(deltas, delta)
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, outcome.providerTerminal)
+	require.Len(t, outcome.toolCalls, 1)
+	require.Equal(t, "call_cursor_1", outcome.toolCalls[0].ID,
+		"a suppressed upstream object still reserves its genuine ID")
+	require.Equal(t, "valid_after_suppressed", outcome.toolCalls[0].Function.Name)
+	require.Len(t, deltas, 1)
+	require.Equal(t, "call_cursor_1", deltas[0].toolID)
+	require.Equal(t, "valid_after_suppressed", deltas[0].toolName)
+}
+
 func TestConsumeCursorAgentEventsFlushesAcceptedToolsAtEveryTerminalBoundary(t *testing.T) {
 	upstreamErr := errors.New("upstream failed")
 	tests := []struct {
@@ -296,6 +322,42 @@ func TestConsumeCursorAgentEventsDoesNotEmitBufferedToolsAfterDownstreamError(t 
 	require.Len(t, outcome.toolCalls, 1, "accepted tools remain in the partial outcome")
 	require.NotEmpty(t, outcome.toolCalls[0].ID)
 	require.False(t, outcome.providerTerminal)
+}
+
+func TestConsumeCursorAgentEventsStopsPendingToolFlushAfterCallbackFailure(t *testing.T) {
+	writeErr := errors.New("client disconnected during tool flush")
+	var deltas []cursorDelta
+	outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			Name: "first_pending", Arguments: `{"order":1}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			Name: "second_pending", Arguments: `{"order":2}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+	), time.Now(), 0, func(delta cursorDelta) error {
+		deltas = append(deltas, delta)
+		return writeErr
+	})
+
+	require.ErrorIs(t, err, writeErr)
+	require.Len(t, deltas, 1, "a terminal callback failure must stop the remaining flush")
+	require.Equal(t, cursorDeltaToolCall, deltas[0].kind)
+	require.Equal(t, 0, deltas[0].toolIndex)
+	require.Equal(t, "call_cursor_0", deltas[0].toolID)
+	require.Equal(t, "first_pending", deltas[0].toolName)
+
+	require.True(t, outcome.providerTerminal)
+	require.Equal(t, "tool_calls", outcome.finishReason)
+	require.Len(t, outcome.toolCalls, 2, "all accepted tools stay normalized in the partial outcome")
+	require.Equal(t, "call_cursor_0", outcome.toolCalls[0].ID)
+	require.NotNil(t, outcome.toolCalls[0].Index)
+	require.Equal(t, 0, *outcome.toolCalls[0].Index)
+	require.Equal(t, "first_pending", outcome.toolCalls[0].Function.Name)
+	require.Equal(t, "call_cursor_1", outcome.toolCalls[1].ID)
+	require.NotNil(t, outcome.toolCalls[1].Index)
+	require.Equal(t, 1, *outcome.toolCalls[1].Index)
+	require.Equal(t, "second_pending", outcome.toolCalls[1].Function.Name)
 }
 
 func TestConsumeCursorAgentEventsConcurrentTurnsDoNotShareToolIndexes(t *testing.T) {
