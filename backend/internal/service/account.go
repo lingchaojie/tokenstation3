@@ -1707,7 +1707,11 @@ func (a *Account) GetCursorAccessToken() string {
 	if !a.IsCursor() {
 		return ""
 	}
-	return a.GetCredential("access_token")
+	accessToken := a.GetCredential("access_token")
+	if cursorpkg.IsUserAPIKey(accessToken) {
+		return ""
+	}
+	return accessToken
 }
 
 func (a *Account) GetCursorRefreshToken() string {

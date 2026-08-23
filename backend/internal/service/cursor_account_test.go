@@ -147,6 +147,12 @@ func (r *cursorAccountValidationRepo) ListShadowsByParent(context.Context, int64
 	return nil, nil
 }
 
+func (r *cursorAccountValidationRepo) CreateWithAccountGroups(_ context.Context, account *Account, _ []AccountGroup) error {
+	r.writes++
+	r.account = account
+	return nil
+}
+
 func TestCursorAccountCreateAndUpdateRejectAPIKeyBeforeWrite(t *testing.T) {
 	t.Run("admin create", func(t *testing.T) {
 		repo := &cursorAccountValidationRepo{}
@@ -172,6 +178,66 @@ func TestCursorAccountCreateAndUpdateRejectAPIKeyBeforeWrite(t *testing.T) {
 		requireCursorAPIKeyAccountError(t, err)
 		require.Zero(t, repo.writes)
 		require.Equal(t, AccountTypeOAuth, repo.account.Type)
+	})
+}
+
+func TestDuplicateRejectsCursorAPIKeyAccountBeforeWrite(t *testing.T) {
+	repo := &cursorAccountValidationRepo{account: &Account{
+		ID: 77, Name: "legacy-cursor-api-key", Platform: PlatformCursor, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "crsr_legacy"},
+	}}
+
+	duplicate, err := (&adminServiceImpl{accountRepo: repo, accountDuplicateRepo: repo}).DuplicateAccount(
+		context.Background(), 77, "admin:1", "",
+	)
+
+	require.Nil(t, duplicate)
+	requireCursorAPIKeyAccountError(t, err)
+	require.Zero(t, repo.writes)
+}
+
+func TestMisplacedCursorAPIKeyCannotBecomeAccessBearer(t *testing.T) {
+	direct := &Account{Platform: PlatformCursor, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": " crsr_misplaced "}}
+	require.Empty(t, direct.GetCursorAccessToken())
+
+	assertNormalized := func(t *testing.T, account *Account) {
+		t.Helper()
+		require.NotNil(t, account)
+		require.NotContains(t, account.Credentials, "access_token")
+		require.Equal(t, "crsr_misplaced", account.Credentials["api_key"])
+		require.Empty(t, account.GetCursorAccessToken())
+		require.Equal(t, "crsr_misplaced", account.GetCursorAPIKey())
+	}
+
+	t.Run("admin create", func(t *testing.T) {
+		repo := &cursorAccountValidationRepo{}
+		account, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
+			Platform: PlatformCursor, Type: AccountTypeOAuth, SkipDefaultGroupBind: true,
+			Credentials: map[string]any{"access_token": " crsr_misplaced "},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, repo.writes)
+		assertNormalized(t, account)
+	})
+
+	t.Run("account service create", func(t *testing.T) {
+		repo := &cursorAccountValidationRepo{}
+		account, err := NewAccountService(repo, nil).Create(context.Background(), CreateAccountRequest{
+			Platform: PlatformCursor, Type: AccountTypeOAuth,
+			Credentials: map[string]any{"access_token": " crsr_misplaced "},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, repo.writes)
+		assertNormalized(t, account)
+	})
+
+	t.Run("explicit api key wins normalization", func(t *testing.T) {
+		credentials := SanitizeStoredCredentials(PlatformCursor, map[string]any{
+			"access_token": "crsr_misplaced",
+			"api_key":      "crsr_explicit",
+		})
+		require.NotContains(t, credentials, "access_token")
+		require.Equal(t, "crsr_explicit", credentials["api_key"])
 	})
 }
 
