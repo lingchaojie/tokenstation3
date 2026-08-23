@@ -59,6 +59,17 @@ func TestFrameReaderRejectsGzipExpansionOver64MiB(t *testing.T) {
 	require.Contains(t, err.Error(), "exceeds max")
 }
 
+func TestFrameReaderAcceptsGzipPayloadAt64MiB(t *testing.T) {
+	payload := make([]byte, maxDecompressedFrameSize)
+	compressed := gzipFixture(t, payload)
+	require.Less(t, len(compressed), maxFrameSize)
+
+	frame, err := NewFrameReader(bytes.NewReader(rawFrame(0x01, compressed))).Next()
+	require.NoError(t, err)
+	require.True(t, frame.Compressed)
+	require.Equal(t, payload, frame.Payload)
+}
+
 func TestFrameReaderRejectsTruncatedPayload(t *testing.T) {
 	_, err := NewFrameReader(bytes.NewReader([]byte{0x00, 0x00, 0x00, 0x00, 0x02, 'x'})).Next()
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
