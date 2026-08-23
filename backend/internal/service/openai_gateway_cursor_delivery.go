@@ -39,6 +39,13 @@ func writeCursorDeliveryBytes(c *gin.Context, payload []byte) (int, error) {
 	return n, err
 }
 
+// WriteCursorTerminalDeliveryBytes lets the handler deliver its final
+// protocol-native Cursor error through the same successful-byte capture sink
+// as ordinary Cursor JSON/SSE output.
+func WriteCursorTerminalDeliveryBytes(c *gin.Context, payload []byte) (int, error) {
+	return writeCursorDeliveryBytes(c, payload)
+}
+
 func writeCursorChatValidationError(c *gin.Context, message string) {
 	encodedMessage, err := json.Marshal(message)
 	if err != nil {

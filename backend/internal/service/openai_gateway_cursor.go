@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -267,6 +268,7 @@ func consumeCursorAgentEvents(
 	outcome := cursorChatOutcome{finishReason: "stop"}
 	var contentBuilder, reasoningBuilder strings.Builder
 	toolIndexByID := make(map[string]int)
+	nextSyntheticToolID := 0
 	spentTokens := 0
 	limited := maxOutputTokens > 0
 
@@ -353,15 +355,29 @@ func consumeCursorAgentEvents(
 			if event.ToolCall == nil {
 				continue
 			}
-			callID := strings.TrimSpace(event.ToolCall.ID)
-			if callID != "" {
-				if _, duplicate := toolIndexByID[callID]; duplicate {
+			toolName := strings.TrimSpace(event.ToolCall.Name)
+			if toolName == "" {
+				continue
+			}
+			callID := event.ToolCall.ID
+			callKey := strings.TrimSpace(callID)
+			if callKey != "" {
+				if _, duplicate := toolIndexByID[callKey]; duplicate {
 					continue
+				}
+			} else {
+				for {
+					callID = fmt.Sprintf("call_cursor_%d", nextSyntheticToolID)
+					nextSyntheticToolID++
+					if _, collision := toolIndexByID[callID]; !collision {
+						callKey = callID
+						break
+					}
 				}
 			}
 			if limited {
 				remaining := maxOutputTokens - spentTokens
-				toolCost := estimateTokensForText(event.ToolCall.Name + event.ToolCall.Arguments)
+				toolCost := estimateTokensForText(toolName + event.ToolCall.Arguments)
 				if remaining <= 0 || toolCost > remaining {
 					return truncate()
 				}
@@ -369,17 +385,15 @@ func consumeCursorAgentEvents(
 			}
 			markFirstToken()
 			index := len(outcome.toolCalls)
-			if callID != "" {
-				toolIndexByID[callID] = index
-			}
+			toolIndexByID[callKey] = index
 			outcome.toolCalls = append(outcome.toolCalls, apicompat.ChatToolCall{
-				Index: intPtr(index), ID: event.ToolCall.ID, Type: "function",
-				Function: apicompat.ChatFunctionCall{Name: event.ToolCall.Name, Arguments: event.ToolCall.Arguments},
+				Index: intPtr(index), ID: callID, Type: "function",
+				Function: apicompat.ChatFunctionCall{Name: toolName, Arguments: event.ToolCall.Arguments},
 			})
 			outcome.finishReason = "tool_calls"
 			if err := emit(cursorDelta{
-				kind: cursorDeltaToolCall, toolIndex: index, toolID: event.ToolCall.ID,
-				toolName: event.ToolCall.Name, toolArguments: event.ToolCall.Arguments,
+				kind: cursorDeltaToolCall, toolIndex: index, toolID: callID,
+				toolName: toolName, toolArguments: event.ToolCall.Arguments,
 			}); err != nil {
 				return finish(err)
 			}

@@ -147,6 +147,36 @@ func TestConsumeCursorAgentEventsParallelToolIndexesAreStable(t *testing.T) {
 	require.Equal(t, 1, deltas[1].toolIndex)
 }
 
+func TestConsumeCursorAgentEventsNormalizesToolIdentityBeforeStorageAndDelta(t *testing.T) {
+	var deltas []cursorDelta
+	outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			ID: "call_cursor_0", Name: "preserved", Arguments: `{}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			Name: "synthesized", Arguments: `{"value":1}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			ID: "call_empty_name", Name: "   ", Arguments: `{}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+	), time.Now(), 0, func(delta cursorDelta) error {
+		deltas = append(deltas, delta)
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.Len(t, outcome.toolCalls, 2, "an empty public tool name must be suppressed")
+	require.Len(t, deltas, 2)
+	require.Equal(t, "call_cursor_0", outcome.toolCalls[0].ID, "nonempty upstream IDs remain authoritative")
+	require.Equal(t, outcome.toolCalls[0].ID, deltas[0].toolID)
+	require.NotEmpty(t, outcome.toolCalls[1].ID)
+	require.NotEqual(t, outcome.toolCalls[0].ID, outcome.toolCalls[1].ID,
+		"a synthesized-looking upstream ID must not collide with a generated ID")
+	require.Equal(t, outcome.toolCalls[1].ID, deltas[1].toolID,
+		"normalization must happen once before buffered storage and streaming emission")
+}
+
 func TestConsumeCursorAgentEventsConcurrentTurnsDoNotShareToolIndexes(t *testing.T) {
 	const turns = 32
 	var wg sync.WaitGroup

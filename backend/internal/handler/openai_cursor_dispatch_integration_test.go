@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -122,10 +123,107 @@ func TestCursorDispatchHandlerAttemptLifecycleAndFailover(t *testing.T) {
 	}
 }
 
+func TestCursorTerminalErrorCaptureStoresExactCallerProtocolDelivery(t *testing.T) {
+	protocols := []struct {
+		name   string
+		path   string
+		body   string
+		handle func(*OpenAIGatewayHandler, *gin.Context)
+	}{
+		{
+			name: "chat_completions_buffered", path: "/openai/v1/chat/completions",
+			body:   `{"model":"auto","messages":[{"role":"user","content":"terminal chat"}],"stream":false}`,
+			handle: func(handler *OpenAIGatewayHandler, c *gin.Context) { handler.ChatCompletions(c) },
+		},
+		{
+			name: "chat_completions_streaming", path: "/openai/v1/chat/completions",
+			body:   `{"model":"auto","messages":[{"role":"user","content":"terminal chat"}],"stream":true}`,
+			handle: func(handler *OpenAIGatewayHandler, c *gin.Context) { handler.ChatCompletions(c) },
+		},
+		{
+			name: "responses_buffered", path: "/openai/v1/responses",
+			body:   `{"model":"auto","input":"terminal responses","stream":false}`,
+			handle: func(handler *OpenAIGatewayHandler, c *gin.Context) { handler.Responses(c) },
+		},
+		{
+			name: "responses_streaming", path: "/openai/v1/responses",
+			body:   `{"model":"auto","input":"terminal responses","stream":true}`,
+			handle: func(handler *OpenAIGatewayHandler, c *gin.Context) { handler.Responses(c) },
+		},
+		{
+			name: "messages_buffered", path: "/openai/v1/messages",
+			body:   `{"model":"auto","max_tokens":64,"messages":[{"role":"user","content":"terminal messages"}],"stream":false}`,
+			handle: func(handler *OpenAIGatewayHandler, c *gin.Context) { handler.Messages(c) },
+		},
+		{
+			name: "messages_streaming", path: "/openai/v1/messages",
+			body:   `{"model":"auto","max_tokens":64,"messages":[{"role":"user","content":"terminal messages"}],"stream":true}`,
+			handle: func(handler *OpenAIGatewayHandler, c *gin.Context) { handler.Messages(c) },
+		},
+	}
+	provenance := []struct {
+		name               string
+		wantUpstreamStatus int
+		open               func(*testing.T, cursorpkg.AgentStreamOptions) (*cursorpkg.AgentStream, error)
+	}{
+		{
+			name: "real_non_2xx_agent_response", wantUpstreamStatus: http.StatusForbidden,
+			open: func(t *testing.T, options cursorpkg.AgentStreamOptions) (*cursorpkg.AgentStream, error) {
+				return cursorDispatchAgentHTTPResponse(t, options, http.StatusForbidden,
+					[]byte(`{"error":{"code":"permission_denied","message":"update required"}}`))
+			},
+		},
+		{
+			name: "http_200_connect_error_trailer", wantUpstreamStatus: http.StatusOK,
+			open: func(t *testing.T, options cursorpkg.AgentStreamOptions) (*cursorpkg.AgentStream, error) {
+				return cursorDispatchAgentStream(t, options,
+					cursorDispatchTrailerFrame(`{"error":{"code":"permission_denied","message":"update required"}}`)), nil
+			},
+		},
+	}
+
+	for _, protocol := range protocols {
+		for _, source := range provenance {
+			t.Run(protocol.name+"/"+source.name, func(t *testing.T) {
+				run := runCursorDispatchHandlerRequest(t, protocol.path, protocol.body, func(t *testing.T, _ int, options cursorpkg.AgentStreamOptions) (*cursorpkg.AgentStream, error) {
+					return source.open(t, options)
+				}, protocol.handle)
+
+				require.Equal(t, []string{"token-a"}, run.opened)
+				require.Equal(t, []string{"commit"}, run.terminals)
+				require.Equal(t, http.StatusBadGateway, run.recorder.Code)
+				require.NotEmpty(t, run.recorder.Body.Bytes())
+				require.Len(t, run.records, 1)
+
+				record := run.records[0]
+				require.Equal(t, service.PlatformCursor, record.Platform)
+				require.Equal(t, source.wantUpstreamStatus, record.HTTPStatus)
+				require.Equal(t, []byte(protocol.body), record.RawRequest)
+				require.Equal(t, run.recorder.Body.Bytes(), record.RawResponse,
+					"the typed Cursor attempt must own the protocol-native terminal bytes before commit")
+				require.NotContains(t, string(record.RawResponse), "connect-protocol-version")
+				require.NotContains(t, string(record.RawResponse), "exec_stream_close")
+				require.NotContains(t, string(record.RawResponse), "connect_proto")
+			})
+		}
+	}
+}
+
 func runCursorDispatchHandler(
 	t *testing.T,
 	body string,
 	open func(*testing.T, int, cursorpkg.AgentStreamOptions) (*cursorpkg.AgentStream, error),
+) cursorDispatchHandlerRun {
+	return runCursorDispatchHandlerRequest(t, "/openai/v1/chat/completions", body, open,
+		func(handler *OpenAIGatewayHandler, c *gin.Context) { handler.ChatCompletions(c) })
+}
+
+func runCursorDispatchHandlerRequest(
+	t *testing.T,
+	path string,
+	body string,
+	open func(*testing.T, int, cursorpkg.AgentStreamOptions) (*cursorpkg.AgentStream, error),
+	handle func(*OpenAIGatewayHandler, *gin.Context),
 ) cursorDispatchHandlerRun {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -183,7 +281,7 @@ func runCursorDispatchHandler(
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	requestContext := service.WithOpenAICompatiblePlatform(context.Background(), service.PlatformCursor)
-	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(body)).WithContext(requestContext)
+	c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)).WithContext(requestContext)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID: 9513, GroupID: &groupID,
@@ -192,7 +290,7 @@ func runCursorDispatchHandler(
 	})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 9514})
 
-	h.ChatCompletions(c)
+	handle(h, c)
 
 	openedMu.Lock()
 	openedCopy := append([]string(nil), opened...)
@@ -207,6 +305,18 @@ func runCursorDispatchHandler(
 
 func cursorDispatchAgentStream(t *testing.T, options cursorpkg.AgentStreamOptions, providerBody []byte) *cursorpkg.AgentStream {
 	t.Helper()
+	stream, err := cursorDispatchAgentHTTPResponse(t, options, http.StatusOK, providerBody)
+	require.NoError(t, err)
+	return stream
+}
+
+func cursorDispatchAgentHTTPResponse(
+	t *testing.T,
+	options cursorpkg.AgentStreamOptions,
+	status int,
+	providerBody []byte,
+) (*cursorpkg.AgentStream, error) {
+	t.Helper()
 	drained := make(chan struct{})
 	client := &http.Client{Transport: cursorDispatchRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		go func() {
@@ -214,8 +324,8 @@ func cursorDispatchAgentStream(t *testing.T, options cursorpkg.AgentStreamOption
 			close(drained)
 		}()
 		return &http.Response{
-			StatusCode: http.StatusOK,
-			Status:     "200 OK",
+			StatusCode: status,
+			Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
 			Proto:      "HTTP/2.0",
 			ProtoMajor: 2,
 			Header:     http.Header{"X-Request-Id": {"cursor-handler-local"}},
@@ -233,7 +343,6 @@ func cursorDispatchAgentStream(t *testing.T, options cursorpkg.AgentStreamOption
 		HeartbeatInterval: time.Hour,
 		AllowHTTP1:        true,
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		select {
 		case <-drained:
@@ -241,7 +350,7 @@ func cursorDispatchAgentStream(t *testing.T, options cursorpkg.AgentStreamOption
 			t.Error("local Cursor handler request writer did not stop")
 		}
 	})
-	return stream
+	return stream, err
 }
 
 func cursorDispatchTextFrame(text string) []byte {

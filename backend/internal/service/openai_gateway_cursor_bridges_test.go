@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -395,6 +396,166 @@ func cursorBridgeEvents() []cursorpkg.AgentEvent {
 
 func cursorBridgeStream(events ...cursorpkg.AgentEvent) cursorChatEventStream {
 	return cursorChatTestStreamWithHeader(events...)
+}
+
+func cursorToolIdentityEvents() []cursorpkg.AgentEvent {
+	return []cursorpkg.AgentEvent{
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved", Arguments: `{}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved", Arguments: `{}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized", Arguments: `{"value":1}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_empty_name", Name: "   ", Arguments: `{}`}},
+		{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+	}
+}
+
+func TestCursorToolIdentityIsStableAcrossAllCallerProtocolsAndModes(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol string
+		stream   bool
+		path     string
+	}{
+		{name: "chat_buffered", protocol: "chat", path: "/v1/chat/completions"},
+		{name: "chat_streaming", protocol: "chat", stream: true, path: "/v1/chat/completions"},
+		{name: "responses_buffered", protocol: "responses", path: "/v1/responses"},
+		{name: "responses_streaming", protocol: "responses", stream: true, path: "/v1/responses"},
+		{name: "messages_buffered", protocol: "messages", path: "/v1/messages"},
+		{name: "messages_streaming", protocol: "messages", stream: true, path: "/v1/messages"},
+	}
+
+	generatedID := ""
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c, recorder := cursorProtocolTestContext(t, test.path)
+			service := &OpenAIGatewayService{}
+			meta := cursorChatTestMeta(test.stream, false)
+			stream := cursorBridgeStream(cursorToolIdentityEvents()...)
+
+			var err error
+			switch test.protocol {
+			case "chat":
+				if test.stream {
+					_, err = service.streamCursorChatCompletions(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now())
+				} else {
+					_, err = service.bufferCursorChatCompletions(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now())
+				}
+			case "responses":
+				if test.stream {
+					_, err = service.streamCursorResponses(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now(), nil, false, nil)
+				} else {
+					_, err = service.bufferCursorResponses(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now(), nil, false, nil)
+				}
+			case "messages":
+				if test.stream {
+					_, err = service.streamCursorAnthropic(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now())
+				} else {
+					_, err = service.bufferCursorAnthropic(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now())
+				}
+			}
+			require.NoError(t, err)
+
+			calls := cursorPublicToolCallsFromDelivery(t, test.protocol, test.stream, recorder.Body.Bytes())
+			require.Equal(t, "call_cursor_0", calls["preserved"], "nonempty upstream IDs must be preserved and deduplicated")
+			require.NotContains(t, calls, "", "empty tool names must not reach public protocol objects")
+			require.NotContains(t, calls, "   ", "whitespace-only tool names must not reach public protocol objects")
+			require.Len(t, calls, 2)
+			require.NotEmpty(t, calls["synthesized"])
+			require.NotEqual(t, calls["preserved"], calls["synthesized"])
+			if generatedID == "" {
+				generatedID = calls["synthesized"]
+			} else {
+				require.Equal(t, generatedID, calls["synthesized"],
+					"identical Cursor events must have one shared normalized ID in every delivery bridge")
+			}
+		})
+	}
+}
+
+func cursorPublicToolCallsFromDelivery(t *testing.T, protocol string, stream bool, body []byte) map[string]string {
+	t.Helper()
+	calls := make(map[string]string)
+	add := func(id, name string) {
+		require.NotEmpty(t, id, "public tool IDs are required")
+		require.NotEmpty(t, strings.TrimSpace(name), "public tool names are required")
+		if existing, ok := calls[name]; ok {
+			require.Equal(t, existing, id, "one tool lifecycle must retain one ID")
+			return
+		}
+		calls[name] = id
+	}
+
+	switch protocol {
+	case "chat":
+		if !stream {
+			var response apicompat.ChatCompletionsResponse
+			require.NoError(t, json.Unmarshal(body, &response))
+			require.NotEmpty(t, response.Choices)
+			for _, call := range response.Choices[0].Message.ToolCalls {
+				add(call.ID, call.Function.Name)
+			}
+			break
+		}
+		for _, chunk := range decodeCursorChatSSEChunks(t, string(body)) {
+			for _, choice := range chunk.Choices {
+				for _, call := range choice.Delta.ToolCalls {
+					add(call.ID, call.Function.Name)
+				}
+			}
+		}
+	case "responses":
+		if !stream {
+			var response apicompat.ResponsesResponse
+			require.NoError(t, json.Unmarshal(body, &response))
+			for _, output := range response.Output {
+				if output.Type == "function_call" {
+					add(output.CallID, output.Name)
+				}
+			}
+			break
+		}
+		for _, payload := range cursorSSEDataPayloads(body) {
+			var event apicompat.ResponsesStreamEvent
+			require.NoError(t, json.Unmarshal(payload, &event))
+			if event.Item != nil && event.Item.Type == "function_call" {
+				add(event.Item.CallID, event.Item.Name)
+			}
+		}
+	case "messages":
+		if !stream {
+			var response apicompat.AnthropicResponse
+			require.NoError(t, json.Unmarshal(body, &response))
+			for _, block := range response.Content {
+				if block.Type == "tool_use" {
+					add(block.ID, block.Name)
+				}
+			}
+			break
+		}
+		for _, payload := range cursorSSEDataPayloads(body) {
+			var event apicompat.AnthropicStreamEvent
+			require.NoError(t, json.Unmarshal(payload, &event))
+			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
+				add(event.ContentBlock.ID, event.ContentBlock.Name)
+			}
+		}
+	}
+	return calls
+}
+
+func cursorSSEDataPayloads(body []byte) [][]byte {
+	var payloads [][]byte
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads
 }
 
 // Removing either DEV request converter, or bypassing buildCursorAgentRunParams

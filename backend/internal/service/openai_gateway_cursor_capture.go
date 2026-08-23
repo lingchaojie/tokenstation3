@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const cursorDeliveryCaptureContextKey = "cursor_delivery_capture_active"
+
 // beginCursorDeliveryCapture establishes Cursor's caller-protocol capture
 // boundary. It deliberately snapshots the inbound JSON and never the Connect
 // request synthesized for Cursor's Agent endpoint.
@@ -22,6 +24,7 @@ func (s *OpenAIGatewayService) beginCursorDeliveryCapture(
 	if c == nil || c.Request == nil || account == nil {
 		return
 	}
+	c.Set(cursorDeliveryCaptureContextKey, false)
 
 	// Every valid Cursor forwarding attempt takes typed ownership before any
 	// policy or admission guard. A retry therefore retires its predecessor and
@@ -59,9 +62,22 @@ func (s *OpenAIGatewayService) beginCursorDeliveryCapture(
 	}
 	attempt.headerLimit = s.cfg.Gateway.Capture.MaxHeaderBytes
 	replaceCaptureAttemptForRequest(c, attempt)
+	c.Set(cursorDeliveryCaptureContextKey, true)
 	setCaptureAttemptStreamGeometry(c, attempt, stream, true)
 	attempt.WriteRequestHeaders(captureHeaderBytes(c.Request.Header, attempt.headerLimit))
 	attempt.WriteRequest(body)
+}
+
+// CursorDeliveryCaptureActive reports whether the current Cursor request owns
+// an admitted typed attempt. Handler-generated terminal bytes use the same
+// successful-write sink as normal Cursor delivery only while this is true.
+func CursorDeliveryCaptureActive(c *gin.Context) bool {
+	if c == nil || captureAttemptForRequest(c) == nil {
+		return false
+	}
+	value, ok := c.Get(cursorDeliveryCaptureContextKey)
+	active, valid := value.(bool)
+	return ok && valid && active
 }
 
 func markCursorDeliveryResponse(c *gin.Context) {
