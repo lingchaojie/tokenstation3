@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -24,6 +25,7 @@ type cursorChatMeta struct {
 	billingModel    string
 	upstreamModel   string
 	stream          bool
+	includeUsage    bool
 	maxOutputTokens int
 }
 
@@ -61,6 +63,47 @@ type cursorAgentStreamOpener func(
 	cursorpkg.AgentRunParams,
 	cursorpkg.AgentStreamOptions,
 ) (*cursorpkg.AgentStream, error)
+
+func (s *OpenAIGatewayService) forwardCursorChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	defaultMappedModel string,
+) (*OpenAIForwardResult, error) {
+	startTime := time.Now()
+	var chatReq apicompat.ChatCompletionsRequest
+	if err := json.Unmarshal(body, &chatReq); err != nil {
+		writeCursorChatValidationError(c, "Failed to parse request body")
+		return nil, errors.New("cursor: invalid chat completions request")
+	}
+	if strings.TrimSpace(chatReq.Model) == "" {
+		writeCursorChatValidationError(c, "model is required")
+		return nil, errors.New("cursor: chat completions model is required")
+	}
+
+	meta := s.resolveCursorChatMeta(account, chatReq.Model, defaultMappedModel, chatReq.Stream)
+	meta.includeUsage = chatReq.StreamOptions != nil && chatReq.StreamOptions.IncludeUsage
+	meta.maxOutputTokens = cursorRequestOutputLimit(&chatReq)
+	params, input, err := buildCursorAgentRun(account, meta.upstreamModel, &chatReq)
+	if err != nil {
+		writeCursorChatValidationError(c, "Invalid Chat Completions request")
+		return nil, errors.New("cursor: invalid chat completions request")
+	}
+
+	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, meta.stream)
+	stream, err := s.openCursorAgentStream(upstreamCtx, c, account, params)
+	releaseUpstreamCtx()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stream.Close() }()
+
+	if meta.stream {
+		return s.streamCursorChatCompletions(c, account, stream, meta, input, startTime)
+	}
+	return s.bufferCursorChatCompletions(c, account, stream, meta, input, startTime)
+}
 
 func (s *OpenAIGatewayService) resolveCursorChatMeta(account *Account, requestedModel, defaultMappedModel string, stream bool) cursorChatMeta {
 	billingModel := resolveOpenAIForwardModel(account, requestedModel, defaultMappedModel)
