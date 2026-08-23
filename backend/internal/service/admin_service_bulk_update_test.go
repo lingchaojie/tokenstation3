@@ -30,6 +30,7 @@ type accountRepoStubForBulkUpdate struct {
 	getByIDsAccounts    []*Account
 	getByIDsErr         error
 	getByIDsCalled      bool
+	getByIDsCalls       int
 	getByIDsIDs         []int64
 	getByIDAccounts     map[int64]*Account
 	getByIDErrByID      map[int64]error
@@ -95,6 +96,7 @@ func (s *accountRepoStubForBulkUpdate) BindGroups(_ context.Context, accountID i
 
 func (s *accountRepoStubForBulkUpdate) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
 	s.getByIDsCalled = true
+	s.getByIDsCalls++
 	s.getByIDsIDs = append([]int64{}, ids...)
 	if s.getByIDsErr != nil {
 		return nil, s.getByIDsErr
@@ -561,4 +563,169 @@ func TestAdminServiceBulkUpdateAccounts_ValidatesFilterResolvedOpenAITargets(t *
 	requireApplicationErrorReason(t, err, "OPENAI_BULK_TARGET_INVALID")
 	require.Equal(t, []int64{7}, repo.getByIDsIDs)
 	require.Zero(t, repo.bulkUpdateCalls)
+}
+
+func TestAdminServiceBulkUpdateAccounts_RejectsEveryInvalidCursorActivationBeforeWrite(t *testing.T) {
+	activationCases := []struct {
+		name  string
+		apply func(*BulkUpdateAccountsInput)
+	}{
+		{name: "schedulable true", apply: func(input *BulkUpdateAccountsInput) {
+			schedulable := true
+			input.Schedulable = &schedulable
+		}},
+		{name: "active status", apply: func(input *BulkUpdateAccountsInput) {
+			input.Status = StatusActive
+		}},
+	}
+	targetCases := []struct {
+		name  string
+		apply func(*accountRepoStubForBulkUpdate, *BulkUpdateAccountsInput, int64)
+	}{
+		{name: "explicit IDs", apply: func(_ *accountRepoStubForBulkUpdate, input *BulkUpdateAccountsInput, accountID int64) {
+			input.AccountIDs = []int64{accountID}
+		}},
+		{name: "filter resolved", apply: func(repo *accountRepoStubForBulkUpdate, input *BulkUpdateAccountsInput, accountID int64) {
+			repo.listData = []Account{{ID: accountID}}
+			repo.listResult = &pagination.PaginationResult{Total: 1}
+			input.Filters = &BulkUpdateAccountFilters{Platform: PlatformCursor}
+		}},
+	}
+
+	for _, accountType := range cursorDisallowedAccountTypes {
+		for _, targetCase := range targetCases {
+			for _, activationCase := range activationCases {
+				t.Run(accountType+"/"+targetCase.name+"/"+activationCase.name, func(t *testing.T) {
+					const accountID int64 = 91
+					repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{
+						ID: accountID, Platform: PlatformCursor, Type: accountType,
+					}}}
+					input := &BulkUpdateAccountsInput{}
+					targetCase.apply(repo, input, accountID)
+					activationCase.apply(input)
+
+					result, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), input)
+
+					require.Nil(t, result)
+					requireCursorOAuthOnlyAccountError(t, err)
+					require.Equal(t, 1, repo.getByIDsCalls)
+					require.Equal(t, []int64{accountID}, repo.getByIDsIDs)
+					require.Zero(t, repo.bulkUpdateCalls, "repository mutation/outbox path must not run")
+					require.Empty(t, repo.bindGroupsCalls)
+				})
+			}
+		}
+	}
+}
+
+func TestAdminServiceBulkUpdateAccounts_RejectsMixedCursorActivationAtomically(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{
+		{ID: 92, Platform: PlatformCursor, Type: AccountTypeOAuth},
+		{ID: 93, Platform: PlatformCursor, Type: AccountTypeAPIKey},
+	}}
+
+	result, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{92, 93},
+		Status:     StatusActive,
+	})
+
+	require.Nil(t, result)
+	requireCursorOAuthOnlyAccountError(t, err)
+	require.Equal(t, 1, repo.getByIDsCalls)
+	require.Zero(t, repo.bulkUpdateCalls, "no valid target may be updated when another target is invalid")
+	require.Empty(t, repo.bindGroupsCalls)
+}
+
+func TestAdminServiceBulkUpdateAccounts_CursorActivationPreservesValidTargetBehavior(t *testing.T) {
+	accounts := []*Account{{ID: 94, Platform: PlatformCursor, Type: AccountTypeOAuth}}
+	for index, accountType := range append(cursorDisallowedAccountTypes, AccountTypeOAuth) {
+		accounts = append(accounts, &Account{
+			ID: int64(95 + index), Platform: PlatformGrok, Type: accountType,
+		})
+	}
+	activationCases := []struct {
+		name  string
+		apply func(*BulkUpdateAccountsInput)
+	}{
+		{name: "schedulable true", apply: func(input *BulkUpdateAccountsInput) {
+			schedulable := true
+			input.Schedulable = &schedulable
+		}},
+		{name: "active status", apply: func(input *BulkUpdateAccountsInput) {
+			input.Status = StatusActive
+		}},
+	}
+
+	for _, account := range accounts {
+		for _, activationCase := range activationCases {
+			t.Run(account.Platform+"/"+account.Type+"/"+activationCase.name, func(t *testing.T) {
+				repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{account}}
+				input := &BulkUpdateAccountsInput{AccountIDs: []int64{account.ID}}
+				activationCase.apply(input)
+
+				result, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), input)
+
+				require.NoError(t, err)
+				require.Equal(t, 1, result.Success)
+				require.Equal(t, 1, repo.getByIDsCalls)
+				require.Equal(t, 1, repo.bulkUpdateCalls)
+			})
+		}
+	}
+}
+
+func TestAdminServiceBulkUpdateAccounts_AllowsInvalidCursorQuarantineWithoutPreload(t *testing.T) {
+	quarantineCases := []struct {
+		name  string
+		apply func(*BulkUpdateAccountsInput)
+	}{
+		{name: "schedulable false", apply: func(input *BulkUpdateAccountsInput) {
+			schedulable := false
+			input.Schedulable = &schedulable
+		}},
+		{name: "disabled status", apply: func(input *BulkUpdateAccountsInput) {
+			input.Status = StatusDisabled
+		}},
+		{name: "error status", apply: func(input *BulkUpdateAccountsInput) {
+			input.Status = StatusError
+		}},
+	}
+
+	for _, accountType := range cursorDisallowedAccountTypes {
+		for _, quarantineCase := range quarantineCases {
+			t.Run(accountType+"/"+quarantineCase.name, func(t *testing.T) {
+				repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{
+					ID: 101, Platform: PlatformCursor, Type: accountType,
+				}}}
+				input := &BulkUpdateAccountsInput{AccountIDs: []int64{101}}
+				quarantineCase.apply(input)
+
+				result, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), input)
+
+				require.NoError(t, err)
+				require.Equal(t, 1, result.Success)
+				require.Zero(t, repo.getByIDsCalls, "quarantine-only bulk updates must keep the no-preload path")
+				require.Equal(t, 1, repo.bulkUpdateCalls)
+			})
+		}
+	}
+}
+
+func TestAdminServiceBulkUpdateAccounts_ReusesExistingPreloadForCursorActivation(t *testing.T) {
+	rateMultiplier := 1.25
+	schedulable := true
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{
+		ID: 102, Platform: PlatformCursor, Type: AccountTypeOAuth,
+	}}}
+
+	result, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:     []int64{102},
+		RateMultiplier: &rateMultiplier,
+		Schedulable:    &schedulable,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 1, repo.getByIDsCalls, "activation validation must reuse the guard preload")
+	require.Equal(t, 1, repo.bulkUpdateCalls)
 }
