@@ -4348,6 +4348,8 @@ interface OAuthFlowExposed {
   oauthLoginOption: string
   ssoCookie: string
   inputMethod: AuthInputMethod
+  clearRefreshToken: () => void
+  clearSSOInput: () => void
   reset: () => void
 }
 
@@ -4703,6 +4705,8 @@ const grokOAuthCustomBaseUrlEnabled = ref(false)
 const grokOAuthBaseUrl = ref('')
 const cursorOAuthCustomBaseUrlEnabled = ref(false)
 const cursorOAuthBaseUrl = ref('')
+let cursorRefreshBatchRunning = false
+let cursorObservedRequestGeneration = 0
 
 // Grok OAuth 三条创建路径（授权码/RT 批量/SSO 批量）共用的前置校验。
 // 授权码路径必须在兑换 code 之前调用，避免校验失败时白白消耗一次性授权码。
@@ -5201,6 +5205,9 @@ const canExchangeCode = computed(() => {
   if (form.platform === 'grok') {
     return authCode.trim() && grokOAuth.sessionId.value && !grokOAuth.loading.value
   }
+  if (form.platform === 'cursor') {
+    return authCode.trim() && cursorOAuth.sessionId.value && !cursorOAuth.loading.value
+  }
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
 })
 
@@ -5271,6 +5278,7 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
+    const cursorRequestGeneration = ++cursorObservedRequestGeneration
     // Reset base URL based on platform
     apiKeyBaseUrl.value =
       (newPlatform === 'openai')
@@ -5323,9 +5331,16 @@ watch(
     }
     if (newPlatform === 'cursor') {
       modelRestrictionMode.value = 'whitelist'
+      allowedModels.value = registerCursorObservedModels([])
       adminAPI.accounts.list(1, 100, { platform: 'cursor' })
-        .then((response) => { allowedModels.value = registerCursorObservedModels(response.items) })
-        .catch(() => { allowedModels.value = [...getModelsByPlatform('cursor')] })
+        .then((response) => {
+          if (cursorRequestGeneration !== cursorObservedRequestGeneration || form.platform !== 'cursor') return
+          allowedModels.value = registerCursorObservedModels(response.items)
+        })
+        .catch(() => {
+          if (cursorRequestGeneration !== cursorObservedRequestGeneration || form.platform !== 'cursor') return
+          allowedModels.value = [...getModelsByPlatform('cursor')]
+        })
     }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
@@ -6652,16 +6667,87 @@ const handleCursorGenerateUrlAndPoll = async () => {
 }
 
 const handleCursorValidateRT = async (refreshTokenInput: string) => {
+  if (cursorRefreshBatchRunning) return
   if (!validateCursorBaseUrl()) return
   const tokens = refreshTokenInput.split('\n').map((token) => token.trim()).filter(Boolean)
-  for (const token of tokens) {
-    const tokenInfo = await cursorOAuth.validateRefreshToken(token, form.proxy_id)
-    if (!tokenInfo) continue
-    await createAccountAndFinish('cursor', 'oauth', buildCursorCreateCredentials(tokenInfo), cursorOAuth.buildExtraInfo(tokenInfo))
+  if (!tokens.length) return
+
+  const settings = {
+    name: form.name,
+    notes: form.notes,
+    proxy_id: form.proxy_id,
+    concurrency: form.concurrency,
+    load_factor: form.load_factor ?? undefined,
+    priority: form.priority,
+    rate_multiplier: form.rate_multiplier,
+    group_ids: [...form.group_ids],
+    expires_at: form.expires_at,
+    auto_pause_on_expired: autoPauseOnExpired.value,
+  }
+  const credentialSettings: Record<string, unknown> = {}
+  if (cursorOAuthCustomBaseUrlEnabled.value && isCustomCursorBaseUrl(cursorOAuthBaseUrl.value)) {
+    credentialSettings.base_url = cursorOAuthBaseUrl.value.trim()
+  }
+  const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+  if (modelMapping) credentialSettings.model_mapping = modelMapping
+  if (!applyTempUnschedConfig(credentialSettings)) return
+
+  cursorRefreshBatchRunning = true
+  cursorOAuth.loading.value = true
+  cursorOAuth.error.value = ''
+  let successCount = 0
+  const errors: string[] = []
+  try {
+    for (let index = 0; index < tokens.length; index += 1) {
+      try {
+        const tokenInfo = await cursorOAuth.validateRefreshToken(tokens[index], settings.proxy_id)
+        cursorOAuth.loading.value = true
+        if (!tokenInfo) {
+          errors.push(`#${index + 1}: ${cursorOAuth.error.value || 'Validation failed'}`)
+          cursorOAuth.error.value = ''
+          continue
+        }
+        const credentials = {
+          ...cursorOAuth.buildCredentials(tokenInfo),
+          ...credentialSettings,
+        }
+        const tokenEmail = typeof tokenInfo.email === 'string' ? tokenInfo.email : ''
+        const baseName = settings.name || tokenEmail || 'Cursor OAuth Account'
+        await adminAPI.accounts.create({
+          ...settings,
+          name: tokens.length > 1 ? `${baseName} #${index + 1}` : baseName,
+          platform: 'cursor',
+          type: 'oauth',
+          credentials,
+          extra: cursorOAuth.buildExtraInfo(tokenInfo),
+        })
+        successCount += 1
+      } catch (error: any) {
+        errors.push(`#${index + 1}: ${error.response?.data?.detail || error.message || 'Unknown error'}`)
+      }
+    }
+
+    if (successCount === tokens.length) {
+      appStore.showSuccess(tokens.length > 1 ? t('admin.accounts.oauth.batchSuccess', { count: successCount }) : t('admin.accounts.accountCreated'))
+      emit('created')
+      handleClose()
+    } else if (successCount > 0) {
+      appStore.showWarning(t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: tokens.length - successCount }))
+      cursorOAuth.error.value = errors.join('\n')
+      emit('created')
+    } else {
+      cursorOAuth.error.value = errors.join('\n')
+      appStore.showError(t('admin.accounts.oauth.batchFailed'))
+    }
+  } finally {
+    oauthFlowRef.value?.clearRefreshToken()
+    cursorRefreshBatchRunning = false
+    cursorOAuth.loading.value = false
   }
 }
 
 const handleCursorImportSSO = async (ssoInput: string) => {
+  if (cursorOAuth.loading.value) return
   if (!validateCursorBaseUrl()) return
   const ssoTokens = ssoInput.split('\n').map((token) => token.trim()).filter(Boolean)
   if (!ssoTokens.length) return
@@ -6673,6 +6759,11 @@ const handleCursorImportSSO = async (ssoInput: string) => {
     }
     credentials.base_url = baseUrl
   }
+  const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+  if (modelMapping) credentials.model_mapping = modelMapping
+  if (!applyTempUnschedConfig(credentials)) return
+  cursorOAuth.loading.value = true
+  cursorOAuth.error.value = ''
   try {
     const result = await adminAPI.cursor.createFromSSO({
       sso_tokens: ssoTokens,
@@ -6688,14 +6779,26 @@ const handleCursorImportSSO = async (ssoInput: string) => {
       expires_at: form.expires_at,
       auto_pause_on_expired: autoPauseOnExpired.value
     })
-    if (result.created.length) {
-      appStore.showSuccess(t('admin.accounts.accountCreated'))
+    const successCount = result.created?.length || 0
+    const failedCount = result.failed?.length || 0
+    if (successCount > 0 && failedCount === 0) {
+      appStore.showSuccess(ssoTokens.length > 1 ? t('admin.accounts.oauth.batchSuccess', { count: successCount }) : t('admin.accounts.accountCreated'))
       emit('created')
+      handleClose()
+    } else if (successCount > 0) {
+      appStore.showWarning(t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: failedCount }))
+      cursorOAuth.error.value = (result.failed || []).map((item) => `#${item.index}: ${item.error || 'Unknown error'}`).join('\n')
+      emit('created')
+    } else {
+      cursorOAuth.error.value = (result.failed || []).map((item) => `#${item.index}: ${item.error || 'Unknown error'}`).join('\n') || t('admin.accounts.oauth.cursor.failedToConvertSSO')
+      appStore.showError(t('admin.accounts.oauth.batchFailed'))
     }
-    if (!result.failed.length) handleClose()
   } catch (error: any) {
     cursorOAuth.error.value = error.response?.data?.detail || error.message || t('admin.accounts.oauth.cursor.failedToConvertSSO')
     appStore.showError(cursorOAuth.error.value)
+  } finally {
+    oauthFlowRef.value?.clearSSOInput()
+    cursorOAuth.loading.value = false
   }
 }
 

@@ -27,6 +27,7 @@ export function useCursorOAuth() {
   const capabilities = ref<CursorOAuthCapabilities | null>(null)
   const passwordAuthEnabled = ref(false)
   let pollGeneration = 0
+  let authorizationGeneration = 0
 
   const cancelPolling = () => {
     pollGeneration += 1
@@ -34,6 +35,7 @@ export function useCursorOAuth() {
   }
 
   const resetState = () => {
+    authorizationGeneration += 1
     cancelPolling()
     authUrl.value = ''
     sessionId.value = ''
@@ -55,6 +57,7 @@ export function useCursorOAuth() {
   }
 
   const generateAuthUrl = async (proxyId?: number | null): Promise<boolean> => {
+    const generation = ++authorizationGeneration
     cancelPolling()
     loading.value = true
     authUrl.value = ''
@@ -65,16 +68,18 @@ export function useCursorOAuth() {
       const payload: Record<string, unknown> = {}
       if (proxyId) payload.proxy_id = proxyId
       const result = await adminAPI.cursor.generateAuthUrl(payload)
+      if (generation !== authorizationGeneration) return false
       authUrl.value = result.auth_url
       sessionId.value = result.session_id
       state.value = result.state
       return true
     } catch (err: unknown) {
+      if (generation !== authorizationGeneration) return false
       error.value = extractApiErrorMessage(err, t('admin.accounts.oauth.cursor.failedToGenerateUrl'))
       appStore.showError(error.value)
       return false
     } finally {
-      loading.value = false
+      if (generation === authorizationGeneration) loading.value = false
     }
   }
 

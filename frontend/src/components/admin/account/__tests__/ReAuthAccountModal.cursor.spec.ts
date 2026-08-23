@@ -178,25 +178,21 @@ describe('ReAuthAccountModal Cursor source replacement', () => {
   })
 
   it('cancels an in-flight deep-link reauthorization and clears callback state', async () => {
-    let resolvePoll!: (value: { access_token: string }) => void
-    pollAuthorizationMock.mockReturnValueOnce(new Promise((resolve) => { resolvePoll = resolve }))
+    let resolveGenerate!: (value: { auth_url: string; session_id: string; state: string }) => void
+    generateAuthUrlMock.mockReturnValueOnce(new Promise((resolve) => { resolveGenerate = resolve }))
     const wrapper = mountModal({ access_token: 'old-access' })
 
     await buttonWithText(wrapper, 'admin.accounts.oauth.cursor.generateAuthUrl').trigger('click')
     await flushPromises()
-    expect(pollAuthorizationMock).toHaveBeenCalledWith({
-      session_id: 'reauth-session',
-      state: 'reauth-state',
-      proxy_id: 7,
-    })
 
     wrapper.getComponent(BaseDialogStub).vm.$emit('close')
     await nextTick()
-    resolvePoll({ access_token: 'STALE_REAUTH_ACCESS_CANARY' })
+    resolveGenerate({ auth_url: 'https://stale.example', session_id: 'stale-session', state: 'stale-state' })
     await flushPromises()
 
+    expect(pollAuthorizationMock).not.toHaveBeenCalled()
     expect(applyOAuthCredentialsMock).not.toHaveBeenCalled()
-    expect(wrapper.text()).not.toContain('STALE_REAUTH_ACCESS_CANARY')
+    expect(wrapper.text()).not.toContain('https://stale.example')
   })
 
   it('does not expose password, setup-token, or API-key account controls', () => {

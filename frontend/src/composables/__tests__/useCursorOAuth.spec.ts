@@ -152,6 +152,42 @@ describe('useCursorOAuth', () => {
     expect(flow.error.value).toBe('')
   })
 
+  it('reset invalidates a pending authorization URL request', async () => {
+    let resolveGenerate!: (value: { auth_url: string; session_id: string; state: string }) => void
+    vi.mocked(adminAPI.cursor.generateAuthUrl).mockReturnValueOnce(new Promise((resolve) => {
+      resolveGenerate = resolve
+    }))
+    const flow = useCursorOAuth()
+    const pending = flow.generateAuthUrl(7)
+
+    flow.resetState()
+    resolveGenerate({ auth_url: 'https://stale.example/auth', session_id: 'stale-session', state: 'stale-state' })
+
+    await expect(pending).resolves.toBe(false)
+    expect(flow.authUrl.value).toBe('')
+    expect(flow.sessionId.value).toBe('')
+    expect(flow.state.value).toBe('')
+    expect(flow.loading.value).toBe(false)
+  })
+
+  it('an older authorization URL request cannot overwrite its replacement', async () => {
+    let resolveOld!: (value: { auth_url: string; session_id: string; state: string }) => void
+    vi.mocked(adminAPI.cursor.generateAuthUrl)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce({ auth_url: 'https://current.example/auth', session_id: 'current-session', state: 'current-state' })
+    const flow = useCursorOAuth()
+
+    const oldRequest = flow.generateAuthUrl(1)
+    await expect(flow.generateAuthUrl(2)).resolves.toBe(true)
+    resolveOld({ auth_url: 'https://old.example/auth', session_id: 'old-session', state: 'old-state' })
+
+    await expect(oldRequest).resolves.toBe(false)
+    expect(flow.authUrl.value).toBe('https://current.example/auth')
+    expect(flow.sessionId.value).toBe('current-session')
+    expect(flow.state.value).toBe('current-state')
+    expect(flow.loading.value).toBe(false)
+  })
+
   it('reports a timeout when browser confirmation does not arrive', async () => {
     vi.mocked(adminAPI.cursor.pollAuthorization).mockResolvedValue({ status: 'pending' })
     const flow = useCursorOAuth()

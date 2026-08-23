@@ -1322,6 +1322,8 @@ defineExpose({
   ssoCookie: ssoCookieInput,
   emailPassword: emailPasswordInput,
   inputMethod,
+  clearRefreshToken: () => { refreshTokenInput.value = '' },
+  clearSSOInput: () => { ssoCookieInput.value = '' },
   reset: () => {
     authCodeInput.value = ''
     oauthState.value = ''
