@@ -31,7 +31,6 @@ export interface CursorExchangeCodeRequest {
   code: string
   state?: string
   proxy_id?: number
-  redirect_uri?: string
 }
 
 export interface CursorPollRequest {
@@ -100,7 +99,13 @@ export async function generateAuthUrl(payload: CursorAuthUrlRequest): Promise<Cu
 
 /** Compatibility import endpoint; deep-link completion should use pollAuthorization. */
 export async function exchangeCode(payload: CursorExchangeCodeRequest): Promise<CursorTokenInfo> {
-  const { data } = await apiClient.post<CursorTokenInfo>('/admin/cursor/oauth/exchange-code', payload)
+  const request: CursorExchangeCodeRequest = {
+    session_id: payload.session_id,
+    code: payload.code,
+  }
+  if (payload.state !== undefined) request.state = payload.state
+  if (payload.proxy_id !== undefined) request.proxy_id = payload.proxy_id
+  const { data } = await apiClient.post<CursorTokenInfo>('/admin/cursor/oauth/exchange-code', request)
   return data
 }
 

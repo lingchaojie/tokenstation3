@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 
 const { get, post } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -21,6 +21,7 @@ import {
   authorizePassword,
   validateSSOToken,
 } from '@/api/admin/cursor'
+import type { CursorExchangeCodeRequest } from '@/api/admin/cursor'
 
 describe('admin Cursor OAuth API', () => {
   beforeEach(() => {
@@ -70,6 +71,32 @@ describe('admin Cursor OAuth API', () => {
       proxy_id: 7,
     }, { timeout: 120_000 })
     expect(post).toHaveBeenNthCalledWith(7, '/admin/cursor/accounts/42/refresh')
+  })
+
+  it('sends only Task 16 exchange-code DTO fields', async () => {
+    await exchangeCode({
+      session_id: 'sid',
+      state: 'state',
+      code: 'credential',
+      proxy_id: 7,
+      redirect_uri: 'unsupported' as never,
+    } as CursorExchangeCodeRequest)
+
+    expect(post).toHaveBeenCalledWith('/admin/cursor/oauth/exchange-code', {
+      session_id: 'sid',
+      state: 'state',
+      code: 'credential',
+      proxy_id: 7,
+    })
+  })
+
+  it('types exchange-code requests to the exact backend DTO', () => {
+    expectTypeOf<CursorExchangeCodeRequest>().toEqualTypeOf<{
+      session_id: string
+      code: string
+      state?: string
+      proxy_id?: number
+    }>()
   })
 
   it.each([

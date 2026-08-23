@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showError: vi.fn() }),
@@ -30,6 +30,10 @@ import { adminAPI } from '@/api/admin'
 import { useCursorOAuth } from '@/composables/useCursorOAuth'
 
 describe('useCursorOAuth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('polls pending deep-link authorization until Cursor returns an access token', async () => {
     vi.mocked(adminAPI.cursor.pollAuthorization)
       .mockResolvedValueOnce({ status: 'pending' })
@@ -76,6 +80,61 @@ describe('useCursorOAuth', () => {
     expect(flow.polling.value).toBe(false)
   })
 
+  it('returns null when an older poll succeeds after a replacement generation', async () => {
+    let resolveOldPoll!: (token: { access_token: string }) => void
+    vi.mocked(adminAPI.cursor.pollAuthorization)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOldPoll = resolve }))
+      .mockResolvedValueOnce({ access_token: 'current-token' })
+    const flow = useCursorOAuth()
+    const oldPoll = flow.pollForToken({ sessionId: 'old', state: 'old-state' })
+    const currentPoll = flow.pollForToken({ sessionId: 'current', state: 'current-state' })
+
+    await expect(currentPoll).resolves.toMatchObject({ access_token: 'current-token' })
+    resolveOldPoll({ access_token: 'stale-token' })
+
+    await expect(oldPoll).resolves.toBeNull()
+    expect(flow.error.value).toBe('')
+    expect(flow.polling.value).toBe(false)
+  })
+
+  it('reset invalidates an in-flight poll that later succeeds', async () => {
+    let resolvePoll!: (token: { access_token: string }) => void
+    vi.mocked(adminAPI.cursor.pollAuthorization).mockReturnValueOnce(new Promise((resolve) => {
+      resolvePoll = resolve
+    }))
+    const flow = useCursorOAuth()
+    flow.authUrl.value = 'https://cursor.example/auth'
+    flow.sessionId.value = 'visible-session'
+    flow.state.value = 'visible-state'
+    const poll = flow.pollForToken({ sessionId: 'sid', state: 'state' })
+
+    flow.resetState()
+    resolvePoll({ access_token: 'stale-token' })
+
+    await expect(poll).resolves.toBeNull()
+    expect(flow.authUrl.value).toBe('')
+    expect(flow.sessionId.value).toBe('')
+    expect(flow.state.value).toBe('')
+    expect(flow.error.value).toBe('')
+    expect(flow.polling.value).toBe(false)
+  })
+
+  it('reset ignores an in-flight poll error', async () => {
+    let rejectPoll!: (error: unknown) => void
+    vi.mocked(adminAPI.cursor.pollAuthorization).mockReturnValueOnce(new Promise((_, reject) => {
+      rejectPoll = reject
+    }))
+    const flow = useCursorOAuth()
+    const poll = flow.pollForToken({ sessionId: 'sid', state: 'state' })
+
+    flow.resetState()
+    rejectPoll(new Error('stale failure'))
+
+    await expect(poll).resolves.toBeNull()
+    expect(flow.error.value).toBe('')
+    expect(flow.polling.value).toBe(false)
+  })
+
   it('resets both visible authorization state and any pending generation', () => {
     const flow = useCursorOAuth()
     flow.authUrl.value = 'https://cursor.example/auth'
@@ -105,33 +164,56 @@ describe('useCursorOAuth', () => {
 
   it('never returns or persists one-time Cursor secrets', () => {
     const flow = useCursorOAuth()
-    const credentials = flow.buildCredentials({
-      access_token: 'jwt',
-      refresh_token: 'refresh',
-      api_key: 'crsr_api_key',
-      sso_token: 'canary',
-      session_token: 'canary',
-      password: 'canary',
-      sso: 'canary',
-      'sso-rw': 'canary',
-      status: 'pending',
-      state: 'canary',
-      verifier: 'canary',
-      code_verifier: 'canary',
-      challenge: 'canary',
-      session_id: 'canary',
+    const storageWrite = vi.spyOn(Storage.prototype, 'setItem')
+    const cookieWrite = vi.fn()
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => '',
+      set: cookieWrite,
     })
-    const extra = flow.buildExtraInfo({ session_id: 'canary', email: 'cursor@example.com' })
+    try {
+      const credentials = flow.buildCredentials({
+        access_token: 'jwt',
+        refresh_token: 'refresh',
+        api_key: 'crsr_api_key',
+        expires_at: 1_900_000_000,
+        sub: 'cursor-user',
+        sso_token: 'canary',
+        session_token: 'canary',
+        web_session_token: 'canary',
+        cookie: 'canary',
+        Cookie: 'canary',
+        password: 'canary',
+        sso: 'canary',
+        'sso-rw': 'canary',
+        status: 'pending',
+        state: 'canary',
+        verifier: 'canary',
+        code_verifier: 'canary',
+        challenge: 'canary',
+        session_id: 'canary',
+      })
+      const extra = flow.buildExtraInfo({
+        session_id: 'canary',
+        web_session_token: 'canary',
+        cookie: 'canary',
+        Cookie: 'canary',
+        email: 'cursor@example.com',
+      })
 
-    expect(credentials).toEqual({
-      access_token: 'jwt',
-      refresh_token: 'refresh',
-      api_key: 'crsr_api_key',
-    })
-    expect(extra).toEqual({ email: 'cursor@example.com' })
-    for (const key of ['sso_token', 'session_token', 'password', 'sso', 'sso-rw', 'status', 'state', 'verifier', 'code_verifier', 'challenge', 'session_id']) {
-      expect(localStorage.getItem(key)).toBeNull()
-      expect(sessionStorage.getItem(key)).toBeNull()
+      expect(credentials).toEqual({
+        access_token: 'jwt',
+        refresh_token: 'refresh',
+        api_key: 'crsr_api_key',
+        expires_at: 1_900_000_000,
+        sub: 'cursor-user',
+      })
+      expect(extra).toEqual({ email: 'cursor@example.com' })
+      expect(storageWrite).not.toHaveBeenCalled()
+      expect(cookieWrite).not.toHaveBeenCalled()
+    } finally {
+      storageWrite.mockRestore()
+      delete (document as { cookie?: string }).cookie
     }
   })
 
