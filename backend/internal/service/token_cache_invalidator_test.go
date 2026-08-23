@@ -144,6 +144,20 @@ func TestCompositeTokenCacheInvalidator_Kiro(t *testing.T) {
 	require.Equal(t, []string{"kiro:account:550"}, cache.deletedKeys)
 }
 
+func TestCompositeTokenCacheInvalidator_Cursor(t *testing.T) {
+	cache := &geminiTokenCacheStub{}
+	invalidator := NewCompositeTokenCacheInvalidator(cache)
+	account := &Account{
+		ID:       575,
+		Platform: PlatformCursor,
+		Type:     AccountTypeOAuth,
+	}
+
+	err := invalidator.InvalidateToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"cursor:575", "cursor:account:575"}, cache.deletedKeys)
+}
+
 func TestCompositeTokenCacheInvalidator_Claude(t *testing.T) {
 	cache := &geminiTokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)
@@ -307,7 +321,8 @@ func TestCompositeTokenCacheInvalidator_AllPlatformsIntegration(t *testing.T) {
 		{ID: 2, Platform: PlatformAntigravity, Type: AccountTypeOAuth, Credentials: map[string]any{"project_id": "ag-proj"}},
 		{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
 		{ID: 4, Platform: PlatformKiro, Type: AccountTypeOAuth},
-		{ID: 5, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		{ID: 5, Platform: PlatformCursor, Type: AccountTypeOAuth},
+		{ID: 6, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
 	}
 
 	// 新行为：Gemini 和 Antigravity 会同时删除基于 project_id 和 account_id 的键
@@ -318,7 +333,9 @@ func TestCompositeTokenCacheInvalidator_AllPlatformsIntegration(t *testing.T) {
 		"ag:account:2",
 		"openai:account:3",
 		"kiro:account:4",
-		"claude:account:5",
+		"cursor:5",
+		"cursor:account:5",
+		"claude:account:6",
 	}
 
 	for _, acc := range accounts {
