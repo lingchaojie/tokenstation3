@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
@@ -22,6 +23,7 @@ const (
 	cursorLockInitialWait       = 100 * time.Millisecond
 	cursorLockMaxWait           = 800 * time.Millisecond
 	cursorLockMaxAttempts       = 5
+	cursorLocalRejectedLimit    = 1024
 )
 
 var (
@@ -41,14 +43,28 @@ type CursorTokenProvider struct {
 	refreshPolicy ProviderRefreshPolicy
 
 	waitBeforePoll func(context.Context, time.Duration) bool
+
+	localRejectedMu       sync.Mutex
+	localRejected         map[string]cursorLocalRejectedEntry
+	localRejectedSequence uint64
+	localRejectedNow      func() time.Time
+}
+
+type cursorLocalRejectedEntry struct {
+	cacheKey    string
+	fingerprint string
+	expiresAt   time.Time
+	sequence    uint64
 }
 
 func NewCursorTokenProvider(accountRepo AccountRepository, tokenCache GeminiTokenCache) *CursorTokenProvider {
 	return &CursorTokenProvider{
-		accountRepo:    accountRepo,
-		tokenCache:     tokenCache,
-		refreshPolicy:  CursorProviderRefreshPolicy(),
-		waitBeforePoll: waitForCursorTokenPoll,
+		accountRepo:      accountRepo,
+		tokenCache:       tokenCache,
+		refreshPolicy:    CursorProviderRefreshPolicy(),
+		waitBeforePoll:   waitForCursorTokenPoll,
+		localRejected:    make(map[string]cursorLocalRejectedEntry),
+		localRejectedNow: time.Now,
 	}
 }
 
@@ -76,8 +92,8 @@ func (p *CursorTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		strings.TrimSpace(account.GetCursorRefreshToken()) != "" ||
 		strings.TrimSpace(account.GetCursorWebSessionToken()) != ""
 
-	rejected := p.rejectedFingerprint(ctx, cacheKey)
-	tokenRejected := rejected != "" && rejected == cursorTokenFingerprint(accessToken)
+	rejected := p.rejectedFingerprints(ctx, cacheKey)
+	tokenRejected := cursorFingerprintRejected(rejected, accessToken)
 	if !tokenRejected {
 		if cached, ok := p.cachedToken(ctx, cacheKey, rejected); ok {
 			return cached, nil
@@ -158,7 +174,7 @@ func (p *CursorTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	if cursorpkg.IsWebSessionToken(refreshed) {
 		return "", withCursorCredentialFailureSnapshot(errCursorWebSessionNotUpgraded, account)
 	}
-	if rejected != "" && rejected == cursorTokenFingerprint(refreshed) {
+	if cursorFingerprintRejected(rejected, refreshed) {
 		return "", withCursorCredentialFailureSnapshot(errCursorAccessTokenRejected, account)
 	}
 	newExpiry := p.tokenExpiry(account)
@@ -170,7 +186,7 @@ func (p *CursorTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	return refreshed, nil
 }
 
-func (p *CursorTokenProvider) cachedToken(ctx context.Context, cacheKey, rejectedFingerprint string) (string, bool) {
+func (p *CursorTokenProvider) cachedToken(ctx context.Context, cacheKey string, rejectedFingerprints map[string]struct{}) (string, bool) {
 	if p.tokenCache == nil {
 		return "", false
 	}
@@ -182,7 +198,7 @@ func (p *CursorTokenProvider) cachedToken(ctx context.Context, cacheKey, rejecte
 	if cached == "" || cursorpkg.IsWebSessionToken(cached) {
 		return "", false
 	}
-	if rejectedFingerprint != "" && rejectedFingerprint == cursorTokenFingerprint(cached) {
+	if cursorFingerprintRejected(rejectedFingerprints, cached) {
 		return "", false
 	}
 	if expiresAt, ok := cursorpkg.JWTExpiry(cached); ok && time.Until(expiresAt) <= cursorTokenRefreshSkew {
@@ -191,7 +207,7 @@ func (p *CursorTokenProvider) cachedToken(ctx context.Context, cacheKey, rejecte
 	return cached, true
 }
 
-func (p *CursorTokenProvider) waitForRefreshedToken(ctx context.Context, cacheKey, rejectedFingerprint string) (string, bool) {
+func (p *CursorTokenProvider) waitForRefreshedToken(ctx context.Context, cacheKey string, rejectedFingerprints map[string]struct{}) (string, bool) {
 	if p.tokenCache == nil {
 		return "", false
 	}
@@ -204,7 +220,7 @@ func (p *CursorTokenProvider) waitForRefreshedToken(ctx context.Context, cacheKe
 		if !waitBeforePoll(ctx, wait) {
 			return "", false
 		}
-		if token, ok := p.cachedToken(ctx, cacheKey, rejectedFingerprint); ok {
+		if token, ok := p.cachedToken(ctx, cacheKey, rejectedFingerprints); ok {
 			return token, true
 		}
 		if wait < cursorLockMaxWait {
@@ -275,34 +291,120 @@ func (p *CursorTokenProvider) InvalidateToken(ctx context.Context, account *Acco
 // bearer rejected by Cursor. Callers must pass the request-local token returned
 // by GetAccessToken, because the account snapshot may be older than the cache.
 func (p *CursorTokenProvider) InvalidateRejectedToken(ctx context.Context, account *Account, rejectedBearer string) error {
-	if p == nil || p.tokenCache == nil || account == nil {
+	if p == nil || account == nil {
 		return nil
 	}
 	cacheKey := CursorTokenCacheKey(account)
-	err := p.tokenCache.DeleteAccessToken(ctx, cacheKey)
-	if fingerprint := cursorTokenFingerprint(rejectedBearer); fingerprint != "" {
-		if setErr := p.tokenCache.SetAccessToken(ctx, cursorForceRefreshCacheKey(cacheKey), fingerprint, cursorForceRefreshTTL); setErr != nil && err == nil {
-			err = setErr
-		}
+	fingerprint := cursorTokenFingerprint(rejectedBearer)
+	if fingerprint != "" {
+		p.recordLocalRejectedFingerprint(cacheKey, fingerprint)
 	}
-	return err
+	if p.tokenCache == nil {
+		return nil
+	}
+	deleteErr := p.tokenCache.DeleteAccessToken(ctx, cacheKey)
+	var markerErr error
+	if fingerprint != "" {
+		markerErr = p.tokenCache.SetAccessToken(ctx, cursorForceRefreshCacheKey(cacheKey), fingerprint, cursorForceRefreshTTL)
+	}
+	return errors.Join(deleteErr, markerErr)
 }
 
-func (p *CursorTokenProvider) rejectedFingerprint(ctx context.Context, cacheKey string) string {
+func (p *CursorTokenProvider) rejectedFingerprints(ctx context.Context, cacheKey string) map[string]struct{} {
+	rejected := p.localRejectedFingerprints(cacheKey)
 	if p.tokenCache == nil {
-		return ""
+		return rejected
 	}
 	fingerprint, err := p.tokenCache.GetAccessToken(ctx, cursorForceRefreshCacheKey(cacheKey))
-	if err != nil {
-		return ""
+	if fingerprint = strings.TrimSpace(fingerprint); err == nil && fingerprint != "" {
+		if rejected == nil {
+			rejected = make(map[string]struct{}, 1)
+		}
+		rejected[fingerprint] = struct{}{}
 	}
-	return strings.TrimSpace(fingerprint)
+	return rejected
 }
 
 func (p *CursorTokenProvider) clearRejectedFingerprint(ctx context.Context, cacheKey string) {
 	if p.tokenCache != nil {
 		_ = p.tokenCache.DeleteAccessToken(ctx, cursorForceRefreshCacheKey(cacheKey))
 	}
+}
+
+func (p *CursorTokenProvider) recordLocalRejectedFingerprint(cacheKey, fingerprint string) {
+	if p == nil || cacheKey == "" || fingerprint == "" {
+		return
+	}
+	now := time.Now()
+	if p.localRejectedNow != nil {
+		now = p.localRejectedNow()
+	}
+	key := cacheKey + "\x00" + fingerprint
+
+	p.localRejectedMu.Lock()
+	defer p.localRejectedMu.Unlock()
+	if p.localRejected == nil {
+		p.localRejected = make(map[string]cursorLocalRejectedEntry)
+	}
+	p.purgeExpiredLocalRejectionsLocked(now)
+	if _, exists := p.localRejected[key]; !exists && len(p.localRejected) >= cursorLocalRejectedLimit {
+		oldestKey := ""
+		var oldestSequence uint64
+		for candidateKey, candidate := range p.localRejected {
+			if oldestKey == "" || candidate.sequence < oldestSequence ||
+				(candidate.sequence == oldestSequence && candidateKey < oldestKey) {
+				oldestKey = candidateKey
+				oldestSequence = candidate.sequence
+			}
+		}
+		delete(p.localRejected, oldestKey)
+	}
+	p.localRejectedSequence++
+	p.localRejected[key] = cursorLocalRejectedEntry{
+		cacheKey: cacheKey, fingerprint: fingerprint,
+		expiresAt: now.Add(cursorForceRefreshTTL), sequence: p.localRejectedSequence,
+	}
+}
+
+func (p *CursorTokenProvider) localRejectedFingerprints(cacheKey string) map[string]struct{} {
+	if p == nil || cacheKey == "" {
+		return nil
+	}
+	now := time.Now()
+	if p.localRejectedNow != nil {
+		now = p.localRejectedNow()
+	}
+	p.localRejectedMu.Lock()
+	defer p.localRejectedMu.Unlock()
+	p.purgeExpiredLocalRejectionsLocked(now)
+	var rejected map[string]struct{}
+	for _, entry := range p.localRejected {
+		if entry.cacheKey != cacheKey {
+			continue
+		}
+		if rejected == nil {
+			rejected = make(map[string]struct{})
+		}
+		rejected[entry.fingerprint] = struct{}{}
+	}
+	return rejected
+}
+
+func (p *CursorTokenProvider) purgeExpiredLocalRejectionsLocked(now time.Time) {
+	for key, entry := range p.localRejected {
+		if !now.Before(entry.expiresAt) {
+			delete(p.localRejected, key)
+		}
+	}
+}
+
+func cursorFingerprintRejected(rejected map[string]struct{}, token string) bool {
+	fingerprint := cursorTokenFingerprint(token)
+	if fingerprint == "" {
+		return false
+	}
+	_, found := rejected[fingerprint]
+	return found
 }
 
 func cursorForceRefreshCacheKey(cacheKey string) string {

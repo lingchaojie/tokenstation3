@@ -92,6 +92,9 @@ type cursorLifecycleTokenCache struct {
 
 	forcedLockResult *bool
 	lockHeld         bool
+	getErr           error
+	setErr           error
+	deleteErr        error
 	acquireErr       error
 	releaseErr       error
 	acquireCalls     int
@@ -116,6 +119,9 @@ func (c *cursorLifecycleTokenCache) GetAccessToken(_ context.Context, key string
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.getCalls[key]++
+	if c.getErr != nil {
+		return "", c.getErr
+	}
 	if key == c.publishKey && c.publishOnKeyGet > 0 && c.getCalls[key] >= c.publishOnKeyGet {
 		c.values[key] = c.publishToken
 	}
@@ -124,6 +130,10 @@ func (c *cursorLifecycleTokenCache) GetAccessToken(_ context.Context, key string
 
 func (c *cursorLifecycleTokenCache) SetAccessToken(_ context.Context, key, token string, ttl time.Duration) error {
 	c.mu.Lock()
+	if c.setErr != nil {
+		defer c.mu.Unlock()
+		return c.setErr
+	}
 	c.values[key] = token
 	c.setTTLs[key] = ttl
 	shouldPublish := c.published != nil && key == c.publishKey
@@ -137,6 +147,9 @@ func (c *cursorLifecycleTokenCache) SetAccessToken(_ context.Context, key, token
 func (c *cursorLifecycleTokenCache) DeleteAccessToken(_ context.Context, key string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.deleteErr != nil {
+		return c.deleteErr
+	}
 	delete(c.values, key)
 	c.deleted = append(c.deleted, key)
 	return nil
@@ -410,6 +423,82 @@ func TestCursorTokenProviderInvalidatesActualCachedBearerFromStaleAccountSnapsho
 	marker := cache.value(cursorForceRefreshCacheKey(CursorTokenCacheKey(staleAccount)))
 	require.Equal(t, hex.EncodeToString(actualSum[:]), marker)
 	require.NotEqual(t, hex.EncodeToString(staleSum[:]), marker)
+}
+
+func TestCursorTokenProviderInvalidationCacheFailuresRetainLocalRejection(t *testing.T) {
+	rejected := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(3*time.Hour))
+	account := cursorLifecycleAccount(map[string]any{
+		"access_token": rejected,
+		"expires_at":   time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
+	})
+	deleteFailure := errors.New("cache delete unavailable")
+	markerFailure := errors.New("cache marker unavailable")
+
+	for _, test := range []struct {
+		name      string
+		deleteErr error
+		setErr    error
+		wantErrs  []error
+	}{
+		{name: "delete failure", deleteErr: deleteFailure, wantErrs: []error{deleteFailure}},
+		{name: "marker failure", setErr: markerFailure, wantErrs: []error{markerFailure}},
+		{name: "both failures are preserved", deleteErr: deleteFailure, setErr: markerFailure, wantErrs: []error{deleteFailure, markerFailure}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cache := newCursorLifecycleTokenCache()
+			cache.values[CursorTokenCacheKey(account)] = rejected
+			cache.deleteErr = test.deleteErr
+			cache.setErr = test.setErr
+			provider := NewCursorTokenProvider(nil, cache)
+
+			invalidateErr := provider.InvalidateRejectedToken(context.Background(), account, rejected)
+			for _, wantErr := range test.wantErrs {
+				require.ErrorIs(t, invalidateErr, wantErr)
+			}
+
+			cache.mu.Lock()
+			cache.values[CursorTokenCacheKey(account)] = rejected // stale publisher restores the rejected bearer
+			cache.mu.Unlock()
+			got, err := provider.GetAccessToken(context.Background(), account)
+			require.Empty(t, got)
+			require.ErrorIs(t, err, errCursorAccessTokenRejected)
+		})
+	}
+}
+
+func TestCursorTokenProviderLocalRejectionsAreBoundedAndExpire(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	provider := NewCursorTokenProvider(nil, nil)
+	provider.localRejectedNow = func() time.Time { return now }
+	tokenExpiry := time.Now().Add(24 * time.Hour)
+	token := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, tokenExpiry)
+	accountForID := func(id int64) *Account {
+		account := cursorLifecycleAccount(map[string]any{
+			"access_token": token,
+			"expires_at":   tokenExpiry.UTC().Format(time.RFC3339),
+		})
+		account.ID = id
+		return account
+	}
+
+	for id := int64(1); id <= cursorLocalRejectedLimit+1; id++ {
+		require.NoError(t, provider.InvalidateRejectedToken(context.Background(), accountForID(id), token))
+	}
+	provider.localRejectedMu.Lock()
+	require.Len(t, provider.localRejected, cursorLocalRejectedLimit)
+	provider.localRejectedMu.Unlock()
+
+	oldest, err := provider.GetAccessToken(context.Background(), accountForID(1))
+	require.NoError(t, err, "the oldest local rejection should be evicted at the bound")
+	require.Equal(t, token, oldest)
+	newest, err := provider.GetAccessToken(context.Background(), accountForID(cursorLocalRejectedLimit+1))
+	require.Empty(t, newest)
+	require.ErrorIs(t, err, errCursorAccessTokenRejected)
+
+	now = now.Add(cursorForceRefreshTTL + time.Nanosecond)
+	newest, err = provider.GetAccessToken(context.Background(), accountForID(cursorLocalRejectedLimit+1))
+	require.NoError(t, err, "local rejection must expire")
+	require.Equal(t, token, newest)
 }
 
 func TestCursorTokenProviderGenericInvalidationNormalizesWrappedBearer(t *testing.T) {

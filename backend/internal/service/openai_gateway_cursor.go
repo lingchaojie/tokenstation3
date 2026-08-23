@@ -236,12 +236,12 @@ func consumeCursorAgentEvents(
 				}
 			}
 			if limited {
-				if maxOutputTokens-spentTokens <= 0 {
+				remaining := maxOutputTokens - spentTokens
+				toolCost := estimateTokensForText(event.ToolCall.Name + event.ToolCall.Arguments)
+				if remaining <= 0 || toolCost > remaining {
 					return truncate()
 				}
-				spentTokens = saturatingAddNonnegativeInt(
-					spentTokens, estimateTokensForText(event.ToolCall.Name+event.ToolCall.Arguments),
-				)
+				spentTokens = saturatingAddNonnegativeInt(spentTokens, toolCost)
 			}
 			markFirstToken()
 			index := len(outcome.toolCalls)
@@ -267,7 +267,7 @@ func consumeCursorAgentEvents(
 
 		case cursorpkg.AgentEventTurnEnded:
 			outcome.usage = event.Usage
-			outcome.providerTerminal = true
+			outcome.providerTerminal = event.ProviderTerminal
 			return finish(nil)
 
 		case cursorpkg.AgentEventError:
@@ -340,42 +340,54 @@ func (s *OpenAIGatewayService) cursorAgentFailure(c *gin.Context, account *Accou
 		status = cursorpkg.ConnectCodeToHTTPStatus(agentErr.Code)
 	}
 	if isCursorNotLoggedIn(agentErr) {
-		invalidateCursorRequestBearer(s, c, account)
+		if invalidateErr := invalidateCursorRequestBearer(s, c, account); invalidateErr != nil {
+			appendCursorInvalidationFailureEvent(c, account, status)
+		}
 		appendCursorFailureEvent(c, account, status, GatewayFailureScopeAccount, string(CursorCredentialReasonWebSession), "credential_failover")
-		return cursorCredentialVerdictFailure(CursorCredentialReasonWebSession)
+		return applyCursorAgentHTTPProvenance(cursorCredentialVerdictFailure(CursorCredentialReasonWebSession), agentErr)
 	}
 	if isCursorClientVersionRejected(agentErr) {
 		appendCursorFailureEvent(c, account, status, GatewayFailureScopeProvider, string(CursorCredentialReasonClientVersion), "config_error")
-		return &UpstreamFailoverError{
+		return applyCursorAgentHTTPProvenance(&UpstreamFailoverError{
 			StatusCode: status, ResponseBody: snapshotBytes(cursorSafeUpstreamErrorBody), Platform: PlatformCursor,
 			Stage: GatewayFailureStageAccountAuth, Scope: GatewayFailureScopeProvider,
 			Reason: CursorCredentialReasonClientVersion, NextAccountAction: NextAccountStop,
 			ClientStatusCode: http.StatusBadGateway, ClientMessage: CursorClientVersionRejectedClientMessage,
-		}
+		}, agentErr)
 	}
 
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		invalidateCursorRequestBearer(s, c, account)
+		if invalidateErr := invalidateCursorRequestBearer(s, c, account); invalidateErr != nil {
+			appendCursorInvalidationFailureEvent(c, account, status)
+		}
 		appendCursorFailureEvent(c, account, status, GatewayFailureScopeAccount, string(CursorCredentialReasonExpired), "credential_failover")
-		return cursorCredentialVerdictFailure(CursorCredentialReasonExpired)
+		return applyCursorAgentHTTPProvenance(cursorCredentialVerdictFailure(CursorCredentialReasonExpired), agentErr)
 	case http.StatusTooManyRequests:
 		appendCursorFailureEvent(c, account, status, GatewayFailureScopeRequest, "cursor_rate_limited", "failover")
-		return &UpstreamFailoverError{
+		return applyCursorAgentHTTPProvenance(&UpstreamFailoverError{
 			StatusCode: http.StatusServiceUnavailable, ResponseBody: snapshotBytes(cursorSafeUpstreamErrorBody),
-			Platform: PlatformCursor, UpstreamHTTPStatus: status, HasUpstreamHTTPResponse: true,
-			Scope: GatewayFailureScopeRequest, NextAccountAction: NextAccountRetry, RequestScopedTransient: true,
+			Platform: PlatformCursor,
+			Scope:    GatewayFailureScopeRequest, NextAccountAction: NextAccountRetry, RequestScopedTransient: true,
 			ClientStatusCode: http.StatusServiceUnavailable, ClientMessage: "Cursor upstream is temporarily unavailable",
-		}
+		}, agentErr)
 	default:
 		appendCursorFailureEvent(c, account, status, GatewayFailureScopeRequest, "cursor_upstream_verdict", "failover")
-		return &UpstreamFailoverError{
+		return applyCursorAgentHTTPProvenance(&UpstreamFailoverError{
 			StatusCode: status, ResponseBody: snapshotBytes(cursorSafeUpstreamErrorBody), Platform: PlatformCursor,
-			UpstreamHTTPStatus: status, HasUpstreamHTTPResponse: true,
 			Scope: GatewayFailureScopeRequest, NextAccountAction: NextAccountRetry,
 			ClientStatusCode: http.StatusBadGateway, ClientMessage: "Cursor upstream request failed",
-		}
+		}, agentErr)
 	}
+}
+
+func applyCursorAgentHTTPProvenance(failure *UpstreamFailoverError, agentErr *cursorpkg.AgentError) *UpstreamFailoverError {
+	if failure == nil || agentErr == nil || !agentErr.HasHTTPResponse {
+		return failure
+	}
+	failure.HasUpstreamHTTPResponse = true
+	failure.UpstreamHTTPStatus = agentErr.ActualHTTPStatus
+	return failure
 }
 
 func cursorCredentialVerdictFailure(reason GatewayFailureReason) *UpstreamFailoverError {
@@ -402,9 +414,9 @@ func appendCursorFailureEvent(
 	})
 }
 
-func invalidateCursorRequestBearer(s *OpenAIGatewayService, c *gin.Context, account *Account) {
+func invalidateCursorRequestBearer(s *OpenAIGatewayService, c *gin.Context, account *Account) error {
 	if s == nil || s.cursorTokenProvider == nil || account == nil || !account.IsCursorOAuth() {
-		return
+		return nil
 	}
 	bearer := ""
 	if c != nil {
@@ -413,13 +425,22 @@ func invalidateCursorRequestBearer(s *OpenAIGatewayService, c *gin.Context, acco
 		}
 	}
 	if strings.TrimSpace(bearer) == "" {
-		return
+		return nil
 	}
 	ctx := context.Background()
 	if c != nil && c.Request != nil {
 		ctx = context.WithoutCancel(c.Request.Context())
 	}
-	_ = s.cursorTokenProvider.InvalidateRejectedToken(ctx, account, bearer)
+	return s.cursorTokenProvider.InvalidateRejectedToken(ctx, account, bearer)
+}
+
+func appendCursorInvalidationFailureEvent(c *gin.Context, account *Account, status int) {
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform: PlatformCursor, AccountID: cursorAccountID(account), AccountName: cursorAccountName(account),
+		UpstreamStatusCode: status, Stage: string(GatewayFailureStageAccountAuth), Scope: string(GatewayFailureScopeAccount),
+		Reason: "cursor_rejection_marker_degraded", Kind: "credential_invalidation_degraded",
+		Message: "Cursor rejected-token cache update failed; process-local rejection remains active",
+	})
 }
 
 func isCursorNotLoggedIn(agentErr *cursorpkg.AgentError) bool {

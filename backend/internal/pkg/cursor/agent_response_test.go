@@ -79,7 +79,7 @@ func TestParseAgentServerMessageTurnEndedUsage(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	want := &AgentUsage{InputTokens: 1200, OutputTokens: 340, CacheReadTokens: 900, CacheWriteTokens: 12}
-	if event == nil || event.Type != AgentEventTurnEnded || !reflect.DeepEqual(event.Usage, want) {
+	if event == nil || event.Type != AgentEventTurnEnded || !event.ProviderTerminal || !reflect.DeepEqual(event.Usage, want) {
 		t.Fatalf("turn ended event = %+v, want usage %+v", event, want)
 	}
 }

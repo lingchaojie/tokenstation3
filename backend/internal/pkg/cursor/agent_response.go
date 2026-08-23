@@ -97,18 +97,21 @@ type AgentUsage struct {
 }
 
 type AgentEvent struct {
-	Type     AgentEventType
-	Text     string
-	ToolCall *AgentToolCall
-	Usage    *AgentUsage
-	Err      error
+	Type             AgentEventType
+	Text             string
+	ToolCall         *AgentToolCall
+	Usage            *AgentUsage
+	Err              error
+	ProviderTerminal bool
 }
 
 type AgentError struct {
-	Code       string
-	Message    string
-	Raw        string
-	HTTPStatus int
+	Code             string
+	Message          string
+	Raw              string
+	HTTPStatus       int
+	HasHTTPResponse  bool
+	ActualHTTPStatus int
 }
 
 func (agentError *AgentError) Error() string {
@@ -231,7 +234,7 @@ func parseAgentInteractionUpdate(data []byte) (*AgentEvent, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &AgentEvent{Type: AgentEventTurnEnded, Usage: &AgentUsage{
+		return &AgentEvent{Type: AgentEventTurnEnded, ProviderTerminal: true, Usage: &AgentUsage{
 			InputTokens: inner.Int64(fieldAgentTurnInputTokens), OutputTokens: inner.Int64(fieldAgentTurnOutputTokens),
 			CacheReadTokens: inner.Int64(fieldAgentTurnCacheReadTokens), CacheWriteTokens: inner.Int64(fieldAgentTurnCacheWriteTokens),
 		}}, nil

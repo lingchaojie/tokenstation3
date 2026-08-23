@@ -84,6 +84,66 @@ func TestCursorAgentFailureRateLimitSwitchesWithoutQuarantine(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, failover.StatusCode)
 }
 
+func TestCursorAgentFailureSeparatesMappedStatusFromActualHTTPProvenance(t *testing.T) {
+	tests := []struct {
+		name           string
+		agentErr       *cursorpkg.AgentError
+		wantStatus     int
+		wantScope      GatewayFailureScope
+		wantReason     GatewayFailureReason
+		wantActualHTTP int
+	}{
+		{
+			name: "actual non-2xx response",
+			agentErr: &cursorpkg.AgentError{
+				Code: "internal", HTTPStatus: http.StatusServiceUnavailable,
+				HasHTTPResponse: true, ActualHTTPStatus: http.StatusServiceUnavailable,
+			},
+			wantStatus: http.StatusServiceUnavailable, wantScope: GatewayFailureScopeRequest,
+			wantActualHTTP: http.StatusServiceUnavailable,
+		},
+		{
+			name: "rate limit Connect trailer over HTTP 200",
+			agentErr: &cursorpkg.AgentError{
+				Code: "resource_exhausted", HTTPStatus: http.StatusTooManyRequests,
+				HasHTTPResponse: true, ActualHTTPStatus: http.StatusOK,
+			},
+			wantStatus: http.StatusServiceUnavailable, wantScope: GatewayFailureScopeRequest,
+			wantActualHTTP: http.StatusOK,
+		},
+		{
+			name: "auth Connect trailer over HTTP 200",
+			agentErr: &cursorpkg.AgentError{
+				Code: "unauthenticated", HTTPStatus: http.StatusUnauthorized,
+				HasHTTPResponse: true, ActualHTTPStatus: http.StatusOK,
+			},
+			wantStatus: http.StatusServiceUnavailable, wantScope: GatewayFailureScopeAccount,
+			wantReason: CursorCredentialReasonExpired, wantActualHTTP: http.StatusOK,
+		},
+		{
+			name: "client-version Connect trailer over HTTP 200",
+			agentErr: &cursorpkg.AgentError{
+				Code: "permission_denied", Message: "client version too old", HTTPStatus: http.StatusForbidden,
+				HasHTTPResponse: true, ActualHTTPStatus: http.StatusOK,
+			},
+			wantStatus: http.StatusForbidden, wantScope: GatewayFailureScopeProvider,
+			wantReason: CursorCredentialReasonClientVersion, wantActualHTTP: http.StatusOK,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := (&OpenAIGatewayService{}).cursorAgentFailure(cursorGatewayTestContext(t), cursorGatewayAccount(), test.agentErr)
+			var failover *UpstreamFailoverError
+			require.ErrorAs(t, err, &failover)
+			require.Equal(t, test.wantStatus, failover.StatusCode)
+			require.Equal(t, test.wantScope, failover.Scope)
+			require.Equal(t, test.wantReason, failover.Reason)
+			require.True(t, failover.HasUpstreamHTTPResponse)
+			require.Equal(t, test.wantActualHTTP, failover.UpstreamHTTPStatus)
+		})
+	}
+}
+
 func TestCursorAgentFailureClientVersionStopsProviderRotation(t *testing.T) {
 	secret := "private-prompt-and-token-must-not-escape"
 	err := (&OpenAIGatewayService{}).cursorAgentFailure(cursorGatewayTestContext(t), cursorGatewayAccount(), &cursorpkg.AgentError{
@@ -182,6 +242,56 @@ func TestCursorAgentFailureNotLoggedInRotatesExactRequestBearer(t *testing.T) {
 	rejected := cache.values[cursorForceRefreshCacheKey(CursorTokenCacheKey(account))]
 	cache.mu.Unlock()
 	require.Equal(t, cursorTokenFingerprint("actual-bearer-B"), rejected)
+}
+
+func TestCursorAgentFailurePreservesInvalidationErrorsAndFailsClosedLocally(t *testing.T) {
+	bearer := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(3*time.Hour))
+	account := cursorGatewayAccount()
+	account.ID = 814
+	account.Credentials = map[string]any{
+		"access_token": bearer,
+		"expires_at":   time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	deleteFailure := errors.New("cache delete unavailable")
+	markerFailure := errors.New("cache marker unavailable")
+	cache := newCursorLifecycleTokenCache()
+	cache.values[CursorTokenCacheKey(account)] = bearer
+	cache.deleteErr = deleteFailure
+	cache.setErr = markerFailure
+	provider := NewCursorTokenProvider(nil, cache)
+	c := cursorGatewayTestContext(t)
+	c.Set(cursorAgentBearerContextKey, bearer)
+	svc := &OpenAIGatewayService{cursorTokenProvider: provider}
+
+	invalidateErr := invalidateCursorRequestBearer(svc, c, account)
+	require.ErrorIs(t, invalidateErr, deleteFailure)
+	require.ErrorIs(t, invalidateErr, markerFailure)
+
+	err := svc.cursorAgentFailure(c, account, &cursorpkg.AgentError{
+		Code: "unauthenticated", Message: "rejected", HTTPStatus: http.StatusUnauthorized,
+	})
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, err, &failover)
+	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Condition(t, func() bool {
+		for _, event := range events {
+			if event != nil && event.Reason == "cursor_rejection_marker_degraded" &&
+				event.Kind == "credential_invalidation_degraded" && !strings.Contains(event.Message, bearer) {
+				return true
+			}
+		}
+		return false
+	}, "cache failure must produce a generic, secret-free diagnostic")
+
+	cache.mu.Lock()
+	cache.values[CursorTokenCacheKey(account)] = bearer
+	cache.mu.Unlock()
+	got, nextErr := provider.GetAccessToken(context.Background(), account)
+	require.Empty(t, got)
+	require.ErrorIs(t, nextErr, errCursorAccessTokenRejected)
 }
 
 func TestCursorAgentFailureGenericVerdictIsSanitized(t *testing.T) {

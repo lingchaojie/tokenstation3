@@ -2888,6 +2888,10 @@ func (h *OpenAIGatewayHandler) submitOpenAITerminalCapture(c *gin.Context, failu
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
+	if failoverErr != nil && failoverErr.Platform == service.PlatformCursor &&
+		failoverErr.Reason == service.CursorCredentialReasonClientVersion {
+		return http.StatusBadGateway, service.CursorClientVersionRejectedClientMessage
+	}
 	if failoverErr != nil && failoverErr.Reason == service.AntigravityCredentialRejectedReason {
 		return http.StatusBadGateway, service.AntigravityCredentialRejectedClientMessage
 	}

@@ -35,7 +35,7 @@ func TestConsumeCursorAgentEventsHandlesContentControlUsageAndTerminal(t *testin
 		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventThinking, Text: "reason"},
 		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventText, Text: "answer"},
 		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventThinkingEnd, Usage: &cursorpkg.AgentUsage{ThinkingDurationMs: 12}},
-		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, Usage: &cursorpkg.AgentUsage{
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true, Usage: &cursorpkg.AgentUsage{
 			InputTokens: 11, OutputTokens: 7, CacheReadTokens: 3, CacheWriteTokens: 2,
 		}},
 	), start, 0, func(delta cursorDelta) error {
@@ -56,13 +56,22 @@ func TestConsumeCursorAgentEventsHandlesContentControlUsageAndTerminal(t *testin
 	require.Equal(t, cursorDeltaText, deltas[1].kind)
 }
 
-func TestConsumeCursorAgentEventsTerminalTruthRequiresTurnEndedEvent(t *testing.T) {
-	t.Run("turn ended without usage is terminal", func(t *testing.T) {
+func TestConsumeCursorAgentEventsTerminalTruthRequiresProviderTurnEndedEvent(t *testing.T) {
+	t.Run("explicit provider turn ended without usage is terminal", func(t *testing.T) {
+		outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
+			cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+		), time.Now(), 0, nil)
+		require.NoError(t, err)
+		require.True(t, outcome.providerTerminal)
+		require.Nil(t, outcome.usage)
+	})
+
+	t.Run("synthetic turn ended is not terminal", func(t *testing.T) {
 		outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
 			cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded},
 		), time.Now(), 0, nil)
 		require.NoError(t, err)
-		require.True(t, outcome.providerTerminal)
+		require.False(t, outcome.providerTerminal)
 		require.Nil(t, outcome.usage)
 	})
 
@@ -187,6 +196,25 @@ func TestConsumeCursorAgentEventsLocalLimitIsUnicodeSafeAndNotProviderTerminal(t
 	require.True(t, utf8.ValidString(outcome.reasoning))
 	require.LessOrEqual(t, estimateCursorOutputTokens(outcome), 3)
 	require.NotEmpty(t, deltas)
+}
+
+func TestConsumeCursorAgentEventsDoesNotEmitIndivisibleToolBeyondLocalLimit(t *testing.T) {
+	var deltas []cursorDelta
+	outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			ID: "call_expensive", Name: "expensive_lookup", Arguments: `{"query":"a tool call larger than one token"}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+	), time.Now(), 1, func(delta cursorDelta) error {
+		deltas = append(deltas, delta)
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, outcome.truncated)
+	require.Equal(t, "length", outcome.finishReason)
+	require.False(t, outcome.providerTerminal)
+	require.Empty(t, outcome.toolCalls, "an indivisible tool call must not cross the local token ceiling")
+	require.Empty(t, deltas)
 }
 
 func TestConsumeCursorAgentEventsFirstTokenIsSetOnceAndIgnoresControl(t *testing.T) {

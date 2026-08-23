@@ -101,15 +101,25 @@ func TestAgentStreamEmitsTextThenTurnEnd(t *testing.T) {
 	if events[2].Type != AgentEventTurnEnded {
 		t.Errorf("final event = %s, want turn_ended", events[2].Type)
 	}
+	if events[2].ProviderTerminal {
+		t.Error("empty Connect end must not claim an explicit provider TurnEnded update")
+	}
 }
 
 func TestAgentStreamSurfacesTrailerError(t *testing.T) {
-	body := bytes.NewReader(bytes.Join([][]byte{
+	body := io.NopCloser(bytes.NewReader(bytes.Join([][]byte{
 		textFrame("partial"),
 		trailerFrame(`{"error":{"code":"permission_denied","message":"client version too old"}}`),
-	}, nil))
+	}, nil)))
+	s := newReaderStream(nil, AgentStreamOptions{})
+	if err := s.acceptResponse(&http.Response{
+		Status: "200 OK", StatusCode: http.StatusOK, Proto: "HTTP/2.0", ProtoMajor: 2,
+		Header: http.Header{}, Body: body,
+	}); err != nil {
+		t.Fatalf("accept response: %v", err)
+	}
 
-	events := drainEvents(t, newReaderStream(body, AgentStreamOptions{}))
+	events := drainEvents(t, s)
 	last := events[len(events)-1]
 	if last.Type != AgentEventError {
 		t.Fatalf("final event = %s, want error", last.Type)
@@ -121,12 +131,18 @@ func TestAgentStreamSurfacesTrailerError(t *testing.T) {
 	if agentErr.Code != "permission_denied" || agentErr.HTTPStatus != http.StatusForbidden {
 		t.Errorf("error = %+v, want permission_denied/403", agentErr)
 	}
+	if !agentErr.HasHTTPResponse || agentErr.ActualHTTPStatus != http.StatusOK {
+		t.Errorf("HTTP provenance = has:%v actual:%d, want true/200", agentErr.HasHTTPResponse, agentErr.ActualHTTPStatus)
+	}
 }
 
 func TestAgentStreamTreatsCleanEOFAsEnd(t *testing.T) {
 	events := drainEvents(t, newReaderStream(bytes.NewReader(textFrame("hi")), AgentStreamOptions{}))
 	if len(events) != 2 || events[1].Type != AgentEventTurnEnded {
 		t.Fatalf("events = %+v, want text then turn_ended", events)
+	}
+	if events[1].ProviderTerminal {
+		t.Error("clean EOF must remain a synthetic, non-authoritative end")
 	}
 }
 
@@ -167,6 +183,9 @@ func TestAgentStreamStopsAtTurnEnded(t *testing.T) {
 	}
 	if events[0].Usage == nil || events[0].Usage.InputTokens != 10 || events[0].Usage.OutputTokens != 20 {
 		t.Errorf("usage = %+v, want input=10 output=20", events[0].Usage)
+	}
+	if !events[0].ProviderTerminal {
+		t.Error("protobuf TurnEnded update must retain provider-terminal provenance")
 	}
 }
 
@@ -209,6 +228,9 @@ func TestAgentStreamToolCallDrainWindowBoundsWait(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].Type != AgentEventToolCall || events[1].Type != AgentEventTurnEnded {
 		t.Fatalf("events = %+v, want tool_call then turn_ended", events)
+	}
+	if events[1].ProviderTerminal {
+		t.Error("tool-drain completion must remain a synthetic, non-authoritative end")
 	}
 }
 
@@ -272,6 +294,9 @@ func TestAgentStreamIdleTimeoutAfterOutputIsCleanEnd(t *testing.T) {
 
 	if len(events) != 2 || events[0].Type != AgentEventThinking || events[1].Type != AgentEventTurnEnded {
 		t.Fatalf("events = %+v, want thinking then clean end", events)
+	}
+	if events[1].ProviderTerminal {
+		t.Error("idle completion after output must remain a synthetic, non-authoritative end")
 	}
 }
 
@@ -579,11 +604,38 @@ func TestOpenAgentStreamNon2xxBodyIsBoundedAndClosed(t *testing.T) {
 	if !errors.As(err, &agentErr) || agentErr.HTTPStatus != http.StatusServiceUnavailable {
 		t.Fatalf("error = %v, want *AgentError with 503", err)
 	}
+	if !agentErr.HasHTTPResponse || agentErr.ActualHTTPStatus != http.StatusServiceUnavailable {
+		t.Errorf("HTTP provenance = has:%v actual:%d, want true/503", agentErr.HasHTTPResponse, agentErr.ActualHTTPStatus)
+	}
 	if got := body.read.Load(); got != agentErrorBodyLimit {
 		t.Errorf("body bytes read = %d, want bounded %d", got, agentErrorBodyLimit)
 	}
 	if !body.closed.Load() {
 		t.Fatal("non-2xx response body was not closed")
+	}
+}
+
+func TestOpenAgentStreamNon2xxConnectBodyKeepsActualHTTPClassification(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			Status: "503 Service Unavailable", StatusCode: http.StatusServiceUnavailable,
+			Proto: "HTTP/2.0", ProtoMajor: 2, Header: http.Header{},
+			Body: io.NopCloser(strings.NewReader(`{"error":{"code":"permission_denied","message":"rejected"}}`)),
+		}, nil
+	})}
+
+	_, err := OpenAgentStream(context.Background(), AgentRunParams{Prompt: "hi"}, AgentStreamOptions{
+		BaseURL: "https://agent.example.test", Token: "test-token", HTTPClient: client,
+	})
+	var agentErr *AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error = %v, want *AgentError", err)
+	}
+	if agentErr.HTTPStatus != http.StatusServiceUnavailable {
+		t.Errorf("classification status = %d, want actual non-2xx 503", agentErr.HTTPStatus)
+	}
+	if !agentErr.HasHTTPResponse || agentErr.ActualHTTPStatus != http.StatusServiceUnavailable {
+		t.Errorf("HTTP provenance = has:%v actual:%d, want true/503", agentErr.HasHTTPResponse, agentErr.ActualHTTPStatus)
 	}
 }
 

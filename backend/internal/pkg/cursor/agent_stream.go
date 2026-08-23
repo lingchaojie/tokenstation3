@@ -218,12 +218,16 @@ func (s *AgentStream) acceptResponse(resp *http.Response) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, agentErrorBodyLimit))
 		if agentErr := ParseAgentTrailer(body); agentErr != nil && agentErr.Code != "" {
+			agentErr.HTTPStatus = resp.StatusCode
+			agentErr.HasHTTPResponse = true
+			agentErr.ActualHTTPStatus = resp.StatusCode
 			return agentErr
 		}
 		trimmed := strings.TrimSpace(string(body))
 		return &AgentError{
 			Message: fmt.Sprintf("%s: %s", resp.Status, trimmed),
 			Raw:     trimmed, HTTPStatus: resp.StatusCode,
+			HasHTTPResponse: true, ActualHTTPStatus: resp.StatusCode,
 		}
 	}
 	if resp.ProtoMajor < 2 && !s.opts.AllowHTTP1 {
@@ -369,6 +373,10 @@ func (s *AgentStream) readResponseFrames() {
 
 		if frame.EndStream {
 			if agentErr := ParseAgentTrailer(frame.Payload); agentErr != nil {
+				if s.resp != nil {
+					agentErr.HasHTTPResponse = true
+					agentErr.ActualHTTPStatus = s.resp.StatusCode
+				}
 				s.emit(AgentEvent{Type: AgentEventError, Err: agentErr})
 				return
 			}
