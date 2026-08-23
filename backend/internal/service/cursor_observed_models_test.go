@@ -420,6 +420,36 @@ func TestCursorObservedModelsServiceStopCancelsInFlightSync(t *testing.T) {
 	require.True(t, upstream.sawCancellation())
 }
 
+func TestProvideCursorObservedModelsServiceWaitsForExplicitStartAndStartsOnce(t *testing.T) {
+	repo := &cursorObservedModelsRepo{accounts: []Account{{
+		ID: 22, Platform: PlatformCursor, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true,
+		Credentials: map[string]any{"access_token": "client-token"},
+	}}}
+	upstream := &cursorObservedModelsUpstream{responseBody: cursorAvailableModelsResponse("auto")}
+	svc := ProvideCursorObservedModelsService(repo, nil, upstream, &config.Config{})
+
+	require.Never(t, func() bool { return len(upstream.requests()) != 0 }, 25*time.Millisecond, time.Millisecond,
+		"construction must not start provider or network work")
+
+	svc.Start()
+	svc.Start()
+	require.Eventually(t, func() bool { return len(upstream.requests()) == 1 }, time.Second, time.Millisecond)
+	svc.Stop()
+	require.Len(t, upstream.requests(), 1, "repeated Start must not create another initial refresh loop")
+}
+
+func TestCursorObservedModelsServiceStopBeforeStartPreventsWorkerLaunch(t *testing.T) {
+	repo := &cursorObservedModelsRepo{}
+	svc := NewCursorObservedModelsService(repo, nil, &cursorObservedModelsUpstream{}, 6*time.Hour)
+
+	svc.Stop()
+	svc.Start()
+
+	require.Never(t, func() bool { return repo.listCallCount() != 0 }, 25*time.Millisecond, time.Millisecond,
+		"a service stopped during shutdown must not launch its first worker afterward")
+}
+
 func cursorObservedExtra(ids ...string) map[string]any {
 	models := make([]any, 0, len(ids))
 	for _, id := range ids {
@@ -465,9 +495,10 @@ func cursorAvailableModelsResponseAtExactOneMiB(t *testing.T, id string) []byte 
 type cursorObservedModelsRepo struct {
 	AccountRepository
 
-	mu       sync.Mutex
-	accounts []Account
-	updated  []int64
+	mu        sync.Mutex
+	accounts  []Account
+	updated   []int64
+	listCalls atomic.Int64
 }
 
 func (r *cursorObservedModelsRepo) ListSchedulable(context.Context) ([]Account, error) {
@@ -481,6 +512,7 @@ func (r *cursorObservedModelsRepo) ListSchedulableByGroupID(context.Context, int
 }
 
 func (r *cursorObservedModelsRepo) ListSchedulableByPlatform(_ context.Context, platform string) ([]Account, error) {
+	r.listCalls.Add(1)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	accounts := make([]Account, 0, len(r.accounts))
@@ -490,6 +522,10 @@ func (r *cursorObservedModelsRepo) ListSchedulableByPlatform(_ context.Context, 
 		}
 	}
 	return cloneCursorObservedAccounts(accounts), nil
+}
+
+func (r *cursorObservedModelsRepo) listCallCount() int64 {
+	return r.listCalls.Load()
 }
 
 func (r *cursorObservedModelsRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {

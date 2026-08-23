@@ -47,11 +47,12 @@ type CursorObservedModelsService struct {
 	timeout       time.Duration
 	cfg           *config.Config
 
-	runCtx    context.Context
-	runCancel context.CancelFunc
-	startOnce sync.Once
-	stopOnce  sync.Once
-	wg        sync.WaitGroup
+	runCtx      context.Context
+	runCancel   context.CancelFunc
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
+	wg          sync.WaitGroup
 }
 
 func NewCursorObservedModelsService(
@@ -80,35 +81,42 @@ func (s *CursorObservedModelsService) Start() {
 	if s == nil || s.accountRepo == nil || s.httpUpstream == nil || s.interval <= 0 {
 		return
 	}
-	s.startOnce.Do(func() {
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			ticker := time.NewTicker(s.interval)
-			defer ticker.Stop()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.started || s.stopped {
+		return
+	}
+	s.started = true
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(s.interval)
+		defer ticker.Stop()
 
-			s.runBackgroundOnce()
-			for {
-				select {
-				case <-ticker.C:
-					s.runBackgroundOnce()
-				case <-s.runCtx.Done():
-					return
-				}
+		s.runBackgroundOnce()
+		for {
+			select {
+			case <-ticker.C:
+				s.runBackgroundOnce()
+			case <-s.runCtx.Done():
+				return
 			}
-		}()
-	})
+		}
+	}()
 }
 
 func (s *CursorObservedModelsService) Stop() {
 	if s == nil {
 		return
 	}
-	s.stopOnce.Do(func() {
+	s.lifecycleMu.Lock()
+	if !s.stopped {
+		s.stopped = true
 		if s.runCancel != nil {
 			s.runCancel()
 		}
-	})
+	}
+	s.lifecycleMu.Unlock()
 	s.wg.Wait()
 }
 

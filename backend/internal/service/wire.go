@@ -195,6 +195,18 @@ func ProvideCursorTokenProvider(
 	return p
 }
 
+// ProvideCursorObservedModelsService constructs the Cursor model observer.
+// Application owns the lifecycle so dependency construction never blocks on
+// the initial repository/provider refresh.
+func ProvideCursorObservedModelsService(
+	accountRepo AccountRepository,
+	tokenProvider *CursorTokenProvider,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+) *CursorObservedModelsService {
+	return NewCursorObservedModelsService(accountRepo, tokenProvider, httpUpstream, cursorObservedModelsTTL, cfg)
+}
+
 // ProvideOpenAIQuotaService wires the OpenAI quota query/reset service.
 // It depends on the OpenAI token provider for refreshed access tokens and the
 // privacy client factory for the impersonated upstream HTTP client.
@@ -942,6 +954,7 @@ var ProviderSet = wire.NewSet(
 	ProvideCursorOAuthService,
 	wire.Bind(new(CursorOAuthTokenService), new(*CursorOAuthService)),
 	ProvideCursorTokenProvider,
+	ProvideCursorObservedModelsService,
 	NewGeminiOAuthService,
 	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,

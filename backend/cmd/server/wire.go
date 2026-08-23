@@ -24,8 +24,19 @@ import (
 )
 
 type Application struct {
-	Server  *http.Server
-	Cleanup func()
+	Server               *http.Server
+	CursorObservedModels *service.CursorObservedModelsService
+	Cleanup              func()
+}
+
+// Start launches application-owned background work after the full dependency
+// graph has been constructed. Each owned service remains responsible for
+// making repeated Start calls idempotent.
+func (a *Application) Start() {
+	if a == nil || a.CursorObservedModels == nil {
+		return
+	}
+	a.CursorObservedModels.Start()
 }
 
 func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
@@ -53,7 +64,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "Cleanup"),
+		wire.Struct(new(Application), "Server", "CursorObservedModels", "Cleanup"),
 	)
 	return nil, nil
 }
@@ -117,6 +128,7 @@ func provideCleanup(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
+	cursorObservedModels *service.CursorObservedModelsService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -129,6 +141,12 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"CursorObservedModelsService", func() error {
+				if cursorObservedModels != nil {
+					cursorObservedModels.Stop()
+				}
+				return nil
+			}},
 			{"CaptureSidecarSupervisor", func() error {
 				if captureSidecarSupervisor != nil {
 					captureSidecarSupervisor.Stop()

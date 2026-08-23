@@ -331,6 +331,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	stepUpAuthMiddleware := middleware.NewStepUpAuthMiddleware(totpService, userService, settingService)
 	engine := server.ProvideRouter(configConfig, handlers, jwtAuthMiddleware, optionalJWTAuthMiddleware, adminAuthMiddleware, apiKeyAuthMiddleware, auditLogMiddleware, stepUpAuthMiddleware, apiKeyService, subscriptionService, opsService, settingService, redisClient)
 	httpServer := server.ProvideHTTPServer(configConfig, engine)
+	cursorObservedModelsService := service.ProvideCursorObservedModelsService(accountRepository, cursorTokenProvider, httpUpstream, configConfig)
 	opsMetricsCollector := service.ProvideOpsMetricsCollector(opsRepository, settingRepository, accountRepository, concurrencyService, db, redisClient, configConfig)
 	opsAggregationService := service.ProvideOpsAggregationService(opsRepository, settingRepository, db, redisClient, configConfig)
 	opsAlertEvaluatorService := service.ProvideOpsAlertEvaluatorService(opsService, opsRepository, emailService, redisClient, configConfig, proxyRepository, conversationCapturePool, captureSidecarSupervisor, captureHealthRepository)
@@ -350,10 +351,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorV2Aggregator := service.ProvideChannelMonitorV2Aggregator(channelMonitorV2Repository, db, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
 	rewardCreditExpiryService := service.ProvideRewardCreditExpiryService(rewardCreditRepository, apiKeyAuthCacheInvalidator, billingCache)
-	v2 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, conversationCapturePool, captureSidecarSupervisor, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, kiroOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, rewardCreditExpiryService, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService)
+	v2 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, conversationCapturePool, captureSidecarSupervisor, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, kiroOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, rewardCreditExpiryService, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, cursorObservedModelsService)
 	application := &Application{
-		Server:  httpServer,
-		Cleanup: v2,
+		Server:               httpServer,
+		CursorObservedModels: cursorObservedModelsService,
+		Cleanup:              v2,
 	}
 	return application, nil
 }
@@ -361,8 +363,19 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 // wire.go:
 
 type Application struct {
-	Server  *http.Server
-	Cleanup func()
+	Server               *http.Server
+	CursorObservedModels *service.CursorObservedModelsService
+	Cleanup              func()
+}
+
+// Start launches application-owned background work after the full dependency
+// graph has been constructed. Each owned service remains responsible for
+// making repeated Start calls idempotent.
+func (a *Application) Start() {
+	if a == nil || a.CursorObservedModels == nil {
+		return
+	}
+	a.CursorObservedModels.Start()
 }
 
 func providePrivacyClientFactory() service.PrivacyClientFactory {
@@ -424,6 +437,7 @@ func provideCleanup(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
+	cursorObservedModels *service.CursorObservedModelsService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -435,6 +449,12 @@ func provideCleanup(
 		}
 
 		parallelSteps := []cleanupStep{
+			{"CursorObservedModelsService", func() error {
+				if cursorObservedModels != nil {
+					cursorObservedModels.Stop()
+				}
+				return nil
+			}},
 			{"CaptureSidecarSupervisor", func() error {
 				if captureSidecarSupervisor != nil {
 					captureSidecarSupervisor.Stop()
