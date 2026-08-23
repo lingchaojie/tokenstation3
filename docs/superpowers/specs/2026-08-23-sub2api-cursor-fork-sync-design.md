@@ -129,7 +129,7 @@ Secrets in Authorization, Cookie, session-token, refresh-token, and deep-link fi
 
 ## Scheduling, Retry, and Accounting
 
-- Cursor participates in the existing platform scheduler, group routing, model whitelist, composite routing, quota, and profit-control paths.
+- Cursor participates in the current platform scheduler, group routing, model whitelist, quota, and profit-control paths. The removed fork-era `composite_model_routes` schema and routes are not reintroduced.
 - Transient transport failures receive the fork's same-account retry before normal account failover.
 - Authentication rejection invalidates cached access tokens and uses the fork's refresh/retry classification.
 - Rate limiting permits account switching without applying an unsupported long-lived quarantine.
