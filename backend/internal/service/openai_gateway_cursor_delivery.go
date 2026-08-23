@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
@@ -15,11 +17,14 @@ import (
 
 const cursorChatDoneSSE = "data: [DONE]\n\n"
 
+const cursorChatDefaultDisconnectDrainTimeout = 2 * time.Second
+
 var cursorChatValidationErrorPrefix = []byte(`{"error":{"type":"invalid_request_error","message":`)
 
 type cursorChatEventStream interface {
 	Events() <-chan cursorpkg.AgentEvent
 	Response() *http.Response
+	Close() error
 }
 
 func writeCursorDeliveryBytes(c *gin.Context, payload []byte) (int, error) {
@@ -59,6 +64,7 @@ func (s *OpenAIGatewayService) streamCursorChatCompletions(
 	completionID := "chatcmpl-" + uuid.NewString()
 	created := time.Now().Unix()
 	delivery := cursorChatSSEDelivery{c: c}
+	relay := newCursorChatEventRelay(c, stream, meta.disconnectDrainTimeout)
 	roleSent := false
 
 	writeChunk := func(chunk apicompat.ChatCompletionsChunk) bool {
@@ -79,7 +85,12 @@ func (s *OpenAIGatewayService) streamCursorChatCompletions(
 		})
 	}
 
-	outcome, upstreamErr := consumeCursorAgentEvents(stream.Events(), startTime, meta.maxOutputTokens, func(delta cursorDelta) error {
+	outcome, upstreamErr := consumeCursorAgentEvents(relay.Events(), startTime, meta.maxOutputTokens, func(delta cursorDelta) error {
+		if relay.Disconnected() || cursorChatRequestCanceled(c) {
+			relay.Disconnect()
+			delivery.disconnect()
+			return nil
+		}
 		if delivery.stopped {
 			return nil
 		}
@@ -88,6 +99,9 @@ func (s *OpenAIGatewayService) streamCursorChatCompletions(
 			roleSent = true
 		}
 		if delivery.stopped {
+			if delivery.clientDisconnected {
+				relay.Disconnect()
+			}
 			return nil
 		}
 		switch delta.kind {
@@ -100,10 +114,19 @@ func (s *OpenAIGatewayService) streamCursorChatCompletions(
 		case cursorDeltaToolCall:
 			emitDelta(apicompat.ChatDelta{ToolCalls: []apicompat.ChatToolCall{cursorToolCallDelta(delta)}})
 		}
+		if delivery.clientDisconnected {
+			relay.Disconnect()
+		}
 		return nil
 	})
+	if relay.Disconnected() || cursorChatRequestCanceled(c) {
+		relay.Disconnect()
+		delivery.disconnect()
+	}
+	relay.Stop()
+	clientDisconnectedBeforeTerminal := delivery.clientDisconnected || relay.Disconnected()
 
-	if upstreamErr != nil && !delivery.committed && !delivery.clientDisconnected {
+	if upstreamErr != nil && !delivery.committed && !clientDisconnectedBeforeTerminal {
 		return nil, s.cursorAgentFailure(c, account, upstreamErr)
 	}
 
@@ -116,25 +139,31 @@ func (s *OpenAIGatewayService) streamCursorChatCompletions(
 			}
 		}
 	} else if !delivery.stopped {
-		finishReason := outcome.finishReason
-		finishChunk := apicompat.ChatCompletionsChunk{
-			ID: completionID, Object: "chat.completion.chunk", Created: created, Model: meta.originalModel,
-			Choices: []apicompat.ChatChunkChoice{{Index: 0, Delta: apicompat.ChatDelta{}, FinishReason: &finishReason}},
-		}
-		if writeChunk(finishChunk) && meta.includeUsage {
-			writeChunk(apicompat.ChatCompletionsChunk{
-				ID: completionID, Object: "chat.completion.chunk", Created: created, Model: meta.originalModel,
-				Choices: []apicompat.ChatChunkChoice{}, Usage: cursorChatUsage(resolveCursorUsage(input, outcome)),
-			})
+		if !roleSent {
+			emitDelta(apicompat.ChatDelta{Role: "assistant"})
+			roleSent = true
 		}
 		if !delivery.stopped {
-			delivery.write([]byte(cursorChatDoneSSE))
+			finishReason := outcome.finishReason
+			finishChunk := apicompat.ChatCompletionsChunk{
+				ID: completionID, Object: "chat.completion.chunk", Created: created, Model: meta.originalModel,
+				Choices: []apicompat.ChatChunkChoice{{Index: 0, Delta: apicompat.ChatDelta{}, FinishReason: &finishReason}},
+			}
+			if writeChunk(finishChunk) && meta.includeUsage {
+				writeChunk(apicompat.ChatCompletionsChunk{
+					ID: completionID, Object: "chat.completion.chunk", Created: created, Model: meta.originalModel,
+					Choices: []apicompat.ChatChunkChoice{}, Usage: cursorChatUsage(resolveCursorUsage(input, outcome)),
+				})
+			}
+			if !delivery.stopped {
+				delivery.write([]byte(cursorChatDoneSSE))
+			}
 		}
 	}
 
 	usage := resolveCursorUsage(input, outcome)
 	result := cursorChatForwardResult(requestID, completionID, meta, usage, outcome, startTime)
-	result.ClientDisconnect = delivery.clientDisconnected
+	result.ClientDisconnect = delivery.clientDisconnected || relay.Disconnected()
 	result.UpstreamFailed = upstreamErr != nil
 	result.CaptureTerminalError = upstreamErr != nil
 	result.CaptureResponseComplete = outcome.providerTerminal
@@ -152,6 +181,10 @@ type cursorChatSSEDelivery struct {
 
 func (delivery *cursorChatSSEDelivery) write(payload []byte) bool {
 	if delivery == nil || delivery.stopped {
+		return false
+	}
+	if cursorChatRequestCanceled(delivery.c) {
+		delivery.disconnect()
 		return false
 	}
 	if !delivery.headersSet {
@@ -173,6 +206,143 @@ func (delivery *cursorChatSSEDelivery) write(payload []byte) bool {
 	}
 	delivery.c.Writer.Flush()
 	return true
+}
+
+func (delivery *cursorChatSSEDelivery) disconnect() {
+	if delivery == nil {
+		return
+	}
+	delivery.stopped = true
+	delivery.clientDisconnected = true
+}
+
+func cursorChatRequestCanceled(c *gin.Context) bool {
+	return c != nil && c.Request != nil && c.Request.Context().Err() != nil
+}
+
+type cursorChatEventRelay struct {
+	stream       cursorChatEventStream
+	events       chan cursorpkg.AgentEvent
+	disconnectCh chan struct{}
+	stopCh       chan struct{}
+	done         chan struct{}
+	drainTimeout time.Duration
+
+	disconnected   atomic.Bool
+	disconnectOnce sync.Once
+	stopOnce       sync.Once
+}
+
+func newCursorChatEventRelay(c *gin.Context, stream cursorChatEventStream, drainTimeout time.Duration) *cursorChatEventRelay {
+	if drainTimeout <= 0 {
+		drainTimeout = cursorChatDefaultDisconnectDrainTimeout
+	}
+	relay := &cursorChatEventRelay{
+		stream: stream, events: make(chan cursorpkg.AgentEvent, 32),
+		disconnectCh: make(chan struct{}), stopCh: make(chan struct{}), done: make(chan struct{}),
+		drainTimeout: drainTimeout,
+	}
+	var requestDone <-chan struct{}
+	if c != nil && c.Request != nil {
+		requestDone = c.Request.Context().Done()
+	}
+	go relay.run(requestDone)
+	return relay
+}
+
+func (relay *cursorChatEventRelay) Events() <-chan cursorpkg.AgentEvent { return relay.events }
+
+func (relay *cursorChatEventRelay) Disconnect() {
+	if relay == nil {
+		return
+	}
+	relay.disconnectOnce.Do(func() {
+		relay.disconnected.Store(true)
+		close(relay.disconnectCh)
+	})
+}
+
+func (relay *cursorChatEventRelay) Disconnected() bool {
+	return relay != nil && relay.disconnected.Load()
+}
+
+func (relay *cursorChatEventRelay) Stop() {
+	if relay == nil {
+		return
+	}
+	relay.stopOnce.Do(func() { close(relay.stopCh) })
+	<-relay.done
+}
+
+func (relay *cursorChatEventRelay) run(requestDone <-chan struct{}) {
+	defer close(relay.done)
+	defer close(relay.events)
+	upstreamEvents := relay.stream.Events()
+	disconnectSignal := relay.disconnectCh
+	var drainTimer *time.Timer
+	var drainDeadline <-chan time.Time
+	defer func() {
+		if drainTimer != nil {
+			drainTimer.Stop()
+		}
+	}()
+	startDrain := func() {
+		relay.Disconnect()
+		requestDone = nil
+		disconnectSignal = nil
+		if drainTimer == nil {
+			drainTimer = time.NewTimer(relay.drainTimeout)
+			drainDeadline = drainTimer.C
+		}
+	}
+
+	for {
+		if requestDone != nil {
+			select {
+			case <-requestDone:
+				startDrain()
+			default:
+			}
+		}
+		if drainDeadline != nil {
+			select {
+			case <-drainDeadline:
+				_ = relay.stream.Close()
+				return
+			default:
+			}
+		}
+		select {
+		case <-requestDone:
+			startDrain()
+		case <-disconnectSignal:
+			startDrain()
+		case <-drainDeadline:
+			_ = relay.stream.Close()
+			return
+		case <-relay.stopCh:
+			return
+		case event, ok := <-upstreamEvents:
+			if !ok {
+				return
+			}
+			if requestDone != nil {
+				select {
+				case <-requestDone:
+					startDrain()
+				default:
+				}
+			}
+			select {
+			case relay.events <- event:
+			case <-drainDeadline:
+				_ = relay.stream.Close()
+				return
+			case <-relay.stopCh:
+				return
+			}
+		}
+	}
 }
 
 func (s *OpenAIGatewayService) bufferCursorChatCompletions(
@@ -215,7 +385,7 @@ func cursorChatCompletionsResponse(
 	outcome cursorChatOutcome,
 	usage OpenAIUsage,
 ) apicompat.ChatCompletionsResponse {
-	var content json.RawMessage
+	content := json.RawMessage("null")
 	if outcome.content != "" {
 		content, _ = json.Marshal(outcome.content)
 	}

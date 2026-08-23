@@ -21,12 +21,13 @@ const cursorAgentBearerContextKey = "cursor_agent_request_bearer"
 var cursorSafeUpstreamErrorBody = []byte(`{"error":{"type":"upstream_error","message":"Cursor upstream request failed"}}`)
 
 type cursorChatMeta struct {
-	originalModel   string
-	billingModel    string
-	upstreamModel   string
-	stream          bool
-	includeUsage    bool
-	maxOutputTokens int
+	originalModel          string
+	billingModel           string
+	upstreamModel          string
+	stream                 bool
+	includeUsage           bool
+	maxOutputTokens        int
+	disconnectDrainTimeout time.Duration
 }
 
 type cursorDeltaKind int
@@ -89,6 +90,9 @@ func (s *OpenAIGatewayService) forwardCursorChatCompletions(
 	if err != nil {
 		writeCursorChatValidationError(c, "Invalid Chat Completions request")
 		return nil, errors.New("cursor: invalid chat completions request")
+	}
+	if wireModel := strings.TrimSpace(params.Model); wireModel != "" {
+		meta.upstreamModel = wireModel
 	}
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, meta.stream)
