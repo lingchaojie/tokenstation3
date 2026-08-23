@@ -400,9 +400,12 @@ func cursorBridgeStream(events ...cursorpkg.AgentEvent) cursorChatEventStream {
 
 func cursorToolIdentityEvents() []cursorpkg.AgentEvent {
 	return []cursorpkg.AgentEvent{
-		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved", Arguments: `{}`}},
-		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved", Arguments: `{}`}},
-		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized", Arguments: `{"value":1}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized_before", Arguments: `{"value":0}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved_zero", Arguments: `{}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized_between", Arguments: `{"value":1}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_1", Name: "preserved_one", Arguments: `{}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized_after", Arguments: `{"value":2}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "duplicate_must_drop", Arguments: `{"duplicate":true}`}},
 		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_empty_name", Name: "   ", Arguments: `{}`}},
 		{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
 	}
@@ -423,7 +426,13 @@ func TestCursorToolIdentityIsStableAcrossAllCallerProtocolsAndModes(t *testing.T
 		{name: "messages_streaming", protocol: "messages", stream: true, path: "/v1/messages"},
 	}
 
-	generatedID := ""
+	wantCalls := []cursorPublicToolCall{
+		{id: "call_cursor_2", name: "synthesized_before"},
+		{id: "call_cursor_0", name: "preserved_zero"},
+		{id: "call_cursor_3", name: "synthesized_between"},
+		{id: "call_cursor_1", name: "preserved_one"},
+		{id: "call_cursor_4", name: "synthesized_after"},
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			c, recorder := cursorProtocolTestContext(t, test.path)
@@ -455,33 +464,30 @@ func TestCursorToolIdentityIsStableAcrossAllCallerProtocolsAndModes(t *testing.T
 			require.NoError(t, err)
 
 			calls := cursorPublicToolCallsFromDelivery(t, test.protocol, test.stream, recorder.Body.Bytes())
-			require.Equal(t, "call_cursor_0", calls["preserved"], "nonempty upstream IDs must be preserved and deduplicated")
-			require.NotContains(t, calls, "", "empty tool names must not reach public protocol objects")
-			require.NotContains(t, calls, "   ", "whitespace-only tool names must not reach public protocol objects")
-			require.Len(t, calls, 2)
-			require.NotEmpty(t, calls["synthesized"])
-			require.NotEqual(t, calls["preserved"], calls["synthesized"])
-			if generatedID == "" {
-				generatedID = calls["synthesized"]
-			} else {
-				require.Equal(t, generatedID, calls["synthesized"],
-					"identical Cursor events must have one shared normalized ID in every delivery bridge")
-			}
+			require.Equal(t, wantCalls, calls,
+				"every delivery bridge must preserve public event order and use the shared normalized IDs")
 		})
 	}
 }
 
-func cursorPublicToolCallsFromDelivery(t *testing.T, protocol string, stream bool, body []byte) map[string]string {
+type cursorPublicToolCall struct {
+	id   string
+	name string
+}
+
+func cursorPublicToolCallsFromDelivery(t *testing.T, protocol string, stream bool, body []byte) []cursorPublicToolCall {
 	t.Helper()
-	calls := make(map[string]string)
+	var calls []cursorPublicToolCall
+	callIDByName := make(map[string]string)
 	add := func(id, name string) {
 		require.NotEmpty(t, id, "public tool IDs are required")
 		require.NotEmpty(t, strings.TrimSpace(name), "public tool names are required")
-		if existing, ok := calls[name]; ok {
+		if existing, ok := callIDByName[name]; ok {
 			require.Equal(t, existing, id, "one tool lifecycle must retain one ID")
 			return
 		}
-		calls[name] = id
+		callIDByName[name] = id
+		calls = append(calls, cursorPublicToolCall{id: id, name: name})
 	}
 
 	switch protocol {

@@ -147,14 +147,26 @@ func TestConsumeCursorAgentEventsParallelToolIndexesAreStable(t *testing.T) {
 	require.Equal(t, 1, deltas[1].toolIndex)
 }
 
-func TestConsumeCursorAgentEventsNormalizesToolIdentityBeforeStorageAndDelta(t *testing.T) {
+func TestConsumeCursorAgentEventsNormalizesToolIdentityIndependentOfEventOrder(t *testing.T) {
 	var deltas []cursorDelta
 	outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
 		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
-			ID: "call_cursor_0", Name: "preserved", Arguments: `{}`,
+			Name: "synthesized_before", Arguments: `{"value":0}`,
 		}},
 		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
-			Name: "synthesized", Arguments: `{"value":1}`,
+			ID: "call_cursor_0", Name: "preserved_zero", Arguments: `{}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			Name: "synthesized_between", Arguments: `{"value":1}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			ID: "call_cursor_1", Name: "preserved_one", Arguments: `{}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			Name: "synthesized_after", Arguments: `{"value":2}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			ID: "call_cursor_0", Name: "duplicate_must_drop", Arguments: `{"duplicate":true}`,
 		}},
 		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
 			ID: "call_empty_name", Name: "   ", Arguments: `{}`,
@@ -166,15 +178,124 @@ func TestConsumeCursorAgentEventsNormalizesToolIdentityBeforeStorageAndDelta(t *
 	})
 
 	require.NoError(t, err)
-	require.Len(t, outcome.toolCalls, 2, "an empty public tool name must be suppressed")
-	require.Len(t, deltas, 2)
-	require.Equal(t, "call_cursor_0", outcome.toolCalls[0].ID, "nonempty upstream IDs remain authoritative")
-	require.Equal(t, outcome.toolCalls[0].ID, deltas[0].toolID)
-	require.NotEmpty(t, outcome.toolCalls[1].ID)
-	require.NotEqual(t, outcome.toolCalls[0].ID, outcome.toolCalls[1].ID,
-		"a synthesized-looking upstream ID must not collide with a generated ID")
-	require.Equal(t, outcome.toolCalls[1].ID, deltas[1].toolID,
-		"normalization must happen once before buffered storage and streaming emission")
+	wantIDs := []string{"call_cursor_2", "call_cursor_0", "call_cursor_3", "call_cursor_1", "call_cursor_4"}
+	wantNames := []string{"synthesized_before", "preserved_zero", "synthesized_between", "preserved_one", "synthesized_after"}
+	require.Len(t, outcome.toolCalls, len(wantIDs), "empty names and true duplicate genuine IDs must be suppressed")
+	require.Len(t, deltas, len(wantIDs))
+	for i := range wantIDs {
+		require.Equal(t, wantIDs[i], outcome.toolCalls[i].ID)
+		require.Equal(t, wantNames[i], outcome.toolCalls[i].Function.Name)
+		require.Equal(t, wantIDs[i], deltas[i].toolID,
+			"normalization must happen once before buffered storage and streaming emission")
+		require.Equal(t, wantNames[i], deltas[i].toolName)
+		require.Equal(t, i, deltas[i].toolIndex)
+	}
+}
+
+func TestConsumeCursorAgentEventsFlushesAcceptedToolsAtEveryTerminalBoundary(t *testing.T) {
+	upstreamErr := errors.New("upstream failed")
+	tests := []struct {
+		name             string
+		events           []cursorpkg.AgentEvent
+		maxOutputTokens  int
+		wantErr          error
+		wantTruncated    bool
+		wantTerminal     bool
+		wantToolDeltaIDs []string
+	}{
+		{
+			name: "turn ended",
+			events: []cursorpkg.AgentEvent{
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized", Arguments: `{}`}},
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved", Arguments: `{}`}},
+				{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+			},
+			wantTerminal:     true,
+			wantToolDeltaIDs: []string{"call_cursor_1", "call_cursor_0"},
+		},
+		{
+			name: "channel close",
+			events: []cursorpkg.AgentEvent{
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized", Arguments: `{}`}},
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved", Arguments: `{}`}},
+			},
+			wantToolDeltaIDs: []string{"call_cursor_1", "call_cursor_0"},
+		},
+		{
+			name: "upstream error",
+			events: []cursorpkg.AgentEvent{
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "synthesized", Arguments: `{}`}},
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "preserved", Arguments: `{}`}},
+				{Type: cursorpkg.AgentEventError, Err: upstreamErr},
+			},
+			wantErr:          upstreamErr,
+			wantToolDeltaIDs: []string{"call_cursor_1", "call_cursor_0"},
+		},
+		{
+			name: "local truncation",
+			events: []cursorpkg.AgentEvent{
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{Name: "a", Arguments: `{}`}},
+				{Type: cursorpkg.AgentEventText, Text: strings.Repeat("tail ", 100)},
+				{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_cursor_0", Name: "unconsumed", Arguments: `{}`}},
+			},
+			maxOutputTokens:  8,
+			wantTruncated:    true,
+			wantToolDeltaIDs: []string{"call_cursor_0"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var toolDeltaIDs []string
+			outcome, err := consumeCursorAgentEvents(
+				cursorAgentEvents(test.events...), time.Now(), test.maxOutputTokens,
+				func(delta cursorDelta) error {
+					if delta.kind == cursorDeltaToolCall {
+						toolDeltaIDs = append(toolDeltaIDs, delta.toolID)
+					}
+					return nil
+				},
+			)
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, test.wantTruncated, outcome.truncated)
+			require.Equal(t, test.wantTerminal, outcome.providerTerminal)
+			require.Equal(t, test.wantToolDeltaIDs, toolDeltaIDs)
+			require.Len(t, outcome.toolCalls, len(test.wantToolDeltaIDs))
+			if test.maxOutputTokens > 0 {
+				require.LessOrEqual(t, estimateCursorOutputTokens(outcome), test.maxOutputTokens,
+					"buffered normalization must not reorder output-budget admission")
+			}
+		})
+	}
+}
+
+func TestConsumeCursorAgentEventsDoesNotEmitBufferedToolsAfterDownstreamError(t *testing.T) {
+	writeErr := errors.New("client disconnected")
+	var deltas []cursorDelta
+	outcome, err := consumeCursorAgentEvents(cursorAgentEvents(
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{
+			Name: "accepted_before_disconnect", Arguments: `{}`,
+		}},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventText, Text: "disconnect"},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+	), time.Now(), 0, func(delta cursorDelta) error {
+		deltas = append(deltas, delta)
+		if delta.kind == cursorDeltaText {
+			return writeErr
+		}
+		return nil
+	})
+
+	require.ErrorIs(t, err, writeErr)
+	require.Len(t, deltas, 1)
+	require.Equal(t, cursorDeltaText, deltas[0].kind)
+	require.Len(t, outcome.toolCalls, 1, "accepted tools remain in the partial outcome")
+	require.NotEmpty(t, outcome.toolCalls[0].ID)
+	require.False(t, outcome.providerTerminal)
 }
 
 func TestConsumeCursorAgentEventsConcurrentTurnsDoNotShareToolIndexes(t *testing.T) {

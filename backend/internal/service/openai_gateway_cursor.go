@@ -267,8 +267,15 @@ func consumeCursorAgentEvents(
 ) (cursorChatOutcome, error) {
 	outcome := cursorChatOutcome{finishReason: "stop"}
 	var contentBuilder, reasoningBuilder strings.Builder
-	toolIndexByID := make(map[string]int)
-	nextSyntheticToolID := 0
+	type pendingToolCall struct {
+		id        string
+		key       string
+		name      string
+		arguments string
+	}
+	var pendingToolCalls []pendingToolCall
+	reservedToolIDs := make(map[string]struct{})
+	seenUpstreamToolIDs := make(map[string]struct{})
 	spentTokens := 0
 	limited := maxOutputTokens > 0
 
@@ -305,7 +312,56 @@ func consumeCursorAgentEvents(
 		}
 		return onDelta(delta)
 	}
-	finish := func(err error) (cursorChatOutcome, error) {
+	flushPendingToolCalls := func(emitDeltas bool) error {
+		if len(pendingToolCalls) == 0 {
+			return nil
+		}
+
+		occupiedToolIDs := make(map[string]struct{}, len(reservedToolIDs)+len(pendingToolCalls))
+		for id := range reservedToolIDs {
+			occupiedToolIDs[id] = struct{}{}
+		}
+		deltas := make([]cursorDelta, 0, len(pendingToolCalls))
+		nextSyntheticToolID := 0
+		for _, pending := range pendingToolCalls {
+			callID := pending.id
+			if pending.key == "" {
+				for {
+					callID = fmt.Sprintf("call_cursor_%d", nextSyntheticToolID)
+					nextSyntheticToolID++
+					if _, collision := occupiedToolIDs[callID]; !collision {
+						occupiedToolIDs[callID] = struct{}{}
+						break
+					}
+				}
+			}
+
+			index := len(outcome.toolCalls)
+			outcome.toolCalls = append(outcome.toolCalls, apicompat.ChatToolCall{
+				Index: intPtr(index), ID: callID, Type: "function",
+				Function: apicompat.ChatFunctionCall{Name: pending.name, Arguments: pending.arguments},
+			})
+			deltas = append(deltas, cursorDelta{
+				kind: cursorDeltaToolCall, toolIndex: index, toolID: callID,
+				toolName: pending.name, toolArguments: pending.arguments,
+			})
+		}
+		pendingToolCalls = nil
+
+		if !emitDeltas {
+			return nil
+		}
+		for _, delta := range deltas {
+			if err := emit(delta); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	finish := func(err error, emitPendingTools bool) (cursorChatOutcome, error) {
+		if flushErr := flushPendingToolCalls(emitPendingTools); flushErr != nil {
+			err = flushErr
+		}
 		outcome.content = contentBuilder.String()
 		outcome.reasoning = reasoningBuilder.String()
 		return outcome, err
@@ -314,7 +370,7 @@ func consumeCursorAgentEvents(
 		outcome.truncated = true
 		outcome.finishReason = "length"
 		outcome.providerTerminal = false
-		return finish(nil)
+		return finish(nil, true)
 	}
 
 	for event := range events {
@@ -328,7 +384,7 @@ func consumeCursorAgentEvents(
 				markFirstToken()
 				contentBuilder.WriteString(fitted)
 				if err := emit(cursorDelta{kind: cursorDeltaText, text: fitted}); err != nil {
-					return finish(err)
+					return finish(err, false)
 				}
 			}
 			if dropped {
@@ -344,7 +400,7 @@ func consumeCursorAgentEvents(
 				markFirstToken()
 				reasoningBuilder.WriteString(fitted)
 				if err := emit(cursorDelta{kind: cursorDeltaReasoning, text: fitted}); err != nil {
-					return finish(err)
+					return finish(err, false)
 				}
 			}
 			if dropped {
@@ -355,25 +411,20 @@ func consumeCursorAgentEvents(
 			if event.ToolCall == nil {
 				continue
 			}
+			callID := event.ToolCall.ID
+			callKey := strings.TrimSpace(callID)
+			if callKey != "" {
+				reservedToolIDs[callKey] = struct{}{}
+			}
 			toolName := strings.TrimSpace(event.ToolCall.Name)
 			if toolName == "" {
 				continue
 			}
-			callID := event.ToolCall.ID
-			callKey := strings.TrimSpace(callID)
 			if callKey != "" {
-				if _, duplicate := toolIndexByID[callKey]; duplicate {
+				if _, duplicate := seenUpstreamToolIDs[callKey]; duplicate {
 					continue
 				}
-			} else {
-				for {
-					callID = fmt.Sprintf("call_cursor_%d", nextSyntheticToolID)
-					nextSyntheticToolID++
-					if _, collision := toolIndexByID[callID]; !collision {
-						callKey = callID
-						break
-					}
-				}
+				seenUpstreamToolIDs[callKey] = struct{}{}
 			}
 			if limited {
 				remaining := maxOutputTokens - spentTokens
@@ -384,19 +435,10 @@ func consumeCursorAgentEvents(
 				spentTokens = saturatingAddNonnegativeInt(spentTokens, toolCost)
 			}
 			markFirstToken()
-			index := len(outcome.toolCalls)
-			toolIndexByID[callKey] = index
-			outcome.toolCalls = append(outcome.toolCalls, apicompat.ChatToolCall{
-				Index: intPtr(index), ID: callID, Type: "function",
-				Function: apicompat.ChatFunctionCall{Name: toolName, Arguments: event.ToolCall.Arguments},
+			pendingToolCalls = append(pendingToolCalls, pendingToolCall{
+				id: callID, key: callKey, name: toolName, arguments: event.ToolCall.Arguments,
 			})
 			outcome.finishReason = "tool_calls"
-			if err := emit(cursorDelta{
-				kind: cursorDeltaToolCall, toolIndex: index, toolID: callID,
-				toolName: toolName, toolArguments: event.ToolCall.Arguments,
-			}); err != nil {
-				return finish(err)
-			}
 
 		case cursorpkg.AgentEventTokenDelta:
 			if event.Usage != nil && event.Usage.OutputTokens > 0 {
@@ -406,20 +448,20 @@ func consumeCursorAgentEvents(
 		case cursorpkg.AgentEventTurnEnded:
 			outcome.usage = event.Usage
 			outcome.providerTerminal = event.ProviderTerminal
-			return finish(nil)
+			return finish(nil, true)
 
 		case cursorpkg.AgentEventError:
 			if event.Err == nil {
-				return finish(errors.New("cursor: upstream stream failed"))
+				return finish(errors.New("cursor: upstream stream failed"), true)
 			}
-			return finish(event.Err)
+			return finish(event.Err, true)
 
 		default:
 			// Heartbeats, thinking-end and partial built-in tool controls have no
 			// caller-visible representation at this protocol-neutral layer.
 		}
 	}
-	return finish(nil)
+	return finish(nil, true)
 }
 
 func cursorFitTextToTokenBudget(text string, budget int) (string, int) {
