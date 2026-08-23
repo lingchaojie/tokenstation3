@@ -381,6 +381,56 @@ func TestCursorTokenProviderInvalidationStoresSHA256FingerprintAndRefusesReuse(t
 	require.ErrorIs(t, err, errCursorAccessTokenRejected)
 }
 
+func TestCursorTokenProviderInvalidatesActualCachedBearerFromStaleAccountSnapshot(t *testing.T) {
+	staleAccountToken := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(2*time.Hour))
+	actualBearer := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(3*time.Hour))
+	staleAccount := cursorLifecycleAccount(map[string]any{
+		"access_token": staleAccountToken,
+		"expires_at":   time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+	})
+	cache := newCursorLifecycleTokenCache()
+	cache.values[CursorTokenCacheKey(staleAccount)] = actualBearer
+	provider := NewCursorTokenProvider(nil, cache)
+
+	got, err := provider.GetAccessToken(context.Background(), staleAccount)
+	require.NoError(t, err)
+	require.Equal(t, actualBearer, got, "the request uses the cache token, not the stale account snapshot")
+
+	require.NoError(t, provider.InvalidateRejectedToken(context.Background(), staleAccount, got))
+	latestAccount := cursorLifecycleAccount(map[string]any{
+		"access_token": actualBearer,
+		"expires_at":   time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
+	})
+	got, err = provider.GetAccessToken(context.Background(), latestAccount)
+	require.Empty(t, got)
+	require.ErrorIs(t, err, errCursorAccessTokenRejected)
+
+	actualSum := sha256.Sum256([]byte(actualBearer))
+	staleSum := sha256.Sum256([]byte(staleAccountToken))
+	marker := cache.value(cursorForceRefreshCacheKey(CursorTokenCacheKey(staleAccount)))
+	require.Equal(t, hex.EncodeToString(actualSum[:]), marker)
+	require.NotEqual(t, hex.EncodeToString(staleSum[:]), marker)
+}
+
+func TestCursorTokenProviderGenericInvalidationNormalizesWrappedBearer(t *testing.T) {
+	bearer := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(2*time.Hour))
+	wrappedAccount := cursorLifecycleAccount(map[string]any{
+		"access_token": "cursor-lifecycle-user::" + bearer,
+		"expires_at":   time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+	})
+	cache := newCursorLifecycleTokenCache()
+	provider := NewCursorTokenProvider(nil, cache)
+
+	require.NoError(t, provider.InvalidateToken(context.Background(), wrappedAccount))
+	bareAccount := cursorLifecycleAccount(map[string]any{
+		"access_token": bearer,
+		"expires_at":   time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+	})
+	got, err := provider.GetAccessToken(context.Background(), bareAccount)
+	require.Empty(t, got)
+	require.ErrorIs(t, err, errCursorAccessTokenRejected)
+}
+
 func TestCursorTokenProviderRejectedFingerprintForcesRotation(t *testing.T) {
 	rejected := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(2*time.Hour))
 	refreshed := cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(3*time.Hour))

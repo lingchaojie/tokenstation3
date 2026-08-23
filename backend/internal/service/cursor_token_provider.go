@@ -261,12 +261,26 @@ func (p *CursorTokenProvider) cacheToken(ctx context.Context, account *Account, 
 }
 
 func (p *CursorTokenProvider) InvalidateToken(ctx context.Context, account *Account) error {
+	if account == nil {
+		return nil
+	}
+	// The generic invalidator has no request-local bearer. Preserve its existing
+	// contract with the best credential available on the account snapshot;
+	// Cursor request paths should call InvalidateRejectedToken with the bearer
+	// they actually sent upstream.
+	return p.InvalidateRejectedToken(ctx, account, account.GetCursorAccessToken())
+}
+
+// InvalidateRejectedToken invalidates the cache and fingerprints the exact
+// bearer rejected by Cursor. Callers must pass the request-local token returned
+// by GetAccessToken, because the account snapshot may be older than the cache.
+func (p *CursorTokenProvider) InvalidateRejectedToken(ctx context.Context, account *Account, rejectedBearer string) error {
 	if p == nil || p.tokenCache == nil || account == nil {
 		return nil
 	}
 	cacheKey := CursorTokenCacheKey(account)
 	err := p.tokenCache.DeleteAccessToken(ctx, cacheKey)
-	if fingerprint := cursorTokenFingerprint(account.GetCursorAccessToken()); fingerprint != "" {
+	if fingerprint := cursorTokenFingerprint(rejectedBearer); fingerprint != "" {
 		if setErr := p.tokenCache.SetAccessToken(ctx, cursorForceRefreshCacheKey(cacheKey), fingerprint, cursorForceRefreshTTL); setErr != nil && err == nil {
 			err = setErr
 		}
@@ -296,6 +310,7 @@ func cursorForceRefreshCacheKey(cacheKey string) string {
 }
 
 func cursorTokenFingerprint(token string) string {
+	token, _ = cursorpkg.ParseToken(token)
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return ""
