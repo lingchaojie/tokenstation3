@@ -227,18 +227,12 @@ import Icon from '@/components/icons/Icon.vue'
 import RewardBalanceBreakdown from '@/components/user/RewardBalanceBreakdown.vue'
 import { useAuthStore } from '@/stores/auth'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
-import type { AccountPlatform, RewardBalanceSummary, SubscriptionBalanceSummary, UserSubscription } from '@/types'
+import type { RewardBalanceSummary, SubscriptionBalanceSummary, UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 import { displayMonthlyPlanName } from '@/utils/monthlyPlans'
 
-type DashboardPlatform = AccountPlatform | (string & {})
-type DashboardStats = Omit<UserStatsType, 'by_platform'> & {
-  // Keep known billable platforms typed while still rendering future aggregate keys.
-  by_platform?: Array<Omit<NonNullable<UserStatsType['by_platform']>[number], 'platform'> & { platform: DashboardPlatform }>
-}
-
 const props = withDefaults(defineProps<{
-  stats: DashboardStats
+  stats: UserStatsType
   balance: number
   isSimple: boolean
   showStandardCosts?: boolean

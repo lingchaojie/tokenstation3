@@ -8,6 +8,7 @@ const authState = vi.hoisted(() => ({
 }))
 
 import UserDashboardStats from './UserDashboardStats.vue'
+import type { UserDashboardStats as UserDashboardStatsType } from '@/api/usage'
 
 const messages = vi.hoisted(() => ({
   'common.active': 'active',
@@ -133,10 +134,34 @@ const stats = {
   by_platform: [],
 }
 
+const cursorPlatformStats: UserDashboardStatsType = {
+  ...stats,
+  by_platform: [
+    {
+      platform: 'cursor',
+      total_requests: 4,
+      total_tokens: 320,
+      total_actual_cost: 0.5,
+      today_requests: 2,
+      today_tokens: 160,
+      today_actual_cost: 0.25,
+    },
+  ],
+}
+
 describe('UserDashboardStats', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     authState.user = null
+  })
+
+  it('accepts Cursor in the current dashboard platform aggregate without changing normal stats rendering', () => {
+    const wrapper = mount(UserDashboardStats, {
+      props: { stats: cursorPlatformStats, balance: 25, isSimple: true },
+    })
+
+    expect(wrapper.text()).toContain('Today Requests')
+    expect(wrapper.text()).toContain('12')
   })
 
   it('saves the balance fallback preference and updates the auth user when toggled on', async () => {

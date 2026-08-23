@@ -74,4 +74,23 @@ describe('UserPlatformQuotaCell', () => {
     expect(text.indexOf('anthropic')).toBeLessThan(text.indexOf('gemini'))
     expect(text).not.toContain('openai')
   })
+
+  it('orders configured Cursor quotas after the existing concrete platforms', () => {
+    const w = mount(UserPlatformQuotaCell, {
+      props: {
+        quotas: [
+          item({ platform: 'cursor', daily_limit_usd: 8, daily_usage_usd: 2.5 }),
+          item({ platform: 'deepseek', weekly_limit_usd: 60, weekly_usage_usd: 15 }),
+          item({ platform: 'gemini', monthly_limit_usd: 40, monthly_usage_usd: 10 }),
+          item({ platform: 'anthropic', daily_limit_usd: 20, daily_usage_usd: 5 }),
+        ],
+      },
+    })
+
+    const text = w.text()
+    expect(text).toContain('2.5/8')
+    expect(text.indexOf('anthropic')).toBeLessThan(text.indexOf('gemini'))
+    expect(text.indexOf('gemini')).toBeLessThan(text.indexOf('deepseek'))
+    expect(text.indexOf('deepseek')).toBeLessThan(text.indexOf('cursor'))
+  })
 })
