@@ -188,11 +188,12 @@ func isBareOrSubpathOf(path, root string) bool {
 // account platform and the normalized inbound endpoint.
 //
 // Platform-specific rules:
-//   - OpenAI and Grok text compatibility routes forward to /v1/responses
+//   - OpenAI, Grok, and Cursor text compatibility routes derive /v1/responses
 //     (with optional subpath such as /v1/responses/compact preserved from
 //     the raw URL); native endpoints such as embeddings and alpha search
 //     retain their paths. Grok raw Chat requests override this through the
-//     forwarding result consumed by resolveOpenAIUpstreamEndpoint.
+//     forwarding result consumed by resolveOpenAIUpstreamEndpoint. Cursor's
+//     successful forwarding result similarly supplies its AgentService path.
 //   - Anthropic  → /v1/messages
 //   - Gemini     → /v1beta/models
 //   - Antigravity → /v1/messages (Claude) or gemini (Gemini)
@@ -202,7 +203,7 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 	inbound = strings.TrimSpace(inbound)
 
 	switch platform {
-	case service.PlatformOpenAI, service.PlatformGrok:
+	case service.PlatformOpenAI, service.PlatformGrok, service.PlatformCursor:
 		if inbound == EndpointEmbeddings || inbound == EndpointAlphaSearch || inbound == EndpointResponsesInputTokens || inbound == EndpointImagesGenerations || inbound == EndpointImagesEdits || inbound == EndpointVideosGenerations || inbound == EndpointVideosEdits || inbound == EndpointVideosExtensions || inbound == EndpointVideos {
 			return inbound
 		}

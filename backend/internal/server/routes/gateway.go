@@ -33,11 +33,25 @@ func RegisterGatewayRoutes(
 	requireGroupGoogle := middleware.RequireGroupAssignment(settingService, middleware.GoogleErrorWriter)
 
 	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
-		switch getGroupPlatform(c) {
+		platform := getGroupPlatform(c)
+		switch platform {
 		case service.PlatformOpenAI, service.PlatformKiro, service.PlatformGrok:
 			if c != nil && c.Request != nil {
-				c.Request = c.Request.WithContext(service.WithOpenAICompatiblePlatform(c.Request.Context(), getGroupPlatform(c)))
+				c.Request = c.Request.WithContext(service.WithOpenAICompatiblePlatform(c.Request.Context(), platform))
 			}
+			return true
+		case service.PlatformCursor:
+			// Cursor implements only the three root Responses aliases. It does
+			// not expose OpenAI's compact/input_tokens subresources.
+			if c == nil || c.Request == nil {
+				return false
+			}
+			switch c.Request.URL.Path {
+			case "/v1/responses", "/responses", "/backend-api/codex/responses":
+			default:
+				return false
+			}
+			c.Request = c.Request.WithContext(service.WithOpenAICompatiblePlatform(c.Request.Context(), platform))
 			return true
 		default:
 			return false
@@ -306,7 +320,7 @@ func RegisterGatewayRoutes(
 	}
 	// OpenAI Chat Completions API（不带v1前缀的别名）— auto-route based on group platform
 	r.POST("/chat/completions", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, func(c *gin.Context) {
-		if isOpenAIResponsesCompatibleGatewayPlatform(c) {
+		if useOpenAICompatibleGateway(c, h.OpenAIGateway.ChatCompletions) {
 			h.OpenAIGateway.ChatCompletions(c)
 			return
 		}

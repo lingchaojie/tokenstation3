@@ -327,17 +327,7 @@ func newGroupLifecycleTestService(cache SchedulerCache, accounts AccountReposito
 }
 
 func expectedGroupLifecycleBuckets(groupID int64) []SchedulerBucket {
-	platforms := []string{
-		PlatformAnthropic,
-		PlatformGemini,
-		PlatformOpenAI,
-		PlatformAntigravity,
-		PlatformKiro,
-		PlatformGrok,
-		PlatformKimi,
-		PlatformZhipu,
-		PlatformDeepseek,
-	}
+	platforms := schedulerSnapshotPlatforms()
 	buckets := make([]SchedulerBucket, 0, len(platforms)*2+2)
 	for _, platform := range platforms {
 		buckets = append(buckets,
@@ -349,6 +339,101 @@ func expectedGroupLifecycleBuckets(groupID int64) []SchedulerBucket {
 		}
 	}
 	return buckets
+}
+
+func TestCursorSchedulerGroupLifecycleHasSingleAndForcedBucketsOnly(t *testing.T) {
+	const groupID int64 = 80
+	var cursorBuckets []SchedulerBucket
+	for _, bucket := range expectedGroupLifecycleBuckets(groupID) {
+		if bucket.Platform == PlatformCursor {
+			cursorBuckets = append(cursorBuckets, bucket)
+		}
+	}
+	require.ElementsMatch(t, []SchedulerBucket{
+		{GroupID: groupID, Platform: PlatformCursor, Mode: SchedulerModeSingle},
+		{GroupID: groupID, Platform: PlatformCursor, Mode: SchedulerModeForced},
+	}, cursorBuckets)
+}
+
+type cursorSchedulerEventAccountRepo struct {
+	*bulkEventAccountRepo
+}
+
+func (r *cursorSchedulerEventAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	for _, account := range r.accounts {
+		if account != nil && account.ID == id {
+			copyAccount := *account
+			copyAccount.GroupIDs = append([]int64(nil), account.GroupIDs...)
+			return &copyAccount, nil
+		}
+	}
+	return nil, ErrAccountNotFound
+}
+
+func TestCursorSchedulerAccountAndBulkEventsRebuildOnlyCursorBuckets(t *testing.T) {
+	const accountID int64 = 801
+	oldAndFreshGroupIDs := []int64{802, 803}
+	account := &Account{
+		ID: accountID, Platform: PlatformCursor, Status: StatusActive, Schedulable: true,
+		GroupIDs: []int64{oldAndFreshGroupIDs[1]},
+	}
+	want := schedulerBucketsForTest(oldAndFreshGroupIDs, PlatformCursor)
+
+	t.Run("account event", func(t *testing.T) {
+		cache := newBulkEventSnapshotCache()
+		repo := &cursorSchedulerEventAccountRepo{bulkEventAccountRepo: newBulkEventAccountRepo(account)}
+		svc := newBulkEventTestService(cache, repo)
+
+		err := svc.handleAccountEvent(context.Background(), ptrInt64(accountID), map[string]any{
+			"group_ids": []any{oldAndFreshGroupIDs[0], oldAndFreshGroupIDs[1]},
+		}, make(map[batchSeenKey]struct{}))
+
+		require.NoError(t, err)
+		require.ElementsMatch(t, want, cache.capturedBuckets())
+	})
+
+	t.Run("bulk account event", func(t *testing.T) {
+		cache := newBulkEventSnapshotCache()
+		repo := newBulkEventAccountRepo(account)
+		svc := newBulkEventTestService(cache, repo)
+
+		err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload(
+			[]int64{accountID}, []int64{oldAndFreshGroupIDs[0]},
+		), make(map[batchSeenKey]struct{}))
+
+		require.NoError(t, err)
+		require.ElementsMatch(t, want, cache.capturedBuckets())
+	})
+
+	for _, bucket := range want {
+		require.Equal(t, PlatformCursor, bucket.Platform)
+		require.NotEqual(t, SchedulerModeMixed, bucket.Mode)
+	}
+}
+
+func TestCursorSchedulerGroupEventPreservesAllPlatformsWithNoCursorMixedBucket(t *testing.T) {
+	const groupID int64 = 804
+	cache := newGroupLifecycleTestCache()
+	groups := &groupLifecycleTestGroupRepo{group: &Group{
+		ID: groupID, Platform: PlatformCursor, Status: StatusActive, Hydrated: true,
+	}}
+	accounts := &groupLifecycleTestAccountRepo{}
+	svc := newGroupLifecycleTestService(cache, accounts, groups, config.RunModeStandard)
+
+	require.NoError(t, svc.handleGroupEvent(context.Background(), ptrInt64(groupID), make(map[batchSeenKey]struct{})))
+
+	reopened := append([]SchedulerBucket(nil), cache.reopens...)
+	require.ElementsMatch(t, expectedGroupLifecycleBuckets(groupID), reopened)
+	var cursorBuckets []SchedulerBucket
+	for _, bucket := range reopened {
+		if bucket.Platform == PlatformCursor {
+			cursorBuckets = append(cursorBuckets, bucket)
+		}
+	}
+	require.ElementsMatch(t, []SchedulerBucket{
+		{GroupID: groupID, Platform: PlatformCursor, Mode: SchedulerModeSingle},
+		{GroupID: groupID, Platform: PlatformCursor, Mode: SchedulerModeForced},
+	}, cursorBuckets)
 }
 
 func expectedSchedulerBucketQueryCount(buckets []SchedulerBucket) int {

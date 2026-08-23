@@ -23,6 +23,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		result, err = finalizeOpenAIForwardResultWithUsage(c, result, err, body)
 	}()
 	beginUpstreamResponseModelObservation(c)
+	if account != nil && account.Platform == PlatformCursor {
+		requestView := newOpenAIRequestView(body)
+		return s.forwardCursorResponses(ctx, c, account, body, requestView.Model, requestView.Stream, time.Now())
+	}
 	clearGrokResponsesClientToolMapping(c)
 	clearOpenAIResponsesNamespaceNames(c)
 	startTime := time.Now()

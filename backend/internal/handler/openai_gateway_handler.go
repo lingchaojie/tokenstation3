@@ -164,9 +164,16 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 	}
 }
 
-func openAICompatibleRequestPlatform(_ context.Context, apiKey *service.APIKey) string {
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformGrok {
-		return service.PlatformGrok
+func openAICompatibleRequestPlatform(ctx context.Context, apiKey *service.APIKey) string {
+	if ctx != nil {
+		for _, key := range []any{ctxkey.ForcePlatform, ctxkey.Platform} {
+			if platform, ok := ctx.Value(key).(string); ok && service.IsOpenAICompatiblePlatform(platform) {
+				return service.NormalizeOpenAICompatiblePlatform(platform)
+			}
+		}
+	}
+	if apiKey != nil && apiKey.Group != nil && service.IsOpenAICompatiblePlatform(apiKey.Group.Platform) {
+		return service.NormalizeOpenAICompatiblePlatform(apiKey.Group.Platform)
 	}
 	return service.PlatformOpenAI
 }
@@ -192,14 +199,18 @@ func allowOpenAICompatibleMessagesDispatch(c *gin.Context, apiKey *service.APIKe
 	if apiKey == nil || apiKey.Group == nil {
 		return true
 	}
-	if apiKey.Group.Platform == service.PlatformGrok {
+	platform := apiKey.Group.Platform
+	if c != nil && c.Request != nil {
+		platform = openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+	}
+	if platform == service.PlatformGrok || platform == service.PlatformCursor {
 		return true
 	}
 	// 国产供应商分组与 grok 同语义:/v1/messages 就是其主要服务形态(anthropic
 	// 协议账号原生直通 Claude Code),无需 allow_messages_dispatch 开关授权——
 	// 该开关对非 openai 平台恒被 sanitizeGroupMessagesDispatchFields 置 false,
 	// 若不豁免,CN 分组将永远 403。
-	if service.IsCNProvider(apiKey.Group.Platform) {
+	if service.IsCNProvider(platform) {
 		return true
 	}
 	return apiKey.Group.AllowMessagesDispatch

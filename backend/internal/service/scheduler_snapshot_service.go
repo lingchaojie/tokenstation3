@@ -608,20 +608,12 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 			continue
 		}
 		accountGroupIDs := s.normalizeGroupIDs(account.GroupIDs)
-		switch account.Platform {
-		case PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
-			addPlatformGroups(account.Platform, accountGroupIDs)
-		case PlatformAntigravity:
-			// 批量更新可能刚关闭 mixed_scheduling，仍需清理两个兼容平台的旧快照。
-			addPlatformGroups(PlatformAntigravity, accountGroupIDs)
-			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
-			addPlatformGroups(PlatformGemini, accountGroupIDs)
-		case PlatformKiro:
-			// 批量更新可能刚关闭 mixed_scheduling，仍需清理 Anthropic mixed 旧快照。
-			addPlatformGroups(PlatformKiro, accountGroupIDs)
-			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
-		default:
+		platforms := schedulerBulkRebuildPlatforms(account)
+		if len(platforms) == 0 {
 			return s.rebuildByGroupIDs(ctx, rebuildGroupIDs, "account_bulk_change", seen)
+		}
+		for _, platform := range platforms {
+			addPlatformGroups(platform, accountGroupIDs)
 		}
 	}
 
@@ -846,8 +838,8 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 	return s.rebuildBuckets(ctx, buckets, reason)
 }
 
-func schedulerSnapshotPlatforms() [9]string {
-	return [9]string{
+func schedulerSnapshotPlatforms() [10]string {
+	return [10]string{
 		PlatformAnthropic,
 		PlatformGemini,
 		PlatformOpenAI,
@@ -857,6 +849,27 @@ func schedulerSnapshotPlatforms() [9]string {
 		PlatformKimi,
 		PlatformZhipu,
 		PlatformDeepseek,
+		PlatformCursor,
+	}
+}
+
+// schedulerBulkRebuildPlatforms returns only the platform buckets affected by
+// one bulk account event. Mixed-capable platforms include their cleanup
+// targets even when mixed scheduling may just have been disabled.
+func schedulerBulkRebuildPlatforms(account *Account) []string {
+	if account == nil {
+		return nil
+	}
+	switch account.Platform {
+	case PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformGrok,
+		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformCursor:
+		return []string{account.Platform}
+	case PlatformAntigravity:
+		return []string{PlatformAntigravity, PlatformAnthropic, PlatformGemini}
+	case PlatformKiro:
+		return []string{PlatformKiro, PlatformAnthropic}
+	default:
+		return nil
 	}
 }
 

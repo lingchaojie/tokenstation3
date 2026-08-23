@@ -17,14 +17,78 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	serverroutes "github.com/Wei-Shaw/sub2api/internal/server/routes"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCursorDispatchResponsesRoutesSelectCompatibleGateway(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	var selectedPlatform string
+	groupPlatform := service.PlatformCursor
+	apiKeyAuth := middleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{Platform: groupPlatform},
+		})
+		c.Next()
+		selectedPlatform, _ = c.Request.Context().Value(ctxkey.ForcePlatform).(string)
+	})
+	serverroutes.RegisterGatewayRoutes(
+		router,
+		&handler.Handlers{
+			Gateway:       &handler.GatewayHandler{},
+			OpenAIGateway: &handler.OpenAIGatewayHandler{},
+			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+		},
+		apiKeyAuth, nil, nil, nil, nil,
+		&config.Config{Gateway: config.GatewayConfig{MaxBodySize: 1 << 20, TextMaxBodySize: 1 << 20}},
+	)
+
+	for _, path := range []string{"/v1/responses", "/responses", "/backend-api/codex/responses"} {
+		selectedPlatform = ""
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"model":"auto","input":"hello"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, service.PlatformCursor, selectedPlatform, "path=%s status=%d body=%s", path, w.Code, w.Body.String())
+	}
+	for _, platformCase := range []struct {
+		platform string
+		want     string
+	}{
+		{platform: service.PlatformCursor, want: service.PlatformCursor},
+		{platform: service.PlatformKiro},
+		{platform: service.PlatformKimi, want: service.PlatformKimi},
+	} {
+		for _, path := range []string{"/v1/chat/completions", "/chat/completions"} {
+			groupPlatform = platformCase.platform
+			selectedPlatform = ""
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"model":"auto","messages":[{"role":"user","content":"hello"}]}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, platformCase.want, selectedPlatform, "platform=%s path=%s status=%d body=%s", platformCase.platform, path, w.Code, w.Body.String())
+		}
+	}
+
+	groupPlatform = service.PlatformCursor
+	for _, path := range []string{"/v1/responses/input_tokens", "/v1/responses/compact", "/responses/compact", "/backend-api/codex/responses/compact"} {
+		selectedPlatform = ""
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"model":"auto","input":"hello"}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+		require.Empty(t, selectedPlatform, "Cursor must not inherit OpenAI-only Responses subpath routing: %s", path)
+	}
+}
 
 func TestAPIContracts(t *testing.T) {
 	gin.SetMode(gin.TestMode)

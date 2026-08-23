@@ -125,6 +125,7 @@ type cursorAccountValidationRepo struct {
 	AccountRepository
 	account *Account
 	writes  int
+	binds   int
 }
 
 func (r *cursorAccountValidationRepo) Create(_ context.Context, account *Account) error {
@@ -140,6 +141,11 @@ func (r *cursorAccountValidationRepo) GetByID(_ context.Context, _ int64) (*Acco
 func (r *cursorAccountValidationRepo) Update(_ context.Context, account *Account) error {
 	r.writes++
 	r.account = account
+	return nil
+}
+
+func (r *cursorAccountValidationRepo) BindGroups(_ context.Context, _ int64, _ []int64) error {
+	r.binds++
 	return nil
 }
 
@@ -179,6 +185,47 @@ func TestCursorAccountCreateAndUpdateRejectAPIKeyBeforeWrite(t *testing.T) {
 		require.Zero(t, repo.writes)
 		require.Equal(t, AccountTypeOAuth, repo.account.Type)
 	})
+}
+
+type cursorOAuthOnlyGroupRepo struct {
+	GroupRepository
+	group *Group
+}
+
+func (r *cursorOAuthOnlyGroupRepo) GetByID(_ context.Context, _ int64) (*Group, error) {
+	return r.group, nil
+}
+
+func TestCursorGroupOAuthOnlyRejectsAPIKeyBindingsBeforeBindGroups(t *testing.T) {
+	const groupID int64 = 73
+	for _, groupPlatform := range []string{PlatformCursor, PlatformKiro} {
+		t.Run(groupPlatform, func(t *testing.T) {
+			groups := &cursorOAuthOnlyGroupRepo{group: &Group{
+				ID: groupID, Name: groupPlatform + "-oauth-only", Platform: groupPlatform, RequireOAuthOnly: true,
+			}}
+
+			t.Run("create", func(t *testing.T) {
+				repo := &cursorAccountValidationRepo{}
+				_, err := NewAccountService(repo, groups).Create(context.Background(), CreateAccountRequest{
+					Platform: PlatformGrok, Type: AccountTypeAPIKey, GroupIDs: []int64{groupID},
+				})
+				require.ErrorContains(t, err, "仅允许 OAuth 账号")
+				require.Equal(t, 1, repo.writes, "preserve current write ordering")
+				require.Zero(t, repo.binds)
+			})
+
+			t.Run("update legacy cursor api key", func(t *testing.T) {
+				repo := &cursorAccountValidationRepo{account: &Account{
+					ID: 74, Platform: PlatformCursor, Type: AccountTypeAPIKey,
+				}}
+				groupIDs := []int64{groupID}
+				_, err := NewAccountService(repo, groups).Update(context.Background(), repo.account.ID, UpdateAccountRequest{GroupIDs: &groupIDs})
+				require.ErrorContains(t, err, "仅允许 OAuth 账号")
+				require.Equal(t, 1, repo.writes, "preserve current write ordering")
+				require.Zero(t, repo.binds)
+			})
+		})
+	}
 }
 
 func TestDuplicateRejectsCursorAPIKeyAccountBeforeWrite(t *testing.T) {
