@@ -188,6 +188,9 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
+	if a == nil || !isCursorAccountTypeValid(a.Platform, a.Type) {
+		return false
+	}
 	if !a.IsActive() || !a.Schedulable {
 		return false
 	}

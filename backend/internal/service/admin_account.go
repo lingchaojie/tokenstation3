@@ -220,7 +220,14 @@ func (s *adminServiceImpl) findDuplicateByOperationID(ctx context.Context, opera
 // It is used when the idempotency coordinator cannot confirm whether response persistence
 // succeeded, and deliberately never repeats the create side effect.
 func (s *adminServiceImpl) RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error) {
-	return s.findDuplicateByOperationID(ctx, duplicateAccountOperationID(id, actorScope, operationKey))
+	account, err := s.findDuplicateByOperationID(ctx, duplicateAccountOperationID(id, actorScope, operationKey))
+	if err != nil || account == nil {
+		return account, err
+	}
+	if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+		return nil, err
+	}
+	return account, nil
 }
 
 func cloneAccountValuePointer[T any](value *T) *T {
@@ -247,6 +254,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 
 	source, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateCursorAccountType(source.Platform, source.Type); err != nil {
 		return nil, err
 	}
 	if source.IsCredentialShadow() {
@@ -399,10 +409,14 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func validateCursorAccountType(platform, accountType string) error {
-	if platform == PlatformCursor && accountType == AccountTypeAPIKey {
-		return infraerrors.New(http.StatusBadRequest, "CURSOR_APIKEY_ACCOUNT_UNSUPPORTED", "import a crsr_ credential through the Cursor login flow")
+	if !isCursorAccountTypeValid(platform, accountType) {
+		return infraerrors.New(http.StatusBadRequest, "CURSOR_ACCOUNT_TYPE_UNSUPPORTED", "cursor accounts must use the oauth account type")
 	}
 	return nil
+}
+
+func isCursorAccountTypeValid(platform, accountType string) bool {
+	return platform != PlatformCursor || accountType == AccountTypeOAuth
 }
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
@@ -570,6 +584,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	effectiveType := account.Type
+	if input.Type != "" {
+		effectiveType = input.Type
+	}
+	if err := validateCursorAccountType(account.Platform, effectiveType); err != nil {
+		return nil, err
+	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -616,9 +637,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		account.Name = input.Name
 	}
 	if input.Type != "" {
-		if err := validateCursorAccountType(account.Platform, input.Type); err != nil {
-			return nil, err
-		}
 		account.Type = input.Type
 	}
 	if input.Notes != nil {

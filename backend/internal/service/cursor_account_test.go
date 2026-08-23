@@ -107,18 +107,34 @@ func TestSensitiveCredentialCursorWebSessionIsRedactedAndPreserved(t *testing.T)
 	require.Equal(t, cursorWebJWT, merged["web_session_token"])
 }
 
-func requireCursorAPIKeyAccountError(t *testing.T, err error) {
+var cursorDisallowedAccountTypes = []string{
+	AccountTypeAPIKey,
+	AccountTypeSetupToken,
+	AccountTypeUpstream,
+	AccountTypeBedrock,
+	AccountTypeServiceAccount,
+}
+
+func requireCursorOAuthOnlyAccountError(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
 	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
-	require.Equal(t, "CURSOR_APIKEY_ACCOUNT_UNSUPPORTED", infraerrors.Reason(err))
-	require.Equal(t, "import a crsr_ credential through the Cursor login flow", infraerrors.Message(err))
+	require.Equal(t, "CURSOR_ACCOUNT_TYPE_UNSUPPORTED", infraerrors.Reason(err))
+	require.Equal(t, "cursor accounts must use the oauth account type", infraerrors.Message(err))
 }
 
-func TestCursorAccountRejectsAPIKeyType(t *testing.T) {
-	requireCursorAPIKeyAccountError(t, validateCursorAccountType(PlatformCursor, AccountTypeAPIKey))
+func TestCursorAccountTypeValidatorRequiresExactlyOAuth(t *testing.T) {
+	for _, accountType := range append(cursorDisallowedAccountTypes, "") {
+		t.Run("cursor_"+accountType, func(t *testing.T) {
+			requireCursorOAuthOnlyAccountError(t, validateCursorAccountType(PlatformCursor, accountType))
+		})
+	}
 	require.NoError(t, validateCursorAccountType(PlatformCursor, AccountTypeOAuth))
-	require.NoError(t, validateCursorAccountType(PlatformGrok, AccountTypeAPIKey))
+	for _, accountType := range append(cursorDisallowedAccountTypes, AccountTypeOAuth, "") {
+		t.Run("non_cursor_"+accountType, func(t *testing.T) {
+			require.NoError(t, validateCursorAccountType(PlatformGrok, accountType))
+		})
+	}
 }
 
 type cursorAccountValidationRepo struct {
@@ -126,6 +142,7 @@ type cursorAccountValidationRepo struct {
 	account *Account
 	writes  int
 	binds   int
+	clears  int
 }
 
 func (r *cursorAccountValidationRepo) Create(_ context.Context, account *Account) error {
@@ -149,6 +166,21 @@ func (r *cursorAccountValidationRepo) BindGroups(_ context.Context, _ int64, _ [
 	return nil
 }
 
+func (r *cursorAccountValidationRepo) FindByExtraField(_ context.Context, key string, value any) ([]Account, error) {
+	if r.account == nil || r.account.Extra == nil || r.account.Extra[key] != value {
+		return nil, nil
+	}
+	return []Account{*r.account}, nil
+}
+
+func (r *cursorAccountValidationRepo) ClearError(_ context.Context, _ int64) error {
+	r.writes++
+	r.clears++
+	r.account.Status = StatusActive
+	r.account.ErrorMessage = ""
+	return nil
+}
+
 func (r *cursorAccountValidationRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
 	return nil, nil
 }
@@ -159,32 +191,103 @@ func (r *cursorAccountValidationRepo) CreateWithAccountGroups(_ context.Context,
 	return nil
 }
 
-func TestCursorAccountCreateAndUpdateRejectAPIKeyBeforeWrite(t *testing.T) {
-	t.Run("admin create", func(t *testing.T) {
-		repo := &cursorAccountValidationRepo{}
-		_, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
-			Platform: PlatformCursor, Type: AccountTypeAPIKey, SkipDefaultGroupBind: true,
+func TestCursorAccountCreateRejectsEveryNonOAuthTypeBeforeWrite(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run("admin_"+accountType, func(t *testing.T) {
+			repo := &cursorAccountValidationRepo{}
+			_, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
+				Platform: PlatformCursor, Type: accountType, SkipDefaultGroupBind: true,
+			})
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Zero(t, repo.binds)
 		})
-		requireCursorAPIKeyAccountError(t, err)
-		require.Zero(t, repo.writes)
+
+		t.Run("account_service_"+accountType, func(t *testing.T) {
+			repo := &cursorAccountValidationRepo{}
+			_, err := NewAccountService(repo, nil).Create(context.Background(), CreateAccountRequest{
+				Platform: PlatformCursor, Type: accountType,
+			})
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Zero(t, repo.binds)
+		})
+	}
+}
+
+func TestAdminCursorAccountUpdateRejectsEveryNonOAuthTypeBeforeMutation(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			account := &Account{ID: 42, Name: "cursor", Platform: PlatformCursor, Type: AccountTypeOAuth}
+			repo := &cursorAccountValidationRepo{account: account}
+			_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), 42, &UpdateAccountInput{
+				Name: "must-not-persist", Type: accountType,
+			})
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Zero(t, repo.binds)
+			require.Equal(t, "cursor", repo.account.Name)
+			require.Equal(t, AccountTypeOAuth, repo.account.Type)
+		})
+	}
+}
+
+func TestCursorAccountUpdateWithoutTypePreservesValidOAuth(t *testing.T) {
+	t.Run("admin", func(t *testing.T) {
+		repo := &cursorAccountValidationRepo{account: &Account{
+			ID: 43, Name: "cursor", Platform: PlatformCursor, Type: AccountTypeOAuth,
+		}}
+		updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), 43, &UpdateAccountInput{Name: "renamed"})
+		require.NoError(t, err)
+		require.Equal(t, AccountTypeOAuth, updated.Type)
+		require.Equal(t, "renamed", updated.Name)
+		require.Equal(t, 1, repo.writes)
 	})
 
-	t.Run("account service create", func(t *testing.T) {
-		repo := &cursorAccountValidationRepo{}
-		_, err := NewAccountService(repo, nil).Create(context.Background(), CreateAccountRequest{
-			Platform: PlatformCursor, Type: AccountTypeAPIKey,
-		})
-		requireCursorAPIKeyAccountError(t, err)
-		require.Zero(t, repo.writes)
+	t.Run("account service", func(t *testing.T) {
+		repo := &cursorAccountValidationRepo{account: &Account{
+			ID: 44, Name: "cursor", Platform: PlatformCursor, Type: AccountTypeOAuth,
+		}}
+		name := "renamed"
+		updated, err := NewAccountService(repo, nil).Update(context.Background(), 44, UpdateAccountRequest{Name: &name})
+		require.NoError(t, err)
+		require.Equal(t, AccountTypeOAuth, updated.Type)
+		require.Equal(t, "renamed", updated.Name)
+		require.Equal(t, 1, repo.writes)
 	})
+}
 
-	t.Run("admin update", func(t *testing.T) {
-		repo := &cursorAccountValidationRepo{account: &Account{ID: 42, Platform: PlatformCursor, Type: AccountTypeOAuth}}
-		_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), 42, &UpdateAccountInput{Type: AccountTypeAPIKey})
-		requireCursorAPIKeyAccountError(t, err)
-		require.Zero(t, repo.writes)
-		require.Equal(t, AccountTypeOAuth, repo.account.Type)
-	})
+func TestCursorAccountServiceUpdateRejectsLegacyNonOAuthRowsBeforeMutation(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			repo := &cursorAccountValidationRepo{account: &Account{
+				ID: 45, Name: "legacy", Platform: PlatformCursor, Type: accountType,
+			}}
+			name := "must-not-persist"
+			_, err := NewAccountService(repo, nil).Update(context.Background(), 45, UpdateAccountRequest{Name: &name})
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Zero(t, repo.binds)
+			require.Equal(t, "legacy", repo.account.Name)
+		})
+	}
+}
+
+func TestAdminCursorAccountUpdateWithoutTypeRejectsLegacyNonOAuthRowsBeforeMutation(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			repo := &cursorAccountValidationRepo{account: &Account{
+				ID: 46, Name: "legacy", Platform: PlatformCursor, Type: accountType,
+			}}
+			_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), 46, &UpdateAccountInput{
+				Name: "must-not-persist",
+			})
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Zero(t, repo.binds)
+			require.Equal(t, "legacy", repo.account.Name)
+		})
+	}
 }
 
 type cursorOAuthOnlyGroupRepo struct {
@@ -220,27 +323,85 @@ func TestCursorGroupOAuthOnlyRejectsAPIKeyBindingsBeforeBindGroups(t *testing.T)
 				}}
 				groupIDs := []int64{groupID}
 				_, err := NewAccountService(repo, groups).Update(context.Background(), repo.account.ID, UpdateAccountRequest{GroupIDs: &groupIDs})
-				require.ErrorContains(t, err, "仅允许 OAuth 账号")
-				require.Equal(t, 1, repo.writes, "preserve current write ordering")
+				requireCursorOAuthOnlyAccountError(t, err)
+				require.Zero(t, repo.writes)
 				require.Zero(t, repo.binds)
 			})
 		})
 	}
 }
 
-func TestDuplicateRejectsCursorAPIKeyAccountBeforeWrite(t *testing.T) {
-	repo := &cursorAccountValidationRepo{account: &Account{
-		ID: 77, Name: "legacy-cursor-api-key", Platform: PlatformCursor, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{"api_key": "crsr_legacy"},
-	}}
+func TestDuplicateRejectsEveryLegacyCursorNonOAuthAccountBeforeWrite(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			repo := &cursorAccountValidationRepo{account: &Account{
+				ID: 77, Name: "legacy-cursor", Platform: PlatformCursor, Type: accountType,
+				Credentials: map[string]any{"api_key": "crsr_legacy"},
+			}}
 
-	duplicate, err := (&adminServiceImpl{accountRepo: repo, accountDuplicateRepo: repo}).DuplicateAccount(
-		context.Background(), 77, "admin:1", "",
-	)
+			duplicate, err := (&adminServiceImpl{accountRepo: repo, accountDuplicateRepo: repo}).DuplicateAccount(
+				context.Background(), 77, "admin:1", "",
+			)
 
-	require.Nil(t, duplicate)
-	requireCursorAPIKeyAccountError(t, err)
-	require.Zero(t, repo.writes)
+			require.Nil(t, duplicate)
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Zero(t, repo.binds)
+		})
+	}
+}
+
+func TestRecoverDuplicateRejectsEveryLegacyCursorNonOAuthAccount(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			operationID := duplicateAccountOperationID(78, "admin:1", "retry-key")
+			repo := &cursorAccountValidationRepo{account: &Account{
+				ID: 79, Platform: PlatformCursor, Type: accountType,
+				Extra: map[string]any{duplicateAccountOperationIDExtraKey: operationID},
+			}}
+
+			recovered, err := (&adminServiceImpl{accountRepo: repo}).RecoverDuplicateAccount(
+				context.Background(), 78, "admin:1", "retry-key",
+			)
+
+			require.Nil(t, recovered)
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+		})
+	}
+}
+
+func TestLegacyCursorNonOAuthAccountsCannotRecoverOrBecomeSchedulable(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			account := &Account{
+				ID: 80, Platform: PlatformCursor, Type: accountType,
+				Status: StatusError, Schedulable: true, ErrorMessage: "recoverable",
+			}
+			repo := &cursorAccountValidationRepo{account: account}
+			result, err := (&RateLimitService{accountRepo: repo}).RecoverAccountState(
+				context.Background(), account.ID, AccountRecoveryOptions{},
+			)
+
+			require.Nil(t, result)
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Zero(t, repo.clears)
+			require.Equal(t, StatusError, account.Status)
+
+			account.Status = StatusActive
+			require.False(t, account.IsSchedulable())
+		})
+	}
+
+	require.True(t, (&Account{
+		Platform: PlatformCursor, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+	}).IsSchedulable())
+	for _, accountType := range append(cursorDisallowedAccountTypes, AccountTypeOAuth) {
+		require.True(t, (&Account{
+			Platform: PlatformGrok, Type: accountType, Status: StatusActive, Schedulable: true,
+		}).IsSchedulable(), "non-Cursor type %q must retain schedulability", accountType)
+	}
 }
 
 func TestMisplacedCursorAPIKeyCannotBecomeAccessBearer(t *testing.T) {

@@ -316,6 +316,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if err != nil {
 		return nil, fmt.Errorf("get account: %w", err)
 	}
+	if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+		return nil, err
+	}
 
 	// 更新字段
 	if req.Name != nil {
