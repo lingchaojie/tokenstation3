@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -745,12 +746,38 @@ func TestCursorResponsesAndAnthropicCallerCancellationDrainsBoundedly(t *testing
 
 func TestCursorResponsesAndAnthropicValidationIsNativeAndSecretFree(t *testing.T) {
 	t.Run("responses", func(t *testing.T) {
-		c, recorder := cursorProtocolTestContext(t, "/v1/responses")
-		result, err := (&OpenAIGatewayService{}).forwardCursorResponses(context.Background(), c, cursorGatewayAccount(), []byte(`{"model":`), "", false, time.Now())
-		require.Nil(t, result)
-		require.Error(t, err)
-		require.Contains(t, recorder.Body.String(), `"code":"invalid_request_error"`)
-		require.NotContains(t, recorder.Body.String(), "chat.completion")
+		tests := []struct {
+			name    string
+			body    string
+			wantErr string
+		}{
+			{name: "parse", body: `{"model":"auto","input":"private-secret"`, wantErr: "invalid Responses request"},
+			{name: "model", body: `{"model":"","input":"private-secret"}`, wantErr: "Responses model is required"},
+			{name: "tools", body: `{"model":"auto","input":[{"type":"additional_tools","tools":"private-secret"}]}`, wantErr: "invalid Responses tools"},
+			{name: "conversion", body: `{"model":"auto","instructions":"private-secret","input":42}`, wantErr: "invalid Responses request"},
+			{name: "zero max output tokens", body: `{"model":"auto","max_output_tokens":0,"input":"private-secret"}`, wantErr: "max_output_tokens must be positive"},
+			{name: "negative max output tokens", body: `{"model":"auto","max_output_tokens":-7,"input":"private-secret"}`, wantErr: "max_output_tokens must be positive"},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				c, recorder := cursorProtocolTestContext(t, "/v1/responses")
+				result, err := (&OpenAIGatewayService{}).forwardCursorResponses(
+					context.Background(), c, cursorGatewayAccount(), []byte(test.body), "", false, time.Now(),
+				)
+				require.Nil(t, result)
+				require.Error(t, err)
+				require.ErrorContains(t, err, test.wantErr)
+				require.Equal(t, http.StatusBadRequest, recorder.Code)
+				var response struct {
+					Error map[string]json.RawMessage `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+				require.JSONEq(t, `"invalid_request_error"`, string(response.Error["type"]))
+				require.NotContains(t, response.Error, "code")
+				require.NotContains(t, recorder.Body.String(), "private-secret")
+				require.NotContains(t, recorder.Body.String(), "chat.completion")
+			})
+		}
 	})
 	t.Run("anthropic requires positive max_tokens", func(t *testing.T) {
 		c, recorder := cursorProtocolTestContext(t, "/v1/messages")
@@ -762,4 +789,122 @@ func TestCursorResponsesAndAnthropicValidationIsNativeAndSecretFree(t *testing.T
 		require.NotContains(t, recorder.Body.String(), "private-secret")
 		require.NotContains(t, recorder.Body.String(), "chat.completion")
 	})
+}
+
+func TestCursorResponsesBufferedCachesReasoningForEncryptedReplay(t *testing.T) {
+	assertCursorResponsesReasoningCacheRoundTrip(t, false)
+}
+
+func TestCursorResponsesStreamingCachesReasoningForEncryptedReplay(t *testing.T) {
+	assertCursorResponsesReasoningCacheRoundTrip(t, true)
+}
+
+func TestCursorResponsesAbsentMaxOutputTokensRemainsAllowed(t *testing.T) {
+	paramsSeen := make(chan cursorpkg.AgentRunParams, 1)
+	svc := &OpenAIGatewayService{cursorAgentStreamOpener: cursorChatEOFStreamOpener(t, paramsSeen)}
+	c, recorder := cursorProtocolTestContext(t, "/v1/responses")
+	result, err := svc.forwardCursorResponses(
+		context.Background(), c, cursorChatForwardAccount(t),
+		[]byte(`{"model":"auto","input":"hello"}`), "", false, time.Now(),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "hello", (<-paramsSeen).Prompt)
+}
+
+type cursorReasoningRecordingCache struct {
+	stubGatewayCache
+	mu      sync.Mutex
+	sets    map[string]string
+	getResp map[string]string
+}
+
+func (cache *cursorReasoningRecordingCache) SetReasoningContent(
+	_ context.Context,
+	itemID string,
+	content string,
+	_ time.Duration,
+) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.sets == nil {
+		cache.sets = make(map[string]string)
+	}
+	cache.sets[itemID] = content
+	return nil
+}
+
+func (cache *cursorReasoningRecordingCache) GetReasoningContent(_ context.Context, itemID string) (string, error) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if content, ok := cache.getResp[itemID]; ok {
+		return content, nil
+	}
+	return "", ErrReasoningContentNotFound
+}
+
+func (cache *cursorReasoningRecordingCache) snapshotSets() map[string]string {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	result := make(map[string]string, len(cache.sets))
+	for itemID, content := range cache.sets {
+		result[itemID] = content
+	}
+	return result
+}
+
+func (cache *cursorReasoningRecordingCache) setGetResponse(itemID, content string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.getResp[itemID] = content
+}
+
+func assertCursorResponsesReasoningCacheRoundTrip(t *testing.T, stream bool) {
+	t.Helper()
+	cache := &cursorReasoningRecordingCache{getResp: make(map[string]string)}
+	svc := &OpenAIGatewayService{cache: cache}
+	c, _ := cursorProtocolTestContext(t, "/v1/responses")
+	events := cursorBridgeStream(
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventThinking, Text: "cached bridge reasoning"},
+		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true, Usage: &cursorpkg.AgentUsage{InputTokens: 4, OutputTokens: 3}},
+	)
+	meta := cursorChatTestMeta(stream, false)
+	if stream {
+		result, err := svc.streamCursorResponses(c, cursorGatewayAccount(), events, meta, cursorInputEstimate{}, time.Now(), nil, false, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+	} else {
+		result, err := svc.bufferCursorResponses(c, cursorGatewayAccount(), events, meta, cursorInputEstimate{}, time.Now(), nil, false, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+	}
+
+	sets := cache.snapshotSets()
+	require.Len(t, sets, 1, "the generated reasoning item must be cached by its caller-facing id")
+	var itemID string
+	for id, content := range sets {
+		itemID = id
+		require.NotEmpty(t, id)
+		require.Equal(t, "cached bridge reasoning", content)
+		cache.setGetResponse(id, content)
+	}
+
+	replayBody, err := json.Marshal(map[string]any{
+		"model": "auto",
+		"input": []any{
+			map[string]any{"type": "reasoning", "id": itemID, "summary": []any{}, "encrypted_content": "opaque-only"},
+			map[string]any{"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": `{}`},
+			map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "continue"}}},
+		},
+	})
+	require.NoError(t, err)
+	var replayRequest apicompat.ResponsesRequest
+	require.NoError(t, json.Unmarshal(replayBody, &replayRequest))
+	chatRequest, err := svc.cursorResponsesChatRequest(&replayRequest)
+	require.NoError(t, err)
+	require.NotEmpty(t, chatRequest.Messages)
+	require.Equal(t, "cached bridge reasoning", chatRequest.Messages[0].ReasoningContent)
+	require.NotContains(t, chatRequest.Messages[0].ReasoningContent, "opaque-only")
 }

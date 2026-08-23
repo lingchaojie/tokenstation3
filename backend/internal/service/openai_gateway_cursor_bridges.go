@@ -111,6 +111,10 @@ func (s *OpenAIGatewayService) forwardCursorResponses(
 		writeCursorResponsesJSONError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, errors.New("cursor: Responses model is required")
 	}
+	if request.MaxOutputTokens != nil && *request.MaxOutputTokens <= 0 {
+		writeCursorResponsesJSONError(c, http.StatusBadRequest, "invalid_request_error", "max_output_tokens must be positive")
+		return nil, errors.New("cursor: Responses max_output_tokens must be positive")
+	}
 
 	effectiveTools, err := apicompat.EffectiveResponsesTools(&request)
 	if err != nil {
@@ -120,10 +124,7 @@ func (s *OpenAIGatewayService) forwardCursorResponses(
 	customTools := apicompat.CustomToolNames(effectiveTools)
 	toolSearch := apicompat.HasToolSearchTool(effectiveTools)
 	namespaceTools := apicompat.NamespaceToolNames(effectiveTools)
-	s.recacheReasoningItemsFromInput(request.Input)
-	chatRequest, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(&request, &apicompat.ResponsesToChatOptions{
-		ReasoningContentByID: s.reasoningContentByID,
-	})
+	chatRequest, err := s.cursorResponsesChatRequest(&request)
 	if err != nil {
 		writeCursorResponsesJSONError(c, http.StatusBadRequest, "invalid_request_error", "Invalid Responses request")
 		return nil, errors.New("cursor: invalid Responses request")
@@ -186,6 +187,17 @@ func (s *OpenAIGatewayService) forwardCursorResponses(
 	return result, forwardErr
 }
 
+func (s *OpenAIGatewayService) cursorResponsesChatRequest(
+	request *apicompat.ResponsesRequest,
+) (*apicompat.ChatCompletionsRequest, error) {
+	if request != nil {
+		s.recacheReasoningItemsFromInput(request.Input)
+	}
+	return apicompat.ResponsesToChatCompletionsRequestWithOptions(request, &apicompat.ResponsesToChatOptions{
+		ReasoningContentByID: s.reasoningContentByID,
+	})
+}
+
 func applyCursorResponsesRequestMetadata(result *OpenAIForwardResult, request *apicompat.ResponsesRequest) {
 	if result == nil || request == nil {
 		return
@@ -222,6 +234,7 @@ func (s *OpenAIGatewayService) bufferCursorResponses(
 	response := apicompat.ChatCompletionsResponseToResponses(
 		&chatResponse, meta.originalModel, customTools, toolSearch, namespaceTools,
 	)
+	s.cacheReasoningItemsFromOutput(response.Output)
 	payload, err := json.Marshal(response)
 	if err != nil {
 		return nil, errors.New("cursor: marshal Responses response")
@@ -260,6 +273,7 @@ func (s *OpenAIGatewayService) streamCursorResponses(
 	state.NamespaceTools = namespaceTools
 
 	writeEvents := func(events []apicompat.ResponsesStreamEvent) {
+		s.cacheReasoningItemsFromEvents(events)
 		for _, event := range events {
 			frame, err := apicompat.ResponsesEventToSSE(event)
 			if err != nil || delivery.stopped {
@@ -525,7 +539,7 @@ func cursorProtocolOpeningDisconnectResult(
 }
 
 func writeCursorResponsesJSONError(c *gin.Context, status int, code, message string) {
-	writeCursorProtocolJSON(c, status, gin.H{"error": gin.H{"code": code, "message": message}})
+	writeCursorProtocolJSON(c, status, gin.H{"error": gin.H{"type": code, "message": message}})
 }
 
 func writeCursorAnthropicJSONError(c *gin.Context, status int, errorType, message string) {
