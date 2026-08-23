@@ -181,6 +181,32 @@ func (r *cursorAccountValidationRepo) ClearError(_ context.Context, _ int64) err
 	return nil
 }
 
+func (r *cursorAccountValidationRepo) ClearRateLimit(_ context.Context, _ int64) error {
+	r.writes++
+	return nil
+}
+
+func (r *cursorAccountValidationRepo) ClearAntigravityQuotaScopes(_ context.Context, _ int64) error {
+	r.writes++
+	return nil
+}
+
+func (r *cursorAccountValidationRepo) ClearModelRateLimits(_ context.Context, _ int64) error {
+	r.writes++
+	return nil
+}
+
+func (r *cursorAccountValidationRepo) ClearTempUnschedulable(_ context.Context, _ int64) error {
+	r.writes++
+	return nil
+}
+
+func (r *cursorAccountValidationRepo) SetSchedulable(_ context.Context, _ int64, schedulable bool) error {
+	r.writes++
+	r.account.Schedulable = schedulable
+	return nil
+}
+
 func (r *cursorAccountValidationRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
 	return nil, nil
 }
@@ -401,6 +427,51 @@ func TestLegacyCursorNonOAuthAccountsCannotRecoverOrBecomeSchedulable(t *testing
 		require.True(t, (&Account{
 			Platform: PlatformGrok, Type: accountType, Status: StatusActive, Schedulable: true,
 		}).IsSchedulable(), "non-Cursor type %q must retain schedulability", accountType)
+	}
+}
+
+func TestAdminCursorRecoveryRejectsEveryLegacyNonOAuthTypeBeforeMutation(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			account := &Account{
+				ID: 81, Platform: PlatformCursor, Type: accountType,
+				Status: StatusError, Schedulable: true, ErrorMessage: "recoverable",
+			}
+			repo := &cursorAccountValidationRepo{account: account}
+
+			recovered, err := (&adminServiceImpl{accountRepo: repo}).ClearAccountError(context.Background(), account.ID)
+
+			require.Nil(t, recovered)
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.Equal(t, StatusError, account.Status)
+		})
+	}
+}
+
+func TestAdminCursorSchedulableToggleRejectsInvalidEnableButAllowsQuarantine(t *testing.T) {
+	for _, accountType := range cursorDisallowedAccountTypes {
+		t.Run(accountType, func(t *testing.T) {
+			account := &Account{
+				ID: 82, Platform: PlatformCursor, Type: accountType,
+				Status: StatusActive, Schedulable: false,
+			}
+			repo := &cursorAccountValidationRepo{account: account}
+			svc := &adminServiceImpl{accountRepo: repo}
+
+			enabled, err := svc.SetAccountSchedulable(context.Background(), account.ID, true)
+			require.Nil(t, enabled)
+			requireCursorOAuthOnlyAccountError(t, err)
+			require.Zero(t, repo.writes)
+			require.False(t, account.Schedulable)
+
+			account.Schedulable = true
+			quarantined, err := svc.SetAccountSchedulable(context.Background(), account.ID, false)
+			require.NoError(t, err)
+			require.NotNil(t, quarantined)
+			require.False(t, quarantined.Schedulable)
+			require.Equal(t, 1, repo.writes)
+		})
 	}
 }
 
