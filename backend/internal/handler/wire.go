@@ -24,6 +24,8 @@ func ProvideAdminHandlers(
 	antigravityOAuthHandler *admin.AntigravityOAuthHandler,
 	kiroOAuthHandler *admin.KiroOAuthHandler,
 	grokOAuthHandler *admin.GrokOAuthHandler,
+	cursorOAuthHandler *admin.CursorOAuthHandler,
+	cursorOAuthService service.CursorOAuthTokenService,
 	cnProviderHandler *admin.CNProviderHandler,
 	proxyHandler *admin.ProxyHandler,
 	redeemHandler *admin.RedeemHandler,
@@ -53,6 +55,7 @@ func ProvideAdminHandlers(
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
+	accountHandler.SetCursorOAuthService(cursorOAuthService)
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
@@ -67,6 +70,7 @@ func ProvideAdminHandlers(
 		AntigravityOAuth:       antigravityOAuthHandler,
 		KiroOAuth:              kiroOAuthHandler,
 		GrokOAuth:              grokOAuthHandler,
+		CursorOAuth:            cursorOAuthHandler,
 		CNProvider:             cnProviderHandler,
 		Proxy:                  proxyHandler,
 		Redeem:                 redeemHandler,
@@ -279,6 +283,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAntigravityOAuthHandler,
 	admin.NewKiroOAuthHandler,
 	admin.NewGrokOAuthHandler,
+	admin.NewCursorOAuthHandler,
 	admin.NewCNProviderHandler,
 	admin.NewProxyHandler,
 	admin.NewRedeemHandler,

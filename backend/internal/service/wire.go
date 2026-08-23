@@ -28,6 +28,10 @@ func ProvideGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthCli
 	return svc
 }
 
+func ProvideCursorOAuthService(proxyRepo ProxyRepository, oauthClient CursorOAuthClient, cfg *config.Config) *CursorOAuthService {
+	return NewCursorOAuthService(proxyRepo, oauthClient, cfg)
+}
+
 // BuildInfo contains build information
 type BuildInfo struct {
 	Version   string
@@ -128,6 +132,7 @@ func ProvideTokenRefreshService(
 	antigravityOAuthService *AntigravityOAuthService,
 	kiroOAuthService *KiroOAuthService,
 	grokOAuthService *GrokOAuthService,
+	cursorOAuthService *CursorOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
@@ -138,6 +143,7 @@ func ProvideTokenRefreshService(
 	runtimeBlocker AccountRuntimeBlocker,
 ) *TokenRefreshService {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, kiroOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
+	svc.RegisterCursorRefresher(cursorOAuthService)
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）
@@ -177,6 +183,18 @@ func ProvideOpenAITokenProvider(
 	return p
 }
 
+func ProvideCursorTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	cursorOAuthService *CursorOAuthService,
+	refreshAPI *OAuthRefreshAPI,
+) *CursorTokenProvider {
+	p := NewCursorTokenProvider(accountRepo, tokenCache)
+	p.SetRefreshAPI(refreshAPI, NewCursorTokenRefresher(cursorOAuthService))
+	p.SetRefreshPolicy(CursorProviderRefreshPolicy())
+	return p
+}
+
 // ProvideOpenAIQuotaService wires the OpenAI quota query/reset service.
 // It depends on the OpenAI token provider for refreshed access tokens and the
 // privacy client factory for the impersonated upstream HTTP client.
@@ -190,6 +208,40 @@ func ProvideOpenAIQuotaService(
 	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
 	service.agentIdentityWS = openAIGatewayService
 	return service
+}
+
+// ProvideOpenAIGatewayService preserves the established constructor while
+// attaching the one Cursor provider used by every Cursor-compatible request.
+func ProvideOpenAIGatewayService(
+	accountRepo AccountRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	httpUpstream HTTPUpstream,
+	deferredService *DeferredService,
+	openAITokenProvider *OpenAITokenProvider,
+	grokTokenProvider *GrokTokenProvider,
+	resolver *ModelPricingResolver,
+	channelService *ChannelService,
+	balanceNotifyService *BalanceNotifyService,
+	settingService *SettingService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	capturePool *ConversationCapturePool,
+	cursorTokenProvider *CursorTokenProvider,
+	upstreamUARepos ...AccountUpstreamUserAgentRepository,
+) *OpenAIGatewayService {
+	svc := NewOpenAIGatewayService(accountRepo, usageLogRepo, usageBillingRepo, userRepo, userSubRepo, userGroupRateRepo, cache, cfg, schedulerSnapshot, concurrencyService, billingService, rateLimitService, billingCacheService, httpUpstream, deferredService, openAITokenProvider, grokTokenProvider, resolver, channelService, balanceNotifyService, settingService, userPlatformQuotaRepo, capturePool, upstreamUARepos...)
+	svc.cursorTokenProvider = cursorTokenProvider
+	return svc
 }
 
 func ProvideAccountUsageService(
@@ -237,6 +289,7 @@ func ProvideAccountTestService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	openAIGatewayService *OpenAIGatewayService,
 	settingService *SettingService,
+	cursorTokenProvider *CursorTokenProvider,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -251,6 +304,7 @@ func ProvideAccountTestService(
 	)
 	service.agentIdentityWS = openAIGatewayService
 	service.SetSettingService(settingService)
+	service.SetCursorTokenProvider(cursorTokenProvider)
 	return service
 }
 
@@ -872,7 +926,7 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementService,
 	NewAdminService,
 	NewGatewayService,
-	NewOpenAIGatewayService,
+	ProvideOpenAIGatewayService,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
 	ProvideBatchImageModelPricingResolver,
@@ -885,6 +939,9 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAIOAuthService,
 	ProvideGrokOAuthService,
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
+	ProvideCursorOAuthService,
+	wire.Bind(new(CursorOAuthTokenService), new(*CursorOAuthService)),
+	ProvideCursorTokenProvider,
 	NewGeminiOAuthService,
 	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,

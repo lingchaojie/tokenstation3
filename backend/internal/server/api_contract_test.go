@@ -90,6 +90,70 @@ func TestCursorDispatchResponsesRoutesSelectCompatibleGateway(t *testing.T) {
 	}
 }
 
+func TestCursorOAuthRoutesAreRegistered(t *testing.T) {
+	// Catches an admin route registration mutation that leaves the handler unreachable.
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{
+		Dashboard:              &adminhandler.DashboardHandler{},
+		User:                   &adminhandler.UserHandler{},
+		Group:                  &adminhandler.GroupHandler{},
+		Account:                &adminhandler.AccountHandler{},
+		Announcement:           &adminhandler.AnnouncementHandler{},
+		DataManagement:         &adminhandler.DataManagementHandler{},
+		Backup:                 &adminhandler.BackupHandler{},
+		OAuth:                  &adminhandler.OAuthHandler{},
+		OpenAIOAuth:            &adminhandler.OpenAIOAuthHandler{},
+		GeminiOAuth:            &adminhandler.GeminiOAuthHandler{},
+		AntigravityOAuth:       &adminhandler.AntigravityOAuthHandler{},
+		KiroOAuth:              &adminhandler.KiroOAuthHandler{},
+		GrokOAuth:              &adminhandler.GrokOAuthHandler{},
+		CursorOAuth:            adminhandler.NewCursorOAuthHandler(nil, nil),
+		CNProvider:             &adminhandler.CNProviderHandler{},
+		Proxy:                  &adminhandler.ProxyHandler{},
+		Redeem:                 &adminhandler.RedeemHandler{},
+		Promo:                  &adminhandler.PromoHandler{},
+		Setting:                &adminhandler.SettingHandler{},
+		Capture:                &adminhandler.CaptureHandler{},
+		Ops:                    &adminhandler.OpsHandler{},
+		System:                 &adminhandler.SystemHandler{},
+		Subscription:           &adminhandler.SubscriptionHandler{},
+		Usage:                  &adminhandler.UsageHandler{},
+		UserAttribute:          &adminhandler.UserAttributeHandler{},
+		ErrorPassthrough:       &adminhandler.ErrorPassthroughHandler{},
+		TLSFingerprintProfile:  &adminhandler.TLSFingerprintProfileHandler{},
+		APIKey:                 &adminhandler.AdminAPIKeyHandler{},
+		ScheduledTest:          &adminhandler.ScheduledTestHandler{},
+		Channel:                &adminhandler.ChannelHandler{},
+		ChannelMonitor:         &adminhandler.ChannelMonitorHandler{},
+		ChannelMonitorTemplate: &adminhandler.ChannelMonitorRequestTemplateHandler{},
+		ContentModeration:      &adminhandler.ContentModerationHandler{},
+		Payment:                &adminhandler.PaymentHandler{},
+		Affiliate:              &adminhandler.AffiliateHandler{},
+		CheckIn:                &adminhandler.CheckInHandler{},
+		Compliance:             &adminhandler.ComplianceHandler{},
+		AuditLog:               &adminhandler.AuditLogHandler{},
+	}}
+	serverroutes.RegisterAdminRoutes(router.Group("/api/v1"), handlers,
+		func(c *gin.Context) { c.Next() }, func(c *gin.Context) { c.Next() }, func(c *gin.Context) { c.Next() }, nil)
+	routes := make(map[string]struct{}, len(router.Routes()))
+	for _, route := range router.Routes() {
+		routes[route.Method+" "+route.Path] = struct{}{}
+	}
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/admin/cursor/oauth/auth-url"},
+		{http.MethodPost, "/api/v1/admin/cursor/oauth/poll"},
+		{http.MethodPost, "/api/v1/admin/cursor/oauth/sso-token"},
+		{http.MethodPost, "/api/v1/admin/cursor/sso-to-oauth"},
+	} {
+		_, ok := routes[route.method+" "+route.path]
+		require.Truef(t, ok, "%s %s", route.method, route.path)
+	}
+}
+
 func TestAPIContracts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
