@@ -21,6 +21,7 @@ export default {
         relayPriorityHint: 'Keep a low priority (larger number) so it acts as a fallback only; used when all native Kiro accounts fail',
       },
       kiroAccount: 'Kiro Account',
+      cursorAccount: 'Cursor Account',
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',
@@ -169,6 +170,7 @@ export default {
         codeAssist: 'Code Assist',
         antigravityOauth: 'Antigravity OAuth',
         grokOauth: 'Grok OAuth',
+        cursorOauth: 'Cursor OAuth',
         antigravityApikey: 'Connect via Base URL + API Key',
         upstream: 'Upstream',
         upstreamDesc: 'Connect via Base URL + API Key'
@@ -801,6 +803,17 @@ export default {
           official: 'Official API'
         }
       },
+      cursor: {
+        oauthOnlyHint: 'Cursor accounts use OAuth only. Paste a crsr_ API key or session cookie in the authorization step for one-time conversion; the source secret is never stored.'
+      },
+      cursorCustomBaseUrl: {
+        title: 'Custom Cursor endpoint',
+        hint: 'Optional forwarding endpoint. Authorization and token refresh still use Cursor.',
+        placeholder: 'https://relay.example.com/cursor',
+        required: 'Enter a Cursor endpoint',
+        invalid: 'Enter a safe HTTP or HTTPS endpoint without credentials, query, or fragment',
+        presets: { official: 'Official' }
+      },
       grokClientToolCache: {
         title: 'Client Tool Cache (May Change Automatic Tool Selection)',
         hint: 'For detected Grok Free OAuth accounts, this is enabled by default for client function tools such as Codex and Trae. Turn it off to opt out if the automatic tool-selection behavior is not acceptable.'
@@ -963,6 +976,33 @@ export default {
       },
       // OAuth flow
       oauth: {
+        cursor: {
+          title: 'Cursor Authorization',
+          followSteps: 'Open the deep link and approve access in Cursor.',
+          step1GenerateUrl: 'Generate a Cursor deep link',
+          generateAuthUrl: 'Generate Cursor authorization link',
+          step2OpenUrl: 'Open the link and approve authorization',
+          openUrlDesc: 'Complete authorization in the browser. This page polls for completion automatically.',
+          step3EnterCode: 'Manual callback fallback',
+          authCodeDesc: 'If automatic completion fails, paste the callback URL or code.',
+          authCode: 'Callback URL or code',
+          authCodePlaceholder: 'Paste callback URL or code',
+          authCodeHint: 'The callback code and state are used only for this authorization.',
+          importantNotice: 'Source cookies and crsr_ API keys are one-time inputs and are never stored.',
+          waitingForAuthorization: 'Waiting for Cursor authorization…',
+          validateAndCreate: 'Validate and save',
+          convertSSOAndCreate: 'Convert and save',
+          pleaseEnterRefreshToken: 'Enter a Cursor refresh token',
+          failedToGenerateUrl: 'Failed to generate Cursor authorization link',
+          missingExchangeParams: 'Missing Cursor authorization data',
+          failedToExchangeCode: 'Failed to exchange Cursor authorization code',
+          failedToPoll: 'Failed to poll Cursor authorization',
+          pollTimeout: 'Cursor authorization timed out',
+          failedToValidateRT: 'Failed to validate Cursor refresh token',
+          failedToValidateSSO: 'Failed to convert Cursor credential',
+          failedToConvertSSO: 'Failed to import Cursor credential',
+          errors: {}
+        },
         kiro: {
           title: 'Kiro Authorization',
           followSteps: 'Follow these steps to authorize your Kiro account:',

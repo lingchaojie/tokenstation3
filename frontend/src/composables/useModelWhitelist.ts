@@ -183,6 +183,47 @@ const xaiModels = [
   'grok-imagine-video-1.5'
 ]
 
+export const cursorFallbackModels = [
+  'auto',
+  'cursor-small',
+  'composer-2.5',
+  'composer-2.5-fast',
+  'claude-4.5-sonnet',
+  'claude-4.6-sonnet',
+  'claude-opus-4.8',
+  'gpt-5',
+  'gpt-5.6-sol',
+  'gemini-3-pro',
+  'gemini-3.5-flash',
+  'deepseek-v3.1',
+  'grok-4.6'
+]
+
+let cursorObservedModels: string[] = []
+
+export function registerCursorObservedModels(accounts: Array<{ extra?: unknown }>): string[] {
+  const seen = new Set<string>()
+  const observed: string[] = []
+  for (const account of accounts) {
+    const extra = account.extra as { cursor_observed_models?: { models?: unknown } } | undefined
+    const models = extra?.cursor_observed_models?.models
+    if (!Array.isArray(models)) continue
+    for (const model of models) {
+      if (typeof model !== 'string') continue
+      const id = model.trim()
+      if (id && !seen.has(id)) {
+        seen.add(id)
+        observed.push(id)
+      }
+    }
+  }
+  cursorObservedModels = observed
+  for (const model of observed) {
+    if (!allModels.some((option) => option.value === model)) allModels.push({ value: model, label: model })
+  }
+  return getModelsByPlatform('cursor')
+}
+
 // Cohere
 const cohereModels = [
   'command-a-03-2025',
@@ -266,6 +307,7 @@ const allModelsList: string[] = [
   ...mistralModels,
   ...metaModels,
   ...xaiModels,
+  ...cursorFallbackModels,
   ...cohereModels,
   ...yiModels,
   ...moonshotModels,
@@ -488,6 +530,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'meta': return metaModels
     case 'xai':
     case 'grok': return xaiModels
+    case 'cursor': return cursorObservedModels.length ? cursorObservedModels : cursorFallbackModels
     case 'cohere': return cohereModels
     case 'yi': return yiModels
     case 'moonshot':
@@ -507,6 +550,14 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'openai') return openaiPresetMappings
   if (platform === 'gemini') return geminiPresetMappings
   if (platform === 'grok' || platform === 'xai') return grokPresetMappings
+  if (platform === 'cursor') {
+    return getModelsByPlatform('cursor').map((model) => ({
+      label: model,
+      from: model,
+      to: model,
+      color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400'
+    }))
+  }
   if (platform === 'antigravity') return antigravityPresetMappings
   if (platform === 'kiro') return kiroPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings

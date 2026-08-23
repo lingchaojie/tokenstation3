@@ -648,6 +648,22 @@
         </div>
       </div>
 
+      <div v-if="account.platform === 'cursor' && account.type === 'oauth'" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.cursorCustomBaseUrl.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.cursorCustomBaseUrl.hint') }}</p>
+          </div>
+          <button type="button" data-testid="cursor-custom-base-url-toggle" @click="cursorOAuthCustomBaseUrlEnabled = !cursorOAuthCustomBaseUrlEnabled" :class="['relative inline-flex h-6 w-11 rounded-full border-2 border-transparent', cursorOAuthCustomBaseUrlEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600']">
+            <span :class="['inline-block h-5 w-5 rounded-full bg-white transition', cursorOAuthCustomBaseUrlEnabled ? 'translate-x-5' : 'translate-x-0']" />
+          </button>
+        </div>
+        <div v-if="cursorOAuthCustomBaseUrlEnabled" class="space-y-2">
+          <input v-model="cursorOAuthBaseUrl" type="text" class="input" data-testid="cursor-custom-base-url-input" :placeholder="t('admin.accounts.cursorCustomBaseUrl.placeholder')" />
+          <CursorBaseUrlPresets @select="cursorOAuthBaseUrl = $event" />
+        </div>
+      </div>
+
       <!-- Header Override Section (eligible API-key platforms + grok OAuth) -->
       <div v-if="headerOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -691,7 +707,7 @@
 
       <!-- OpenAI / Grok / Kiro / Anthropic OAuth Model Restriction (OAuth 类型没有 apikey 容器，需要独立区域) -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'grok' || account.platform === 'kiro' || account.platform === 'anthropic') && account.type === 'oauth'"
+        v-if="(account.platform === 'openai' || account.platform === 'grok' || account.platform === 'cursor' || account.platform === 'kiro' || account.platform === 'anthropic') && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -3048,6 +3064,7 @@ import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import CursorBaseUrlPresets from '@/components/account/CursorBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
@@ -3059,6 +3076,7 @@ import {
   buildPlanTypeOptions,
   readPlanType,
   isCustomGrokBaseUrl,
+  isCustomCursorBaseUrl,
   isHeaderOverrideCapable,
   isUpstreamBillingProbeCapable,
   splitHeaderOverridesObject,
@@ -3099,6 +3117,7 @@ import {
   commonErrorCodes,
   buildModelMappingObject,
   splitModelMappingObject,
+  registerCursorObservedModels,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 
@@ -3373,6 +3392,8 @@ const headerOverrideCapable = computed(
 // Grok OAuth 自定义上游地址（仅转发端点；OAuth 授权/令牌刷新不受影响）
 const grokOAuthCustomBaseUrlEnabled = ref(false)
 const grokOAuthBaseUrl = ref('')
+const cursorOAuthCustomBaseUrlEnabled = ref(false)
+const cursorOAuthBaseUrl = ref('')
 // Grok Free OAuth accounts use client-tool prompt caching by default. Keep an
 // explicit false in the account extra as the opt-out signal.
 const grokClientToolCacheEnabled = ref(true)
@@ -4203,6 +4224,16 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       grokOAuthCustomBaseUrlEnabled.value = true
       grokOAuthBaseUrl.value = (grokCreds.base_url as string).trim()
     }
+  }
+  cursorOAuthCustomBaseUrlEnabled.value = false
+  cursorOAuthBaseUrl.value = ''
+  if (newAccount.platform === 'cursor' && newAccount.type === 'oauth' && newAccount.credentials) {
+    const cursorCreds = newAccount.credentials as Record<string, unknown>
+    if (isCustomCursorBaseUrl(cursorCreds.base_url)) {
+      cursorOAuthCustomBaseUrlEnabled.value = true
+      cursorOAuthBaseUrl.value = cursorCreds.base_url as string
+    }
+    allowedModels.value = registerCursorObservedModels([newAccount])
   }
 
   // Initialize API Key fields for apikey type
@@ -5214,7 +5245,7 @@ const handleSubmit = async () => {
     }
 
     // OpenAI/Grok OAuth: persist model mapping to credentials
-    if ((props.account.platform === 'openai' || props.account.platform === 'grok') && props.account.type === 'oauth') {
+    if ((props.account.platform === 'openai' || props.account.platform === 'grok' || props.account.platform === 'cursor') && props.account.type === 'oauth') {
       const currentCredentials = isSparkShadow.value
         ? {}
         : (updatePayload.credentials as Record<string, unknown>) ||
@@ -5343,6 +5374,26 @@ const handleSubmit = async () => {
       // backend applies the default-enabled policy to missing values.
       newExtra[GROK_CLIENT_TOOL_CACHE_EXTRA_KEY] = grokClientToolCacheEnabled.value
       updatePayload.extra = newExtra
+    }
+
+    if (props.account.platform === 'cursor' && props.account.type === 'oauth') {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials = { ...currentCredentials }
+      if (cursorOAuthCustomBaseUrlEnabled.value) {
+        const baseUrl = cursorOAuthBaseUrl.value.trim()
+        if (baseUrl === 'https://api2.cursor.sh') {
+          delete newCredentials.base_url
+        } else if (!isCustomCursorBaseUrl(baseUrl)) {
+          appStore.showError(t('admin.accounts.cursorCustomBaseUrl.invalid'))
+          return
+        } else {
+          newCredentials.base_url = cursorOAuthBaseUrl.value
+        }
+      } else {
+        delete newCredentials.base_url
+      }
+      updatePayload.credentials = newCredentials
     }
 
 	// OpenAI: 手动覆盖订阅档位 plan_type（Plus/Pro/Free）。仅 OAuth 非影子账号：

@@ -226,6 +226,11 @@
           class="mt-2"
           @select="baseUrl = $event; enableBaseUrl = true"
         />
+        <CursorBaseUrlPresets
+          v-if="allTargetsCursor"
+          class="mt-2"
+          @select="baseUrl = $event; enableBaseUrl = true"
+        />
         <p class="input-hint">
           {{ t('admin.accounts.bulkEdit.baseUrlNotice') }}
         </p>
@@ -1492,6 +1497,7 @@ import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import {
   buildHeaderOverridesObject,
   isHeaderOverrideCapable,
+  isCustomCursorBaseUrl,
   isUpstreamBillingProbeCapable,
   validateHeaderOverrideRows,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
@@ -1499,6 +1505,7 @@ import {
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import CursorBaseUrlPresets from '@/components/account/CursorBaseUrlPresets.vue'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -1543,6 +1550,9 @@ const allTargetsGrok = computed(
   () =>
     targetSelectedPlatforms.value.length > 0 &&
     targetSelectedPlatforms.value.every((p) => p === 'grok')
+)
+const allTargetsCursor = computed(
+  () => targetSelectedPlatforms.value.length > 0 && targetSelectedPlatforms.value.every((p) => p === 'cursor')
 )
 const isMixedPlatform = computed(() => targetSelectedPlatforms.value.length > 1)
 
@@ -1962,7 +1972,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enableBaseUrl.value) {
     const baseUrlValue = baseUrl.value.trim()
-    if (baseUrlValue) {
+    if (allTargetsCursor.value && baseUrlValue === 'https://api2.cursor.sh') {
+      credentials.base_url = ''
+      credentialsChanged = true
+    } else if (baseUrlValue) {
       credentials.base_url = baseUrlValue
       credentialsChanged = true
     }
@@ -2219,6 +2232,10 @@ const handleSubmit = async () => {
   // 校验失败、账号请求全挂，因此保存前强制格式校验（与单账号编辑一致）。
   if (enableBaseUrl.value) {
     const trimmedBaseUrl = baseUrl.value.trim()
+    if (allTargetsCursor.value && trimmedBaseUrl && trimmedBaseUrl !== 'https://api2.cursor.sh' && !isCustomCursorBaseUrl(trimmedBaseUrl)) {
+      appStore.showError(t('admin.accounts.cursorCustomBaseUrl.invalid'))
+      return
+    }
     if (trimmedBaseUrl && !/^https?:\/\//i.test(trimmedBaseUrl)) {
       appStore.showError(t('admin.accounts.grokCustomBaseUrl.invalid'))
       return
