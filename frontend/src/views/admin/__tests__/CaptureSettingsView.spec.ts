@@ -18,7 +18,7 @@ const captureSettings = reactive({
   policy: {
     version: 1 as const,
     enabled: false,
-    platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
+    platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true, cursor: true },
     outcomes: { success: true, terminal_error: true },
     content: {
       raw_request: true,
@@ -105,6 +105,7 @@ describe('CaptureSettingsView', () => {
   beforeEach(() => {
     captureSettings.policy.enabled = false
     captureSettings.policy.platforms.openai = false
+    captureSettings.policy.platforms.cursor = true
     captureSettings.policy.model_allowlists.anthropic = ['claude-fable-5', 'claude-opus-5']
     captureSettings.policy.model_allowlists.kiro = ['claude-fable-5', 'claude-opus-5']
     captureSettings.provisioned = true
@@ -162,6 +163,7 @@ describe('CaptureSettingsView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="capture-openai"] [role="switch"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('[data-test="capture-cursor"] [role="switch"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.get('[data-test="capture-master"] [role="switch"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.text()).toContain('admin.captureSettings.content.warning')
     expect(wrapper.text()).toContain('ClickHouse 传输异常')
@@ -220,6 +222,8 @@ describe('CaptureSettingsView', () => {
 
   it('keeps complete spool-operation copy in both locale dictionaries', () => {
     for (const locale of [enCaptureSettings.captureSettings, zhCaptureSettings.captureSettings]) {
+      expect(locale.platforms.cursor).toBeTruthy()
+      expect(locale.platforms.cursorDescription).toBeTruthy()
       expect(locale.infrastructure.staticOff).toBeTruthy()
       expect(locale.infrastructure.sidecarDown).toBeTruthy()
       expect(locale.runtime.draining).toBeTruthy()
@@ -251,13 +255,14 @@ describe('CaptureSettingsView', () => {
     await flushPromises()
 
     await wrapper.get('[data-test="capture-openai"] [role="switch"]').trigger('click')
+    await wrapper.get('[data-test="capture-cursor"] [role="switch"]').trigger('click')
     await wrapper.get('[data-test="capture-save"]').trigger('click')
     await flushPromises()
 
     expect(updateCaptureSettings).toHaveBeenCalledWith(expect.objectContaining({
       version: 1,
       enabled: false,
-      platforms: { anthropic: true, kiro: true, openai: true, gemini: true, antigravity: true, grok: true },
+      platforms: { anthropic: true, kiro: true, openai: true, gemini: true, antigravity: true, grok: true, cursor: false },
       outcomes: { success: true, terminal_error: true },
       content: {
         raw_request: true,

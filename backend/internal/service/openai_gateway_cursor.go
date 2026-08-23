@@ -101,6 +101,7 @@ func (s *OpenAIGatewayService) forwardCursorChatCompletions(
 	if wireModel := strings.TrimSpace(params.Model); wireModel != "" {
 		meta.upstreamModel = wireModel
 	}
+	s.beginCursorDeliveryCapture(c, account, body, params.Model, meta.stream)
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, meta.stream)
 	if !meta.stream {

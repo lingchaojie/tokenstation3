@@ -132,6 +132,41 @@ func TestExtractJSONPreservesHTTP200ProviderTerminalStopReasons(t *testing.T) {
 	}
 }
 
+func TestExtractJSONStopReasonRecognizesOnlyNativeResponsesRootStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		want     string
+	}{
+		{name: "object before status", response: `{"object":"response","status":"completed"}`, want: "completed"},
+		{name: "status before object", response: `{"status":"incomplete","object":"response"}`, want: "incomplete"},
+		{name: "unrelated object", response: `{"object":"job","status":"completed"}`},
+		{name: "padded object is not native", response: `{"object":" response ","status":"completed"}`},
+		{name: "generic root status", response: `{"status":"completed"}`},
+		{name: "malformed status", response: `{"object":"response","status":200}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := FromReaders(context.Background(), Input{
+				Format:   model.PayloadJSON,
+				Response: strings.NewReader(test.response),
+			})
+			require.NoError(t, err)
+			require.Equal(t, test.want, got.StopReason)
+		})
+	}
+}
+
+func TestExtractSSEStopReasonIgnoresResponsesJSONRootStatusShape(t *testing.T) {
+	got, err := FromReaders(context.Background(), Input{
+		Format:   model.PayloadSSE,
+		Response: strings.NewReader("data: {\"object\":\"response\",\"status\":\"completed\"}\n\n"),
+	})
+	require.NoError(t, err)
+	require.Empty(t, got.StopReason)
+}
+
 func TestExtractJSONInvalidMetadataUserIDFallsBackToConversationID(t *testing.T) {
 	got, err := FromReaders(context.Background(), Input{
 		Format:  model.PayloadJSON,

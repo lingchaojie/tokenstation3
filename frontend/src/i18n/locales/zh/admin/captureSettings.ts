@@ -34,6 +34,8 @@ export default {
       gemini: 'Gemini',
       antigravity: 'Antigravity',
       grok: 'Grok',
+      cursor: 'Cursor',
+      cursorDescription: '仅转存调用方格式的 Chat Completions、Responses 和 Messages；绝不存储内部 Connect/Protobuf 帧。',
       openai: 'OpenAI HTTP 文本接口',
       openaiDescription: '仅 /v1/responses、/v1/chat/completions、/v1/messages；不包含 WS、图片、视频和 Embeddings。',
     },

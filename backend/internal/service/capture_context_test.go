@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -969,6 +970,31 @@ func TestCaptureTerminalOutcome(t *testing.T) {
 	}
 }
 
+func TestCommitOpenAIForwardCaptureAttemptCursorPreservesExplicitCompleteness(t *testing.T) {
+	tests := []struct {
+		name         string
+		platform     string
+		wantComplete bool
+	}{
+		{name: "cursor explicit incomplete", platform: PlatformCursor, wantComplete: false},
+		{name: "legacy nonstream EOF default", platform: PlatformOpenAI, wantComplete: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy := DefaultCaptureRuntimePolicy()
+			policy.Enabled = true
+			policy.Platforms.OpenAI = true
+			c, svc, transport, account := newFinalAttemptFixture(t, policy)
+			account.Platform = test.platform
+			svc.captureOutboundRequest(c, account, httptest.NewRequest(http.MethodPost, "https://upstream.test/v1/responses", nil), []byte(`{"model":"mapped"}`))
+
+			require.True(t, CommitOpenAIForwardCaptureAttempt(c, test.platform, &OpenAIForwardResult{CaptureResponseComplete: false}))
+			require.Equal(t, test.wantComplete, transport.Attempts()[0].Finals()[0].ResponseComplete)
+		})
+	}
+}
+
 func TestClientDisconnectCommitPolicyKeepsUpstreamFailureTerminal(t *testing.T) {
 	for _, family := range []string{"anthropic", "openai"} {
 		t.Run(family, func(t *testing.T) {
@@ -1050,6 +1076,33 @@ func TestFinalAttemptGatewaySideEffectSinkCommitsUsageMetadata(t *testing.T) {
 		ResponseComplete:    true,
 	}}, transport.Attempts()[0].Finals())
 	require.Equal(t, []captureTerminalState{captureCommitted}, transport.Attempts()[0].TerminalStates())
+}
+
+func TestCaptureAttemptResponseMetadataMarksFirstDeliveryExactlyOnce(t *testing.T) {
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	c, svc, transport, account := newFinalAttemptFixture(t, policy)
+	svc.captureOutboundRequest(c, account, httptest.NewRequest(http.MethodPost, "https://upstream.test/v1/messages", nil), []byte(`{"model":"mapped"}`))
+
+	firstHeaders := http.Header{"Content-Type": {"text/event-stream"}, "X-First": {"kept"}}
+	require.True(t, markCaptureAttemptResponse(c, http.StatusCreated, firstHeaders))
+	lateResults := make(chan bool, 50)
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lateResults <- markCaptureAttemptResponse(c, http.StatusAccepted, http.Header{"X-Late": {"ignored"}})
+		}()
+	}
+	wg.Wait()
+	close(lateResults)
+	for marked := range lateResults {
+		require.False(t, marked)
+	}
+
+	require.Equal(t, http.StatusCreated, captureAttemptResponseHTTPStatus(c))
+	require.Equal(t, captureHeaderBytes(firstHeaders, svc.cfg.Gateway.Capture.MaxHeaderBytes), transport.Attempts()[0].ResponseHeaderBytes())
 }
 
 func TestUpstreamFailureDisconnectFloodAlwaysAborts(t *testing.T) {

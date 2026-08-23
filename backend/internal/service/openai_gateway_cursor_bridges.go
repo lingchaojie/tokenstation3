@@ -144,6 +144,7 @@ func (s *OpenAIGatewayService) forwardCursorResponses(
 	if wireModel := strings.TrimSpace(params.Model); wireModel != "" {
 		meta.upstreamModel = wireModel
 	}
+	s.beginCursorDeliveryCapture(c, account, body, params.Model, clientStream)
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, clientStream)
 	if !clientStream {
@@ -370,6 +371,7 @@ func (s *OpenAIGatewayService) forwardCursorAnthropic(
 	if wireModel := strings.TrimSpace(params.Model); wireModel != "" {
 		meta.upstreamModel = wireModel
 	}
+	s.beginCursorDeliveryCapture(c, account, body, params.Model, request.Stream)
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, request.Stream)
 	if !request.Stream {

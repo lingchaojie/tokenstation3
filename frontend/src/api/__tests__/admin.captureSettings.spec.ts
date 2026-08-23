@@ -20,7 +20,7 @@ import {
 const policy: CaptureRuntimePolicy = {
   version: 1,
   enabled: false,
-  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
+  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true, cursor: true },
   outcomes: { success: true, terminal_error: true },
   content: {
     raw_request: true,
@@ -51,6 +51,7 @@ describe('admin capture settings API', () => {
 
     expect(get).toHaveBeenCalledWith('/admin/capture-settings')
     expect(put).toHaveBeenCalledWith('/admin/capture-settings', policy)
+    expect(put.mock.calls[0]?.[1].platforms.cursor).toBe(true)
   })
 
   it('requests one of the supported durable history ranges', async () => {

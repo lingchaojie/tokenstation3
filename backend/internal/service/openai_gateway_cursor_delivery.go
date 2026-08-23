@@ -29,6 +29,7 @@ type cursorChatEventStream interface {
 }
 
 func writeCursorDeliveryBytes(c *gin.Context, payload []byte) (int, error) {
+	markCursorDeliveryResponse(c)
 	n, err := c.Writer.Write(payload)
 	if n > 0 {
 		if attempt := captureAttemptForRequest(c); attempt != nil {

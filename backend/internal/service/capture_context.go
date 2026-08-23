@@ -33,6 +33,7 @@ type captureAttemptRequestSlot struct {
 	attempt            *CaptureAttempt
 	owner              captureAttemptOwner
 	responseHTTPStatus int
+	responseMarked     bool
 	stream             bool
 	streamKnown        bool
 }
@@ -264,6 +265,7 @@ func transitionCaptureAttemptOwner(c *gin.Context, owner captureAttemptOwner) {
 	slot.attempt = nil
 	slot.owner = owner
 	slot.responseHTTPStatus = 0
+	slot.responseMarked = false
 	slot.stream = false
 	slot.streamKnown = false
 	slot.mu.Unlock()
@@ -311,6 +313,7 @@ func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 	slot.attempt = next
 	if previous != next {
 		slot.responseHTTPStatus = 0
+		slot.responseMarked = false
 		slot.stream = false
 		slot.streamKnown = false
 	}
@@ -330,6 +333,7 @@ func takeCaptureAttemptForRequest(c *gin.Context) *CaptureAttempt {
 	slot.attempt = nil
 	slot.owner = captureAttemptOwnerNone
 	slot.responseHTTPStatus = 0
+	slot.responseMarked = false
 	slot.stream = false
 	slot.streamKnown = false
 	slot.mu.Unlock()
@@ -349,6 +353,27 @@ func setCaptureAttemptResponseHTTPStatus(c *gin.Context, attempt *CaptureAttempt
 		slot.responseHTTPStatus = status
 	}
 	slot.mu.Unlock()
+}
+
+// markCaptureAttemptResponse atomically gives the first caller response write
+// ownership of the delivered HTTP metadata. Later writes and concurrent
+// terminal paths cannot replace that first observed status/header snapshot.
+func markCaptureAttemptResponse(c *gin.Context, status int, headers http.Header) bool {
+	if status < 100 || status > 599 {
+		return false
+	}
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.owner != captureAttemptOwnerTyped || slot.attempt == nil || slot.responseMarked {
+		return false
+	}
+	slot.responseMarked = true
+	slot.responseHTTPStatus = status
+	return slot.attempt.WriteResponseHeaders(captureHeaderBytes(headers, slot.attempt.headerLimit))
 }
 
 func captureAttemptResponseHTTPStatus(c *gin.Context) int {
@@ -525,19 +550,23 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 	if !streamKnown {
 		stream = result.StreamForCapture()
 	}
+	responseComplete := captureFinalResponseComplete(
+		stream,
+		result.UpstreamFailed,
+		result.CaptureTerminalError,
+		result.ClientDisconnect,
+		result.CaptureResponseComplete,
+	)
+	if strings.EqualFold(strings.TrimSpace(platform), PlatformCursor) {
+		responseComplete = result.CaptureResponseComplete
+	}
 	final := model.Final{
 		HTTPStatus:          boundedCaptureUint16(httpStatus),
 		InputTokens:         boundedCaptureUint32(result.Usage.InputTokens),
 		OutputTokens:        boundedCaptureUint32(result.Usage.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
-		ResponseComplete: captureFinalResponseComplete(
-			stream,
-			result.UpstreamFailed,
-			result.CaptureTerminalError,
-			result.ClientDisconnect,
-			result.CaptureResponseComplete,
-		),
+		ResponseComplete:    responseComplete,
 	}
 	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	return CommitCaptureAttempt(c, platform, outcome, final)

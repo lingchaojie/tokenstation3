@@ -1440,6 +1440,30 @@ func TestExtractCaptureColumnsIgnoresMalformedUsageAndStopFields(t *testing.T) {
 	require.Zero(t, captureUInt32(int(^uint32(0))+1))
 }
 
+func TestExtractCaptureColumnsStopReasonRecognizesOnlyNativeResponsesRootStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform string
+		response string
+		want     string
+	}{
+		{name: "cursor completed", platform: PlatformCursor, response: `{"object":"response","status":"completed"}`, want: "completed"},
+		{name: "openai incomplete", platform: PlatformOpenAI, response: `{"object":"response","status":"incomplete"}`, want: "incomplete"},
+		{name: "unrelated cursor object", platform: PlatformCursor, response: `{"object":"job","status":"completed"}`},
+		{name: "padded cursor object", platform: PlatformCursor, response: `{"object":" response ","status":"completed"}`},
+		{name: "unshaped cursor payload", platform: PlatformCursor, response: `{"status":"completed"}`},
+		{name: "unrelated platform", platform: PlatformAnthropic, response: `{"object":"response","status":"completed"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := &CaptureRecord{Platform: test.platform, RawResponse: []byte(test.response)}
+			extractCaptureColumns(record)
+			require.Equal(t, test.want, record.StopReason)
+		})
+	}
+}
+
 func TestExtractCaptureColumnsIgnoresMalformedSignatures(t *testing.T) {
 	rec := &CaptureRecord{Stream: true, RawResponse: []byte(strings.Join([]string{
 		`data: {"signature":null}`,
