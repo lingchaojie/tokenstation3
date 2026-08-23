@@ -147,10 +147,10 @@ func TestCursorOAuthClientErrorsDoNotExposeCredentials(t *testing.T) {
 		require.NotContains(t, err.Error(), "CURSOR_TOKEN_CANARY")
 	})
 
-	t.Run("bounded status body", func(t *testing.T) {
+	t.Run("status body omitted", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadGateway)
-			_, _ = io.WriteString(w, `{"accessToken":"CURSOR_TOKEN_CANARY","padding":"`+strings.Repeat("x", cursorOAuthErrorBodyLimit*2)+`"}`)
+			_, _ = io.WriteString(w, `{"accessToken":"CURSOR_TOKEN_CANARY","padding":"`+strings.Repeat("x", 8192)+`"}`)
 		}))
 		defer server.Close()
 
@@ -158,7 +158,7 @@ func TestCursorOAuthClientErrorsDoNotExposeCredentials(t *testing.T) {
 		_, err := client.ExchangeUserAPIKey(context.Background(), "crsr_secret", "")
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), "CURSOR_TOKEN_CANARY")
-		require.Less(t, len(err.Error()), cursorOAuthErrorBodyLimit+1024)
+		require.Less(t, len(err.Error()), 5120)
 	})
 
 	t.Run("invalid proxy fails closed", func(t *testing.T) {
@@ -168,6 +168,109 @@ func TestCursorOAuthClientErrorsDoNotExposeCredentials(t *testing.T) {
 		require.Equal(t, "CURSOR_OAUTH_CLIENT_INIT_FAILED", infraerrors.Reason(err))
 		require.NotContains(t, err.Error(), "crsr_secret")
 	})
+}
+
+func TestCursorOAuthClientOmitsShortUpstreamErrorBodies(t *testing.T) {
+	t.Run("json credential echo", func(t *testing.T) {
+		const credential = "crsr_fake_echo_json"
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"message":"credential crsr_fake_echo_json","debug":"raw-json-debug"}`)
+		}))
+		defer server.Close()
+
+		client := &cursorOAuthClient{baseURL: server.URL}
+		_, err := client.ExchangeUserAPIKey(context.Background(), credential, "")
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), credential)
+		require.NotContains(t, err.Error(), "raw-json-debug")
+	})
+
+	t.Run("plain credential echo", func(t *testing.T) {
+		const credential = "fake-refresh-echo-plain"
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(w, "upstream echoed fake-refresh-echo-plain raw-plain-debug")
+		}))
+		defer server.Close()
+
+		client := &cursorOAuthClient{baseURL: server.URL}
+		_, err := client.RefreshToken(context.Background(), credential, "")
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), credential)
+		require.NotContains(t, err.Error(), "raw-plain-debug")
+	})
+}
+
+func TestCursorOAuthClientRejectsCrossHost307BeforeCredentialReplay(t *testing.T) {
+	const credential = "crsr_fake_redirect_secret"
+	leaked := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), credential) {
+			leaked <- struct{}{}
+		}
+		_, _ = io.WriteString(w, `{"accessToken":"unexpected-target-token"}`)
+	}))
+	defer target.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL+"/collect")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	client := &cursorOAuthClient{baseURL: source.URL}
+	_, err := client.ExchangeUserAPIKey(context.Background(), credential, "")
+	select {
+	case <-leaked:
+		t.Fatal("cross-host redirect received the credential-bearing request")
+	default:
+	}
+	require.Error(t, err)
+}
+
+func TestCursorOAuthWebSessionRejectsCrossHost307BeforeCredentialReplay(t *testing.T) {
+	leaked := make(chan struct{}, 1)
+	sharedClient := &http.Client{Transport: cursorRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		body := `{}`
+		header := make(http.Header)
+		switch req.URL.Host {
+		case "www.cursor.com":
+			status = http.StatusTemporaryRedirect
+			header.Set("Location", "https://foreign.invalid/collect")
+		case "foreign.invalid":
+			redirectBody, _ := io.ReadAll(req.Body)
+			if strings.Contains(string(redirectBody), `"challenge"`) ||
+				strings.Contains(req.Header.Get("Cookie"), "fake-web-token") {
+				leaked <- struct{}{}
+			}
+		case "api2.cursor.sh":
+			body = `{"accessToken":"client-token","refreshToken":"refresh-token"}`
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+	client := &cursorOAuthClient{
+		baseURL: cursorpkg.DefaultBaseURL,
+		clientFactory: func(string, time.Duration) (*http.Client, error) {
+			return sharedClient, nil
+		},
+	}
+
+	_, err := client.ExchangeWebSession(context.Background(), "user_01%3A%3Afake-web-token", "")
+	select {
+	case <-leaked:
+		t.Fatal("cross-host redirect received Workos credential material")
+	default:
+	}
+	require.Error(t, err)
+	require.Nil(t, sharedClient.CheckRedirect, "redirect policy must not mutate the shared client")
 }
 
 func TestCursorOAuthWebSessionUsesOfficialHosts(t *testing.T) {

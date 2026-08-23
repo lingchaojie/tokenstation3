@@ -91,6 +91,41 @@ func TestUpdateAccount_ExplicitNewTokenOverwrites(t *testing.T) {
 	require.Equal(t, "sk-old", repo.account.Credentials["api_key"])
 }
 
+func TestUpdateAccount_CursorReauthorizationReplacesRefreshSource(t *testing.T) {
+	accountID := int64(205)
+	repo := &updateAccountCredsRepoStub{
+		account: &Account{
+			ID:       accountID,
+			Platform: PlatformCursor,
+			Type:     AccountTypeOAuth,
+			Status:   StatusActive,
+			Credentials: map[string]any{
+				"access_token":      "old-access",
+				"api_key":           "crsr_stale",
+				"web_session_token": "stale-web-session",
+				"base_url":          "https://forward.example",
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Credentials: map[string]any{
+			"access_token":  "new-access",
+			"refresh_token": "new-refresh",
+			"base_url":      "https://forward.example",
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Equal(t, "new-access", updated.Credentials["access_token"])
+	require.Equal(t, "new-refresh", updated.Credentials["refresh_token"])
+	require.NotContains(t, updated.Credentials, "api_key")
+	require.NotContains(t, updated.Credentials, "web_session_token")
+	require.Equal(t, "https://forward.example", updated.Credentials["base_url"])
+}
+
 func TestUpdateAccount_EmptyCredentialsSkipsUpdate(t *testing.T) {
 	accountID := int64(204)
 	repo := &updateAccountCredsRepoStub{

@@ -21,7 +21,6 @@ import (
 const (
 	cursorOAuthRequestTimeout    = 60 * time.Second
 	cursorOAuthResponseBodyLimit = 1 << 20
-	cursorOAuthErrorBodyLimit    = 4 << 10
 
 	cursorWebSessionRequestTimeout = 30 * time.Second
 	cursorWebSessionPollAttempts   = 12
@@ -79,6 +78,7 @@ func (c *cursorOAuthClient) ExchangeWebSession(ctx context.Context, workosSessio
 	if err != nil || httpClient == nil {
 		return nil, infraerrors.New(http.StatusBadGateway, "CURSOR_OAUTH_CLIENT_INIT_FAILED", "create HTTP client failed")
 	}
+	httpClient = cursorOAuthRedirectSafeClient(httpClient)
 	token, err := cursorpkg.ExchangeWebSessionWithOptions(ctx, workosSessionToken, cursorpkg.ExchangeOptions{
 		HTTPClient:   httpClient,
 		PollAttempts: cursorWebSessionPollAttempts,
@@ -149,6 +149,7 @@ func (c *cursorOAuthClient) do(ctx context.Context, method, target string, paylo
 	if err != nil || httpClient == nil {
 		return nil, 0, infraerrors.New(http.StatusBadGateway, "CURSOR_OAUTH_CLIENT_INIT_FAILED", "create HTTP client failed")
 	}
+	httpClient = cursorOAuthRedirectSafeClient(httpClient)
 	request, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(payload))
 	if err != nil {
 		return nil, 0, infraerrors.New(http.StatusBadGateway, "CURSOR_OAUTH_REQUEST_FAILED", "build request failed")
@@ -180,6 +181,28 @@ func (c *cursorOAuthClient) do(ctx context.Context, method, target string, paylo
 	return body, response.StatusCode, nil
 }
 
+func cursorOAuthRedirectSafeClient(client *http.Client) *http.Client {
+	clone := *client
+	previousCheck := client.CheckRedirect
+	clone.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) == 0 || request == nil || request.URL == nil || via[0] == nil || via[0].URL == nil {
+			return errors.New("cursor oauth redirect blocked")
+		}
+		origin := via[0].URL
+		if !strings.EqualFold(request.URL.Scheme, origin.Scheme) || !strings.EqualFold(request.URL.Host, origin.Host) {
+			return errors.New("cursor oauth cross-origin redirect blocked")
+		}
+		if previousCheck != nil {
+			return previousCheck(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("cursor oauth redirect limit exceeded")
+		}
+		return nil
+	}
+	return &clone
+}
+
 func decodeCursorOAuthToken(body []byte) (*cursorpkg.TokenResponse, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, infraerrors.New(http.StatusBadGateway, "CURSOR_OAUTH_INVALID_TOKEN_RESPONSE", "cursor oauth returned an empty response body")
@@ -191,18 +214,10 @@ func decodeCursorOAuthToken(body []byte) (*cursorpkg.TokenResponse, error) {
 	return &token, nil
 }
 
-func cursorOAuthStatusError(code, message string, statusCode int, body []byte) error {
+func cursorOAuthStatusError(code, message string, statusCode int, _ []byte) error {
 	httpStatus := http.StatusBadGateway
 	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
 		httpStatus = statusCode
 	}
-	bodyText := "<empty>"
-	if len(body) > 0 {
-		if len(body) > cursorOAuthErrorBodyLimit {
-			bodyText = "<response body omitted>"
-		} else {
-			bodyText = logredact.RedactText(string(body))
-		}
-	}
-	return infraerrors.Newf(httpStatus, code, "%s: status %d, body: %s", message, statusCode, bodyText)
+	return infraerrors.Newf(httpStatus, code, "%s: status %d", message, statusCode)
 }
