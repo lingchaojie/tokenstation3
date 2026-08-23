@@ -24,11 +24,11 @@ Cursor 账号统一创建为 `platform=cursor`、`type=oauth`。`crsr_` User API
 4. `WorkosCursorSessionToken` Cookie 导入：服务端先识别并保存 web refresh source；账号进入续期/转发 readiness 流程时，再通过深链升级为 chat-ready client token。
 5. 重授权：新的 refresh source 会原子替换旧的 `api_key`、`refresh_token`、`web_session_token` 互斥来源，避免旧凭证复活。
 
-`/admin/cursor/oauth/exchange-code` 是为兼容旧调用方保留的“凭证导入”别名，并不是 OAuth callback code 换证接口。它不会用请求中的 `session_id`/state 做会话绑定校验，而是把 `code` 字段直接当作凭证：以 `crsr_` 开头时按 User API Key 换证，其他值必须能解析为有效的 `WorkosCursorSessionToken`/session Cookie。操作员不要向该入口粘贴 callback URL 或裸 authorization code。
+`/admin/cursor/oauth/exchange-code` 是为兼容旧调用方保留的“凭证导入”别名，并不是 OAuth callback code 换证接口。它不会用请求中的 `session_id`/state 做会话绑定校验，而是把 `code` 字段直接当作凭证：以 `crsr_` 开头时按 User API Key 换证，其他值进入兼容 Cookie 导入路径。该路径当前缺少严格的 JWT/Cookie 合法性校验（已延期到 Task 16 的生产缺陷修复）；底层会把任意非空原文当成 token，因此操作员只能提供来源已确认有效的 `WorkosCursorSessionToken` 或 `userId::JWT`。callback URL、裸 authorization code 或任意字符串可能被当成伪 `access_token` 存储，绝不能提交。
 
 安全约束：
 
-- 管理端 Cursor 凭证与深链轮询路由的敏感请求体按审计规则整体省略，也不会在账号 DTO、错误或日志中回显。兼容 `exchange-code` 的 `code` 是凭证输入；受支持的 `crsr_`/Cookie refresh source 可能按账号凭证规则进入加密存储，因此不要用它提交 callback URL 或裸授权码。
+- 只有 `POST /api/v1/admin/cursor/oauth/poll` 和 `POST /api/v1/admin/cursor/oauth/exchange-code` 的请求体按路由规则整体省略。`/api/v1/admin/cursor/oauth/refresh-token`、`/oauth/sso-token`、`/oauth/password`、`/api/v1/admin/cursor/sso-to-oauth`、`/api/v1/admin/cursor/accounts/:id/refresh` 和通用 `/api/v1/admin/accounts/:id/refresh` 走普通审计请求体路径：JSON 由 `RedactAuditBody` 按敏感键递归脱敏，超限、非 JSON 或不可解析的 body 只保留省略占位符。账号 DTO、错误和日志仍按敏感字段规则脱敏。
 - 管理 UI 在成功、失败、取消、关闭和重置后清空已提交的 Cookie/API Key 等原始输入，并阻止同一次导入并发重复提交。
 - 为支持后台续期，最终选定的 refresh source 会进入现有的加密账号凭证存储；账号 DTO、错误和日志仍按敏感字段规则脱敏。
 - 密码授权能力当前关闭，UI 不展示密码、setup-token 或 Cursor API-key 账号入口。
@@ -43,7 +43,7 @@ Cursor 账号统一创建为 `platform=cursor`、`type=oauth`。`crsr_` User API
 - 模型发现和账号测试：设置 `ProxyID` 后会校验已加载的关联、ID 一致性、启用状态、过期时间和 URL，任一失败都不会静默直连。
 - Agent Run：除关联、启用、过期和 URL 校验外，还要求代理 transport 可成功构造；任一失败都不会静默直连。
 
-自定义端点始终要通过对应 URL 规则：api2 禁止用户名、密码、query、fragment，是否允许 HTTP 由 `security.url_allowlist.allow_insecure_http` 决定；api5 Agent 自定义端点始终要求 HTTPS 且只能使用 host 根路径。只有 `security.url_allowlist.enabled=true` 时，自定义 api2/api5 host 才必须出现在 `security.url_allowlist.upstream_hosts` 中，并按 `allow_private_hosts` 执行私网/解析后 IP 限制。当前 DEV 默认关闭 allowlist，因而允许格式有效的自定义/私有中继（api5 仍必须是 HTTPS）；这不绕过 URL 与代理 transport 规则。排障时不要用裸 `curl` 绕过账号代理；这样得到的网络结论不代表服务端真实调用链。
+自定义端点始终要通过对应 URL 规则：api2 禁止用户名、密码、query、fragment；当 `security.url_allowlist.enabled=true` 时，api2 自定义 URL 一律要求 HTTPS，只有 allowlist 关闭时 `security.url_allowlist.allow_insecure_http` 才决定是否接受 HTTP。api5 Agent 自定义端点始终要求 HTTPS 且只能使用 host 根路径。只有 allowlist 开启时，自定义 api2/api5 host 才必须出现在 `security.url_allowlist.upstream_hosts` 中，并按 `allow_private_hosts` 执行私网/解析后 IP 限制。当前 DEV 默认关闭 allowlist，因而允许格式有效的自定义/私有中继（api5 仍必须是 HTTPS）；这不绕过 URL 与代理 transport 规则。排障时不要用裸 `curl` 绕过账号代理；这样得到的网络结论不代表服务端真实调用链。
 
 ## 模型发现与模型映射
 
