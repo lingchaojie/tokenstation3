@@ -57,6 +57,97 @@ func TestBuildCursorAgentRunFlattensHistoryAndToolResultsInOrder(t *testing.T) {
 	require.Contains(t, estimate.text, "get_weather")
 }
 
+func TestBuildCursorAgentRunPreservesAssistantReasoningAsStructuredTranscript(t *testing.T) {
+	tests := []struct {
+		name              string
+		message           apicompat.ChatMessage
+		wantReasoning     string
+		forbidden         string
+		wantVisibleText   string
+		wantReasoningOnly bool
+	}{
+		{
+			name: "reasoning_content",
+			message: apicompat.ChatMessage{
+				Role: "assistant", Content: json.RawMessage(`"visible answer"`), ReasoningContent: "private plan",
+			},
+			wantReasoning: "private plan", wantVisibleText: "visible answer",
+		},
+		{
+			name: "legacy reasoning fallback",
+			message: apicompat.ChatMessage{
+				Role: "assistant", Content: json.RawMessage(`"visible answer"`), Reasoning: "legacy plan",
+			},
+			wantReasoning: "legacy plan", wantVisibleText: "visible answer",
+		},
+		{
+			name: "reasoning_content takes precedence",
+			message: apicompat.ChatMessage{
+				Role: "assistant", Content: json.RawMessage(`"visible answer"`),
+				ReasoningContent: "preferred plan", Reasoning: "ignored legacy plan",
+			},
+			wantReasoning: "preferred plan", forbidden: "ignored legacy plan", wantVisibleText: "visible answer",
+		},
+		{
+			name: "reasoning-only assistant is retained",
+			message: apicompat.ChatMessage{
+				Role: "assistant", ReasoningContent: "reasoning-only plan",
+			},
+			wantReasoning: "reasoning-only plan", wantReasoningOnly: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &apicompat.ChatCompletionsRequest{Messages: []apicompat.ChatMessage{tt.message}}
+
+			first, estimate, err := buildCursorAgentRunParams("auto", req, cursorNativeTranslateOptions())
+			require.NoError(t, err)
+			second, secondEstimate, err := buildCursorAgentRunParams("auto", req, cursorNativeTranslateOptions())
+			require.NoError(t, err)
+			require.Equal(t, first.Prompt, second.Prompt, "structured transcript must be deterministic")
+			require.Equal(t, estimate, secondEstimate)
+			require.True(t, json.Valid([]byte(first.Prompt)), "structured transcript must be valid JSON")
+
+			transcript := decodeCursorTranscriptForTest(t, first.Prompt)
+			require.Len(t, transcript.Messages, 1)
+			require.Equal(t, "assistant", transcript.Messages[0].Role)
+			require.Equal(t, tt.wantVisibleText, transcript.Messages[0].Content)
+			require.Equal(t, tt.wantReasoning, transcript.Messages[0].Reasoning)
+			require.Contains(t, estimate.text, tt.wantReasoning)
+			if tt.wantReasoningOnly {
+				require.Empty(t, transcript.Messages[0].Content)
+			}
+			if tt.forbidden != "" {
+				require.NotContains(t, first.Prompt, tt.forbidden)
+				require.NotContains(t, estimate.text, tt.forbidden)
+			}
+		})
+	}
+}
+
+func TestBuildCursorAgentRunAssistantReasoningCoexistsWithToolsWithoutChangingVisibleContent(t *testing.T) {
+	req := &apicompat.ChatCompletionsRequest{Messages: []apicompat.ChatMessage{{
+		Role:             "assistant",
+		Content:          json.RawMessage(`"visible tool preface"`),
+		ReasoningContent: "hidden tool plan",
+		ToolCalls: []apicompat.ChatToolCall{{
+			ID: "call-reasoning", Type: "function", Function: apicompat.ChatFunctionCall{Name: "lookup", Arguments: `{}`},
+		}},
+	}}}
+
+	params, estimate, err := buildCursorAgentRunParams("auto", req, cursorNativeTranslateOptions())
+	require.NoError(t, err)
+	transcript := decodeCursorTranscriptForTest(t, params.Prompt)
+	require.Equal(t, []cursorTranscriptTestRecord{{
+		Role: "assistant", Content: "visible tool preface", Reasoning: "hidden tool plan",
+		ToolCalls: []cursorTranscriptTestToolCall{{ID: "call-reasoning", Type: "function", Name: "lookup", Arguments: `{}`}},
+	}}, transcript.Messages)
+	require.Equal(t, "visible tool preface", transcript.Messages[0].Content)
+	require.NotContains(t, transcript.Messages[0].Content, "hidden tool plan")
+	require.Contains(t, estimate.text, "hidden tool plan")
+	require.Contains(t, estimate.text, "call-reasoning")
+}
+
 func TestBuildCursorAgentRunStructuredTranscriptIsInjectionSafeAndOrdered(t *testing.T) {
 	t.Run("delimiter injection cannot collide", func(t *testing.T) {
 		first := &apicompat.ChatCompletionsRequest{Messages: []apicompat.ChatMessage{
@@ -709,6 +800,7 @@ type cursorTranscriptTestEnvelope struct {
 type cursorTranscriptTestRecord struct {
 	Role         string                         `json:"role"`
 	Content      string                         `json:"content"`
+	Reasoning    string                         `json:"reasoning,omitempty"`
 	Name         string                         `json:"name,omitempty"`
 	ToolCallID   string                         `json:"tool_call_id,omitempty"`
 	ToolCalls    []cursorTranscriptTestToolCall `json:"tool_calls,omitempty"`

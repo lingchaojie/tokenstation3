@@ -78,6 +78,7 @@ type cursorTranscriptEnvelope struct {
 type cursorTranscriptRecord struct {
 	Role         string                     `json:"role"`
 	Content      string                     `json:"content"`
+	Reasoning    string                     `json:"reasoning,omitempty"`
 	Name         string                     `json:"name,omitempty"`
 	ToolCallID   string                     `json:"tool_call_id,omitempty"`
 	ToolCalls    []cursorTranscriptToolCall `json:"tool_calls,omitempty"`
@@ -152,9 +153,10 @@ func buildCursorAgentRunParams(
 			appendInput(text)
 		case "assistant":
 			record := cursorAssistantTranscriptRecord(message, text)
-			if text != "" || len(record.ToolCalls) > 0 || record.FunctionCall != nil {
+			if text != "" || record.Reasoning != "" || len(record.ToolCalls) > 0 || record.FunctionCall != nil {
 				turns = append(turns, record)
 				appendInput(text)
+				appendInput(record.Reasoning)
 				appendInput(cursorAssistantToolCallText(message))
 			}
 		case "tool", "function":
@@ -264,7 +266,11 @@ func marshalCursorTranscript(records []cursorTranscriptRecord) string {
 }
 
 func cursorAssistantTranscriptRecord(message apicompat.ChatMessage, content string) cursorTranscriptRecord {
-	record := cursorTranscriptRecord{Role: "assistant", Content: content}
+	reasoning := message.ReasoningContent
+	if reasoning == "" {
+		reasoning = message.Reasoning
+	}
+	record := cursorTranscriptRecord{Role: "assistant", Content: content, Reasoning: reasoning}
 	if len(message.ToolCalls) > 0 {
 		record.ToolCalls = make([]cursorTranscriptToolCall, 0, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {

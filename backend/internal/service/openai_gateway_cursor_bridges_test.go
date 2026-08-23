@@ -863,7 +863,11 @@ func (cache *cursorReasoningRecordingCache) setGetResponse(itemID, content strin
 func assertCursorResponsesReasoningCacheRoundTrip(t *testing.T, stream bool) {
 	t.Helper()
 	cache := &cursorReasoningRecordingCache{getResp: make(map[string]string)}
-	svc := &OpenAIGatewayService{cache: cache}
+	paramsSeen := make(chan cursorpkg.AgentRunParams, 1)
+	svc := &OpenAIGatewayService{
+		cache:                   cache,
+		cursorAgentStreamOpener: cursorChatEOFStreamOpener(t, paramsSeen),
+	}
 	c, _ := cursorProtocolTestContext(t, "/v1/responses")
 	events := cursorBridgeStream(
 		cursorpkg.AgentEvent{Type: cursorpkg.AgentEventThinking, Text: "cached bridge reasoning"},
@@ -900,11 +904,19 @@ func assertCursorResponsesReasoningCacheRoundTrip(t *testing.T, stream bool) {
 		},
 	})
 	require.NoError(t, err)
-	var replayRequest apicompat.ResponsesRequest
-	require.NoError(t, json.Unmarshal(replayBody, &replayRequest))
-	chatRequest, err := svc.cursorResponsesChatRequest(&replayRequest)
+	replayContext, replayRecorder := cursorProtocolTestContext(t, "/v1/responses")
+	result, err := svc.forwardCursorResponses(
+		context.Background(), replayContext, cursorChatForwardAccount(t), replayBody, "", false, time.Now(),
+	)
 	require.NoError(t, err)
-	require.NotEmpty(t, chatRequest.Messages)
-	require.Equal(t, "cached bridge reasoning", chatRequest.Messages[0].ReasoningContent)
-	require.NotContains(t, chatRequest.Messages[0].ReasoningContent, "opaque-only")
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, replayRecorder.Code)
+	params := <-paramsSeen
+	require.True(t, json.Valid([]byte(params.Prompt)))
+	transcript := decodeCursorTranscriptForTest(t, params.Prompt)
+	require.NotEmpty(t, transcript.Messages)
+	require.Equal(t, "assistant", transcript.Messages[0].Role)
+	require.Equal(t, "cached bridge reasoning", transcript.Messages[0].Reasoning)
+	require.NotContains(t, transcript.Messages[0].Content, "cached bridge reasoning", "hidden reasoning must not become visible content")
+	require.NotContains(t, params.Prompt, "opaque-only")
 }
