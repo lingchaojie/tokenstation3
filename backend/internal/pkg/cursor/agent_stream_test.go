@@ -615,7 +615,7 @@ func TestOpenAgentStreamNon2xxBodyIsBoundedAndClosed(t *testing.T) {
 	}
 }
 
-func TestOpenAgentStreamNon2xxConnectBodyKeepsActualHTTPClassification(t *testing.T) {
+func TestOpenAgentStreamNon2xxConnectBodyKeepsMappedClassificationAndActualHTTP(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			Status: "503 Service Unavailable", StatusCode: http.StatusServiceUnavailable,
@@ -631,8 +631,8 @@ func TestOpenAgentStreamNon2xxConnectBodyKeepsActualHTTPClassification(t *testin
 	if !errors.As(err, &agentErr) {
 		t.Fatalf("error = %v, want *AgentError", err)
 	}
-	if agentErr.HTTPStatus != http.StatusServiceUnavailable {
-		t.Errorf("classification status = %d, want actual non-2xx 503", agentErr.HTTPStatus)
+	if agentErr.HTTPStatus != http.StatusForbidden {
+		t.Errorf("classification status = %d, want mapped Connect 403", agentErr.HTTPStatus)
 	}
 	if !agentErr.HasHTTPResponse || agentErr.ActualHTTPStatus != http.StatusServiceUnavailable {
 		t.Errorf("HTTP provenance = has:%v actual:%d, want true/503", agentErr.HasHTTPResponse, agentErr.ActualHTTPStatus)

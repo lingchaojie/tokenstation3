@@ -28,6 +28,12 @@ func cursorGatewayAccount() *Account {
 	return &Account{ID: 811, Name: "cursor-test", Platform: PlatformCursor, Type: AccountTypeOAuth}
 }
 
+type cursorBridgeRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip cursorBridgeRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
 func TestResolveCursorChatMetaPreservesCursorModelIdentity(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := cursorGatewayAccount()
@@ -142,6 +148,35 @@ func TestCursorAgentFailureSeparatesMappedStatusFromActualHTTPProvenance(t *test
 			require.Equal(t, test.wantActualHTTP, failover.UpstreamHTTPStatus)
 		})
 	}
+}
+
+func TestCursorAgentFailureNon2xxConnectRateLimitKeepsMappedPolicyAndActualCapture(t *testing.T) {
+	client := &http.Client{Transport: cursorBridgeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			Status: "503 Service Unavailable", StatusCode: http.StatusServiceUnavailable,
+			Proto: "HTTP/2.0", ProtoMajor: 2, Header: http.Header{},
+			Body: io.NopCloser(strings.NewReader(`{"error":{"code":"resource_exhausted","message":"capacity"}}`)),
+		}, nil
+	})}
+	_, openErr := cursorpkg.OpenAgentStream(context.Background(), cursorpkg.AgentRunParams{Prompt: "local test"}, cursorpkg.AgentStreamOptions{
+		BaseURL: "https://agent.example.test", Token: "test-token", HTTPClient: client,
+	})
+	var agentErr *cursorpkg.AgentError
+	require.ErrorAs(t, openErr, &agentErr)
+	require.Equal(t, http.StatusTooManyRequests, agentErr.HTTPStatus)
+	require.True(t, agentErr.HasHTTPResponse)
+	require.Equal(t, http.StatusServiceUnavailable, agentErr.ActualHTTPStatus)
+
+	err := (&OpenAIGatewayService{}).cursorAgentFailure(cursorGatewayTestContext(t), cursorGatewayAccount(), agentErr)
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, err, &failover)
+	require.Equal(t, GatewayFailureScopeRequest, failover.Scope)
+	require.Equal(t, NextAccountRetry, failover.NextAccountAction)
+	require.True(t, failover.RequestScopedTransient, "mapped 429 switches account without quarantine")
+	require.False(t, failover.RetryableOnSameAccount)
+	require.Equal(t, http.StatusServiceUnavailable, failover.StatusCode)
+	require.True(t, failover.HasUpstreamHTTPResponse)
+	require.Equal(t, http.StatusServiceUnavailable, failover.UpstreamHTTPStatus, "capture uses actual HTTP 503")
 }
 
 func TestCursorAgentFailureClientVersionStopsProviderRotation(t *testing.T) {

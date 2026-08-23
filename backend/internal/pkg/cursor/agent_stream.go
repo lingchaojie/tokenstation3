@@ -218,7 +218,6 @@ func (s *AgentStream) acceptResponse(resp *http.Response) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, agentErrorBodyLimit))
 		if agentErr := ParseAgentTrailer(body); agentErr != nil && agentErr.Code != "" {
-			agentErr.HTTPStatus = resp.StatusCode
 			agentErr.HasHTTPResponse = true
 			agentErr.ActualHTTPStatus = resp.StatusCode
 			return agentErr
