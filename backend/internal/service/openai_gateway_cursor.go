@@ -65,6 +65,13 @@ type cursorAgentStreamOpener func(
 	cursorpkg.AgentStreamOptions,
 ) (*cursorpkg.AgentStream, error)
 
+type cursorChatOpeningBridge struct {
+	ctx       context.Context
+	callerCtx context.Context
+	cancel    context.CancelCauseFunc
+	stop      func() bool
+}
+
 func (s *OpenAIGatewayService) forwardCursorChatCompletions(
 	ctx context.Context,
 	c *gin.Context,
@@ -96,17 +103,86 @@ func (s *OpenAIGatewayService) forwardCursorChatCompletions(
 	}
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, meta.stream)
-	stream, err := s.openCursorAgentStream(upstreamCtx, c, account, params)
-	releaseUpstreamCtx()
+	if !meta.stream {
+		stream, err := s.openCursorAgentStream(upstreamCtx, c, account, params)
+		releaseUpstreamCtx()
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = stream.Close() }()
+		return s.bufferCursorChatCompletions(c, account, stream, meta, input, startTime)
+	}
+
+	opening := newCursorChatOpeningBridge(upstreamCtx, cursorChatCallerContext(ctx, c))
+	stream, err := s.openCursorAgentStream(opening.ctx, c, account, params)
+	callerCanceled := opening.handoff()
 	if err != nil {
+		opening.release()
+		releaseUpstreamCtx()
+		if callerCanceled {
+			return cursorChatOpeningDisconnectResult(meta, startTime, err), nil
+		}
 		return nil, err
 	}
-	defer func() { _ = stream.Close() }()
-
-	if meta.stream {
-		return s.streamCursorChatCompletions(c, account, stream, meta, input, startTime)
+	if callerCanceled {
+		_ = stream.Close()
+		opening.release()
+		releaseUpstreamCtx()
+		return cursorChatOpeningDisconnectResult(meta, startTime, nil), nil
 	}
-	return s.bufferCursorChatCompletions(c, account, stream, meta, input, startTime)
+	defer releaseUpstreamCtx()
+	defer opening.release()
+	defer func() { _ = stream.Close() }()
+	return s.streamCursorChatCompletions(c, account, stream, meta, input, startTime)
+}
+
+func newCursorChatOpeningBridge(upstreamCtx, callerCtx context.Context) *cursorChatOpeningBridge {
+	if upstreamCtx == nil {
+		upstreamCtx = context.Background()
+	}
+	openingCtx, cancel := context.WithCancelCause(upstreamCtx)
+	bridge := &cursorChatOpeningBridge{
+		ctx: openingCtx, callerCtx: callerCtx, cancel: cancel,
+		stop: func() bool { return true },
+	}
+	if callerCtx != nil && callerCtx.Done() != nil {
+		if callerCtx.Err() != nil {
+			cancel(context.Cause(callerCtx))
+			return bridge
+		}
+		bridge.stop = context.AfterFunc(callerCtx, func() {
+			cancel(context.Cause(callerCtx))
+		})
+	}
+	return bridge
+}
+
+// handoff stops the temporary caller-cancellation bridge after response headers
+// arrive. A successful stop leaves the detached stream context live so delivery
+// can perform its bounded disconnect drain; release cancels it after Close.
+func (bridge *cursorChatOpeningBridge) handoff() bool {
+	if bridge == nil {
+		return false
+	}
+	if bridge.callerCtx != nil && bridge.callerCtx.Err() != nil {
+		bridge.cancel(context.Cause(bridge.callerCtx))
+		bridge.stop()
+		return true
+	}
+	return !bridge.stop()
+}
+
+func (bridge *cursorChatOpeningBridge) release() {
+	if bridge != nil {
+		bridge.cancel(context.Canceled)
+	}
+}
+
+func cursorChatCallerContext(fallback context.Context, c *gin.Context) context.Context {
+	if c != nil && c.Request != nil {
+		return c.Request.Context()
+	}
+	return fallback
 }
 
 func (s *OpenAIGatewayService) resolveCursorChatMeta(account *Account, requestedModel, defaultMappedModel string, stream bool) cursorChatMeta {

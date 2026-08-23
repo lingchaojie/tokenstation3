@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -465,6 +466,23 @@ func cursorChatForwardResult(
 	}
 }
 
+func cursorChatOpeningDisconnectResult(meta cursorChatMeta, startTime time.Time, openingErr error) *OpenAIForwardResult {
+	requestID := "chatcmpl-" + uuid.NewString()
+	result := cursorChatForwardResult(
+		requestID, "chatcmpl-"+uuid.NewString(), meta, OpenAIUsage{}, cursorChatOutcome{}, startTime,
+	)
+	result.ClientDisconnect = true
+	result.UpstreamFailed = cursorChatOpeningUpstreamFailed(openingErr)
+	result.CaptureTerminalError = result.UpstreamFailed
+	result.CaptureResponseComplete = false
+	result.UpstreamHTTPStatus = cursorChatActualHTTPStatus(nil, openingErr)
+	return result
+}
+
+func cursorChatOpeningUpstreamFailed(err error) bool {
+	return err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
 func cursorChatStreamErrorSSE(message string) []byte {
 	payload, err := json.Marshal(gin.H{
 		"error": gin.H{"type": "upstream_error", "message": message},
@@ -502,6 +520,10 @@ func cursorChatActualHTTPStatus(stream cursorChatEventStream, err error) int {
 	var agentErr *cursorpkg.AgentError
 	if errors.As(err, &agentErr) && agentErr.HasHTTPResponse && agentErr.ActualHTTPStatus > 0 {
 		return agentErr.ActualHTTPStatus
+	}
+	var failoverErr *UpstreamFailoverError
+	if errors.As(err, &failoverErr) && failoverErr.HasUpstreamHTTPResponse {
+		return failoverErr.HTTPStatusForCapture()
 	}
 	if stream != nil {
 		if response := stream.Response(); response != nil && response.StatusCode > 0 {

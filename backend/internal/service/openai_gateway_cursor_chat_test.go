@@ -659,6 +659,219 @@ func TestForwardCursorChatReportsActualTranslatedWireModel(t *testing.T) {
 	}
 }
 
+func TestCursorChatConcurrentOpeningCancellationReturnsTerminalDisconnect(t *testing.T) {
+	account := cursorChatForwardAccount(t)
+	c, recorder := newCursorChatTestContext(t)
+	requestCtx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(requestCtx)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	svc := &OpenAIGatewayService{cursorAgentStreamOpener: func(
+		ctx context.Context,
+		_ cursorpkg.AgentRunParams,
+		_ cursorpkg.AgentStreamOptions,
+	) (*cursorpkg.AgentStream, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+			return nil, errors.New("test opener released before observing cancellation")
+		}
+	}}
+
+	done := runCursorChatForwardAsync(svc, c, account)
+	<-started
+	cancel()
+	got, prompt := awaitCursorChatForwardPromptly(done)
+	if !prompt {
+		releaseOnce.Do(func() { close(release) })
+		<-done
+		t.Fatal("opening cancellation did not promptly stop the Cursor opener")
+	}
+	require.NoError(t, got.err)
+	require.NotNil(t, got.result)
+	require.True(t, got.result.ClientDisconnect)
+	require.False(t, got.result.UpstreamFailed)
+	require.False(t, got.result.CaptureTerminalError)
+	require.False(t, got.result.CaptureResponseComplete)
+	require.Empty(t, recorder.Body.Bytes())
+	require.False(t, IsResponseCommitted(c))
+}
+
+func TestCursorChatConcurrentOpeningCancellationWithProviderFailurePreservesBothCauses(t *testing.T) {
+	account := cursorChatForwardAccount(t)
+	c, recorder := newCursorChatTestContext(t)
+	requestCtx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(requestCtx)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	svc := &OpenAIGatewayService{cursorAgentStreamOpener: func(
+		ctx context.Context,
+		_ cursorpkg.AgentRunParams,
+		_ cursorpkg.AgentStreamOptions,
+	) (*cursorpkg.AgentStream, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return nil, &cursorpkg.AgentError{
+				Code: "unavailable", Message: "private provider detail", Raw: `{"secret":"opening"}`,
+				HTTPStatus: http.StatusBadGateway, HasHTTPResponse: true, ActualHTTPStatus: http.StatusServiceUnavailable,
+			}
+		case <-release:
+			return nil, errors.New("test opener released before observing cancellation")
+		}
+	}}
+
+	done := runCursorChatForwardAsync(svc, c, account)
+	<-started
+	cancel()
+	got, prompt := awaitCursorChatForwardPromptly(done)
+	if !prompt {
+		releaseOnce.Do(func() { close(release) })
+		<-done
+		t.Fatal("opening cancellation did not promptly reach the failing Cursor opener")
+	}
+	require.NoError(t, got.err)
+	require.NotNil(t, got.result)
+	require.True(t, got.result.ClientDisconnect)
+	require.True(t, got.result.UpstreamFailed)
+	require.True(t, got.result.CaptureTerminalError)
+	require.False(t, got.result.CaptureResponseComplete)
+	require.Equal(t, http.StatusServiceUnavailable, got.result.UpstreamHTTPStatus)
+	require.Empty(t, recorder.Body.Bytes())
+	require.NotContains(t, recorder.Body.String(), "private provider detail")
+	require.NotContains(t, recorder.Body.String(), "opening")
+	require.False(t, IsResponseCommitted(c))
+}
+
+func TestCursorChatConcurrentSuccessfulOpeningHandsCancellationToRelay(t *testing.T) {
+	account := cursorChatForwardAccount(t)
+	c, recorder := newCursorChatTestContext(t)
+	firstWrite := make(chan struct{})
+	c.Writer = &cursorChatSignalWriter{ResponseWriter: c.Writer, wrote: firstWrite, match: []byte("relay-ready")}
+	requestCtx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(requestCtx)
+	opened := make(chan context.Context, 1)
+	providerReader, providerWriter := io.Pipe()
+	requestDrained := make(chan struct{})
+	var requestDrainedOnce sync.Once
+	t.Cleanup(func() {
+		_ = providerWriter.Close()
+		select {
+		case <-requestDrained:
+		case <-time.After(time.Second):
+			t.Fatal("local Cursor request writer did not stop")
+		}
+	})
+	svc := &OpenAIGatewayService{cursorAgentStreamOpener: func(
+		ctx context.Context,
+		params cursorpkg.AgentRunParams,
+		_ cursorpkg.AgentStreamOptions,
+	) (*cursorpkg.AgentStream, error) {
+		client := &http.Client{Transport: cursorBridgeRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			go func() {
+				_, _ = io.Copy(io.Discard, request.Body)
+				requestDrainedOnce.Do(func() { close(requestDrained) })
+			}()
+			return &http.Response{
+				StatusCode: http.StatusOK, Status: "200 OK", Proto: "HTTP/2.0", ProtoMajor: 2,
+				Header: http.Header{"X-Request-Id": []string{"cursor-opening-handoff"}},
+				Body:   providerReader, Request: request,
+			}, nil
+		})}
+		stream, err := cursorpkg.OpenAgentStream(ctx, params, cursorpkg.AgentStreamOptions{
+			BaseURL: "https://local.invalid", Token: "local-test-token", HTTPClient: client,
+			FirstByteTimeout: time.Second, IdleTimeout: time.Second, HeartbeatInterval: time.Hour,
+		})
+		if err == nil {
+			opened <- ctx
+		}
+		return stream, err
+	}}
+
+	done := runCursorChatForwardAsync(svc, c, account)
+	openingCtx := <-opened
+	var delta, update, serverMessage cursorpkg.Writer
+	delta.WriteString(1, "relay-ready")
+	update.WriteBytes(1, delta.Bytes())
+	serverMessage.WriteBytes(1, update.Bytes())
+	_, err := providerWriter.Write(cursorpkg.EncodeFrame(serverMessage.Bytes(), false))
+	require.NoError(t, err)
+	select {
+	case <-firstWrite:
+	case <-time.After(time.Second):
+		t.Fatal("successful opener did not hand its event stream to delivery")
+	}
+	// A delivered event proves the relay owns the opened stream. Caller
+	// cancellation must not cancel the context retained by AgentStream.
+	cancel()
+	select {
+	case <-openingCtx.Done():
+		t.Fatal("successful-open handoff canceled the upstream stream context")
+	default:
+	}
+	require.NoError(t, providerWriter.Close())
+	got := awaitCursorChatAsyncResult(t, done)
+	require.NoError(t, got.err)
+	require.NotNil(t, got.result)
+	require.True(t, got.result.ClientDisconnect)
+	require.Contains(t, recorder.Body.String(), "relay-ready")
+	require.True(t, IsResponseCommitted(c))
+}
+
+type cursorChatSignalWriter struct {
+	gin.ResponseWriter
+	wrote chan struct{}
+	match []byte
+	once  sync.Once
+}
+
+func (writer *cursorChatSignalWriter) Write(payload []byte) (int, error) {
+	n, err := writer.ResponseWriter.Write(payload)
+	if n > 0 && bytes.Contains(payload[:n], writer.match) {
+		writer.once.Do(func() { close(writer.wrote) })
+	}
+	return n, err
+}
+
+func cursorChatForwardAccount(t *testing.T) *Account {
+	t.Helper()
+	account := cursorGatewayAccount()
+	account.Credentials = map[string]any{
+		"access_token": cursorLifecycleJWT(t, cursorpkg.TokenTypeSession, time.Now().Add(time.Hour)),
+		"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	}
+	return account
+}
+
+func runCursorChatForwardAsync(
+	svc *OpenAIGatewayService,
+	c *gin.Context,
+	account *Account,
+) <-chan cursorChatAsyncResult {
+	done := make(chan cursorChatAsyncResult, 1)
+	body := []byte(`{"model":"caller-model","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	go func() {
+		result, err := svc.forwardCursorChatCompletions(c.Request.Context(), c, account, body, "")
+		done <- cursorChatAsyncResult{result: result, err: err}
+	}()
+	return done
+}
+
+func awaitCursorChatForwardPromptly(done <-chan cursorChatAsyncResult) (cursorChatAsyncResult, bool) {
+	select {
+	case result := <-done:
+		return result, true
+	case <-time.After(200 * time.Millisecond):
+		return cursorChatAsyncResult{}, false
+	}
+}
+
 func cursorChatEOFStreamOpener(t *testing.T, paramsSeen chan<- cursorpkg.AgentRunParams) cursorAgentStreamOpener {
 	t.Helper()
 	requestDrained := make(chan struct{})
