@@ -5,6 +5,11 @@ import {
   GROUP_PLATFORM_OPTIONS,
   GROUP_PLATFORM_VALUES,
 } from '@/constants/platforms'
+import { PROVIDERS } from '@/constants/channelMonitor'
+import {
+  normalizePlatformQuotasMap,
+  SCHEDULING_THRESHOLD_PLATFORMS,
+} from '@/api/admin/settings'
 
 const concretePlatforms = [
   'anthropic',
@@ -15,7 +20,8 @@ const concretePlatforms = [
   'grok',
   'kimi',
   'zhipu',
-  'deepseek'
+  'deepseek',
+  'cursor'
 ]
 
 describe('platform option catalogs', () => {
@@ -28,5 +34,12 @@ describe('platform option catalogs', () => {
   it('keeps group-backed filters limited to concrete platforms', () => {
     expect(GROUP_PLATFORM_OPTIONS.map((option) => option.value)).toEqual(concretePlatforms)
     expect(GROUP_PLATFORM_VALUES).toEqual(concretePlatforms)
+  })
+
+  it('registers Cursor as an account and quota platform only', () => {
+    expect(CONCRETE_PLATFORM_VALUES).toContain('cursor')
+    expect(normalizePlatformQuotasMap()).toHaveProperty('cursor')
+    expect(SCHEDULING_THRESHOLD_PLATFORMS).not.toContain('cursor')
+    expect(PROVIDERS).not.toContain('cursor')
   })
 })

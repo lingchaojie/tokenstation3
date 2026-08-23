@@ -129,7 +129,7 @@ const emit = defineEmits(['close', 'success'])
 const { t } = useI18n()
 const appStore = useAppStore()
 
-const PLATFORMS: PlatformQuotaPlatform[] = CONCRETE_PLATFORM_VALUES
+const PLATFORMS = CONCRETE_PLATFORM_VALUES satisfies readonly PlatformQuotaPlatform[]
 
 interface QuotaRow {
   platform: PlatformQuotaPlatform
