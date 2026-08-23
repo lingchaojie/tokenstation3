@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProtocolSpoolExtractionRetainsPayloadStopReasonUnlessFinalOverrides(t *testing.T) {
+func TestProtocolSpoolExtractionAlwaysRetainsProviderStopReason(t *testing.T) {
 	root := t.TempDir()
 	store, err := spool.Open(spool.Config{RootDir: filepath.Join(root, "spool")})
 	require.NoError(t, err)
@@ -65,9 +65,9 @@ func TestProtocolSpoolExtractionRetainsPayloadStopReasonUnlessFinalOverrides(t *
 			wantStop: "json-stop", wantSigned: true,
 		},
 		{
-			name: "json explicit final override", format: model.PayloadJSON,
+			name: "json ignores legacy final stop reason", format: model.PayloadJSON,
 			response: []byte(`{"stop_reason":"json-stop"}`),
-			final:    model.Final{StopReason: "pre_commit_disconnect"}, wantStop: "pre_commit_disconnect",
+			final:    model.Final{StopReason: "pre_commit_disconnect"}, wantStop: "json-stop",
 		},
 		{
 			name: "sse empty final", format: model.PayloadSSE,
@@ -75,18 +75,18 @@ func TestProtocolSpoolExtractionRetainsPayloadStopReasonUnlessFinalOverrides(t *
 			wantStop: "sse-stop", wantSigned: true,
 		},
 		{
-			name: "sse explicit final override", format: model.PayloadSSE,
+			name: "sse ignores legacy final stop reason", format: model.PayloadSSE,
 			response: []byte("data: {\"delta\":{\"stop_reason\":\"sse-stop\"}}\n\n"),
-			final:    model.Final{StopReason: "pre_commit_disconnect"}, wantStop: "pre_commit_disconnect",
+			final:    model.Final{StopReason: "pre_commit_disconnect"}, wantStop: "sse-stop",
 		},
 		{
 			name: "aws empty final", format: model.PayloadAWSEventStream,
 			response: awsPayload, wantStop: "aws-stop", wantSigned: true,
 		},
 		{
-			name: "aws explicit final override", format: model.PayloadAWSEventStream,
+			name: "aws ignores legacy final stop reason", format: model.PayloadAWSEventStream,
 			response: awsPayload, final: model.Final{StopReason: "pre_commit_disconnect"},
-			wantStop: "pre_commit_disconnect", wantSigned: true,
+			wantStop: "aws-stop", wantSigned: true,
 		},
 	}
 

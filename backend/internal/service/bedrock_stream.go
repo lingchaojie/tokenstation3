@@ -46,6 +46,14 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 	clientDisconnected := false
+	terminalObserved := false
+	semanticOutput := false
+	streamResult := func() *streamingResult {
+		return &streamingResult{
+			usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected,
+			semanticOutput: semanticOutput, responseComplete: terminalObserved,
+		}
+	}
 
 	// Bedrock EventStream 使用 application/vnd.amazon.eventstream 二进制格式。
 	// 每个帧结构：total_length(4) + headers_length(4) + prelude_crc(4) + headers + payload + message_crc(4)
@@ -115,16 +123,17 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 				if !clientDisconnected {
 					flusher.Flush()
 				}
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
+				return streamResult(), nil
 			}
 			if ev.err != nil {
-				if clientDisconnected {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+				// A bare decoder cancellation is not proof of downstream causality:
+				// server/provider transports also surface these sentinel errors. Only
+				// request-context cancellation proves this is a client-causal abort.
+				if errors.Is(ev.err, context.Canceled) && ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
+					clientDisconnected = true
+					return streamResult(), nil
 				}
-				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
-					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
-				}
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("bedrock stream read error: %w", ev.err)
+				return streamResult(), fmt.Errorf("bedrock stream read error: %w", ev.err)
 			}
 
 			// payload 是 JSON，提取 chunk.bytes（base64 编码的 Claude SSE 事件数据）
@@ -144,9 +153,15 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 解析 SSE 事件数据提取 usage
 			parseSSEUsagePassthrough(string(sseData), usage)
+			if anthropicSSEEventHasSemanticOutput(string(sseData)) {
+				semanticOutput = true
+			}
 
 			// 确定 SSE event type
 			eventType := gjson.GetBytes(sseData, "type").String()
+			if eventType == "message_stop" {
+				terminalObserved = true
+			}
 
 			// 写入标准 SSE 格式
 			if !clientDisconnected {
@@ -169,14 +184,11 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 			if time.Since(lastRead) < streamInterval {
 				continue
 			}
-			if clientDisconnected {
-				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
-			}
 			logger.LegacyPrintf("service.gateway", "[Bedrock] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, model, streamInterval)
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, model)
 			}
-			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
+			return streamResult(), fmt.Errorf("stream data interval timeout")
 		}
 	}
 }

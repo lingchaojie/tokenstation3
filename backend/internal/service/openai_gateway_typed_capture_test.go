@@ -3,17 +3,92 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type orderedOpenAIDeliveryFailureWriter struct {
+	gin.ResponseWriter
+	failureSignal       chan struct{}
+	failSemantic        bool
+	mu                  sync.Mutex
+	failed              bool
+	postFailureAttempts int
+	postFailureBytes    int
+}
+
+func (w *orderedOpenAIDeliveryFailureWriter) Write(p []byte) (int, error) {
+	payload := string(p)
+	w.mu.Lock()
+	if w.failed {
+		w.postFailureAttempts++
+		w.postFailureBytes += len(p)
+		w.mu.Unlock()
+		return 0, errors.New("ordered downstream write after delivery failure")
+	}
+	shouldFail := payload == ":\n\n" || strings.HasPrefix(payload, "event: ping\n")
+	if w.failSemantic {
+		shouldFail = strings.Contains(payload, "visible before idle")
+	}
+	if shouldFail {
+		w.failed = true
+		close(w.failureSignal)
+		w.mu.Unlock()
+		return 0, errors.New("ordered downstream delivery failure")
+	}
+	w.mu.Unlock()
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *orderedOpenAIDeliveryFailureWriter) postFailureWrites() (int, int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.postFailureAttempts, w.postFailureBytes
+}
+
+type orderedOpenAIProviderTail struct {
+	prefix        []byte
+	tail          []byte
+	failureSignal <-chan struct{}
+	closed        chan struct{}
+	closeOnce     sync.Once
+	step          int
+}
+
+func (r *orderedOpenAIProviderTail) Read(p []byte) (int, error) {
+	switch r.step {
+	case 0:
+		r.step++
+		return copy(p, r.prefix), nil
+	case 1:
+		select {
+		case <-r.failureSignal:
+			r.step++
+			return copy(p, r.tail), nil
+		case <-r.closed:
+			return 0, io.EOF
+		}
+	default:
+		return 0, io.EOF
+	}
+}
+
+func (r *orderedOpenAIProviderTail) Close() error {
+	r.closeOnce.Do(func() { close(r.closed) })
+	return nil
+}
 
 type openAITypedCaptureTestHarness struct {
 	records   chan *CaptureRecord
@@ -91,6 +166,274 @@ func (h *openAITypedCaptureTestHarness) requireNoExtraTerminal(t *testing.T) {
 	case terminal := <-h.terminals:
 		t.Fatalf("typed attempt published duplicate terminal %q", terminal)
 	default:
+	}
+}
+
+func TestOpenAIConvertedDeliveryFailureDefersTypedCaptureToLateProviderTruth(t *testing.T) {
+	tests := []struct {
+		name             string
+		path             string
+		requestBody      []byte
+		forward          func(*OpenAIGatewayService, context.Context, *gin.Context, *Account, []byte) (*OpenAIForwardResult, error)
+		lateProviderTail string
+		wantProviderErr  bool
+		failSemantic     bool
+	}{
+		{
+			name:        "chat_late_official_terminal_commits_disconnect",
+			path:        "/v1/chat/completions",
+			requestBody: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name:        "chat_semantic_failure_late_official_terminal_commits_disconnect",
+			path:        "/v1/chat/completions",
+			requestBody: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
+			failSemantic:     true,
+		},
+		{
+			name:        "messages_late_official_terminal_commits_disconnect",
+			path:        "/v1/messages",
+			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsAnthropic(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name:        "messages_semantic_failure_late_official_terminal_commits_disconnect",
+			path:        "/v1/messages",
+			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsAnthropic(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\ndata: [DONE]\n\n",
+			failSemantic:     true,
+		},
+		{
+			name:        "chat_late_provider_error_aborts_terminal_disabled",
+			path:        "/v1/chat/completions",
+			requestBody: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"failed\",\"error\":{\"code\":\"upstream_error\",\"message\":\"late ordered provider failure\"}}}\n\n",
+			wantProviderErr:  true,
+		},
+		{
+			name:        "chat_semantic_failure_late_provider_error_aborts_terminal_disabled",
+			path:        "/v1/chat/completions",
+			requestBody: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"failed\",\"error\":{\"code\":\"upstream_error\",\"message\":\"late ordered provider failure\"}}}\n\n",
+			wantProviderErr:  true,
+			failSemantic:     true,
+		},
+		{
+			name:        "messages_late_provider_error_aborts_terminal_disabled",
+			path:        "/v1/messages",
+			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsAnthropic(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"failed\",\"error\":{\"code\":\"upstream_error\",\"message\":\"late ordered provider failure\"}}}\n\n",
+			wantProviderErr:  true,
+		},
+		{
+			name:        "messages_semantic_failure_late_provider_error_aborts_terminal_disabled",
+			path:        "/v1/messages",
+			requestBody: []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`),
+			forward: func(svc *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsAnthropic(ctx, c, account, body, "", "gpt-5.4")
+			},
+			lateProviderTail: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_ordered\",\"status\":\"failed\",\"error\":{\"code\":\"upstream_error\",\"message\":\"late ordered provider failure\"}}}\n\n",
+			wantProviderErr:  true,
+			failSemantic:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			harness := newOpenAITypedCaptureTestHarness(t)
+			policy := DefaultCaptureRuntimePolicy()
+			policy.Enabled = true
+			policy.Platforms.OpenAI = true
+			policy.Outcomes.Success = false
+			policy.Outcomes.TerminalError = false
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, test.path, bytes.NewReader(test.requestBody))
+			c.Request.Header.Set("Content-Type", "application/json")
+			require.NoError(t, InstallCaptureRuntimePolicyForUnitTest(c, policy, 9, nil))
+			failureSignal := make(chan struct{})
+			failureWriter := &orderedOpenAIDeliveryFailureWriter{
+				ResponseWriter: c.Writer, failureSignal: failureSignal, failSemantic: test.failSemantic,
+			}
+			c.Writer = failureWriter
+
+			providerPrefix := []byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ordered\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible before idle\"}\n\n")
+			providerTail := []byte(test.lateProviderTail)
+			upstreamBody := &orderedOpenAIProviderTail{
+				prefix: providerPrefix, tail: providerTail, failureSignal: failureSignal, closed: make(chan struct{}),
+			}
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"ordered-keepalive"}},
+				Body:       upstreamBody,
+			}}
+			cfg := &config.Config{Gateway: config.GatewayConfig{
+				StreamKeepaliveInterval: 1,
+				Capture: config.GatewayCaptureConfig{
+					Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20,
+				},
+			}}
+			svc := &OpenAIGatewayService{cfg: cfg, capturePool: harness.pool, httpUpstream: upstream}
+			account := &Account{
+				ID: 9770, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "account-id"},
+			}
+
+			started := time.Now()
+			result, err := test.forward(svc, context.Background(), c, account, test.requestBody)
+			require.Less(t, time.Since(started), 4*time.Second, "ordered drain must stay bounded")
+			require.NotNil(t, result)
+			require.True(t, result.ClientDisconnect)
+			postFailureAttempts, postFailureBytes := failureWriter.postFailureWrites()
+			require.Zero(t, postFailureAttempts, "no client write may be attempted after the first typed delivery failure")
+			require.Zero(t, postFailureBytes, "no client bytes may be attempted after the first typed delivery failure")
+			if test.wantProviderErr {
+				require.ErrorContains(t, err, "late ordered provider failure")
+				require.True(t, result.CaptureTerminalError, "late provider failure must outrank disconnect")
+				require.False(t, result.CaptureResponseComplete)
+				require.False(t, CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, result))
+				require.Equal(t, "abort", harness.requireTerminal(t))
+				select {
+				case record := <-harness.records:
+					t.Fatalf("terminal-disabled late provider error unexpectedly committed: %+v", record)
+				default:
+				}
+				harness.requireNoExtraTerminal(t)
+				return
+			}
+
+			require.NoError(t, err)
+			require.False(t, result.CaptureTerminalError, "typed delivery failure must remain disconnect-causal")
+			require.True(t, result.CaptureResponseComplete)
+			record := harness.commit(t, c, result, upstream.lastBody, append(append([]byte(nil), providerPrefix...), providerTail...), false)
+			require.Contains(t, string(record.RawResponse), `"type":"response.completed"`)
+		})
+	}
+}
+
+func TestOpenAIChatConversion_RequestCancellationDoesNotInventDetachedProviderCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	harness := newOpenAITypedCaptureTestHarness(t)
+	requestBody := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(requestBody)).WithContext(ctx)
+	c.Request.Header.Set("Content-Type", "application/json")
+	installDisconnectOnlyCapturePolicy(t, c)
+	providerBody := []byte(strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_detached","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"provider completed"}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_detached","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n"))
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"openai-detached-context"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{
+		Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20,
+	}}}
+	svc := &OpenAIGatewayService{cfg: cfg, capturePool: harness.pool, httpUpstream: upstream}
+	account := &Account{
+		ID: 9771, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "account-id"},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(ctx, c, account, requestBody, "", "gpt-5.4")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.NoError(t, upstream.lastReq.Context().Err(), "streaming OpenAI request context is deliberately detached from the canceled handler context")
+	require.False(t, result.ClientDisconnect, "request cancellation alone cannot prove a conversion-path client disconnect")
+	require.False(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete)
+	require.False(t, CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, result), "success is disabled and must not be relabeled as disconnect")
+	require.Equal(t, "abort", harness.requireTerminal(t))
+	harness.requireNoExtraTerminal(t)
+}
+
+func TestOpenAIChatConversion_ProviderStreamFailuresRemainTerminal(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "provider_canceled", err: context.Canceled},
+		{name: "provider_deadline", err: context.DeadlineExceeded},
+		{name: "provider_read_error", err: io.ErrUnexpectedEOF},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			harness := newOpenAITypedCaptureTestHarness(t)
+			requestBody := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(requestBody))
+			c.Request.Header.Set("Content-Type", "application/json")
+			installDisconnectOnlyCapturePolicy(t, c)
+			providerPrefix := []byte(strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp_provider_failure","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+				"",
+				`data: {"type":"response.output_text.delta","delta":"provider failure"}`,
+				"",
+			}, "\n") + "\n")
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"openai-provider-failure"}},
+				Body:       &openAIStreamReadThenErrorCloser{reader: strings.NewReader(string(providerPrefix)), err: test.err},
+			}}
+			cfg := &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{
+				Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20,
+			}}}
+			svc := &OpenAIGatewayService{cfg: cfg, capturePool: harness.pool, httpUpstream: upstream}
+			account := &Account{
+				ID: 9772, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "account-id"},
+			}
+
+			result, forwardErr := svc.ForwardAsChatCompletions(context.Background(), c, account, requestBody, "", "gpt-5.4")
+
+			require.ErrorIs(t, forwardErr, test.err)
+			require.NotNil(t, result)
+			require.False(t, result.ClientDisconnect)
+			require.True(t, result.CaptureTerminalError)
+			require.False(t, result.CaptureResponseComplete)
+			require.False(t, CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, result))
+			require.Equal(t, "abort", harness.requireTerminal(t))
+			harness.requireNoExtraTerminal(t)
+		})
 	}
 }
 

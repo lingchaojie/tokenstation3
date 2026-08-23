@@ -870,6 +870,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	var clientDisconnect bool
+	var responseComplete bool
 	if reqStream {
 		writerSizeBeforeStream := c.Writer.Size()
 		streamOwnsResponseBody = true
@@ -879,7 +880,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			// the commit boundary before translating the typed error into a failover:
 			// once semantic bytes are visible, replay would duplicate user-visible
 			// output and the partial result owns billing/capture even with zero usage.
-			partial := partialStreamUsageResult(c, resp, streamResult, originalModel, mappedModel, startTime, err)
+			partial := partialStreamUsageResult(ctx, c, resp, streamResult, originalModel, mappedModel, startTime, err)
 			var sseErr *sseStreamErrorEventError
 			if errors.As(err, &sseErr) {
 				// 上游 HTTP 200 + SSE 流体内出现 event:error 帧。
@@ -947,11 +948,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		clientDisconnect = streamResult.clientDisconnect
+		responseComplete = streamResult.responseComplete
 	} else {
 		usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, reqModel)
 		if err != nil {
 			return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 		}
+		responseComplete = true
 	}
 
 	result = &ForwardResult{
@@ -965,6 +968,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       responseComplete,
 	}
 	return attachCaptureToForwardResult(c, result), nil
 }

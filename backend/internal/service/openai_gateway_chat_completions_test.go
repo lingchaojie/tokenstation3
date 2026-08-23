@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,15 @@ func (w *openAIChatFailingWriter) Write(p []byte) (int, error) {
 	}
 	w.writes++
 	return w.ResponseWriter.Write(p)
+}
+
+type openAIChatPartialFailingWriter struct{ gin.ResponseWriter }
+
+func (w *openAIChatPartialFailingWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, errors.New("write failed: client disconnected")
+	}
+	return 1, errors.New("write failed: client disconnected")
 }
 
 type openAIChatStreamReadErrorCloser struct {
@@ -542,9 +552,137 @@ func TestForwardAsChatCompletions_ClientDisconnectDrainsUpstreamUsage(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.ClientDisconnect, "the handler terminal sink must classify a pre-commit client disconnect")
+	require.True(t, result.CaptureResponseComplete)
 	require.Equal(t, 11, result.Usage.InputTokens)
 	require.Equal(t, 5, result.Usage.OutputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+}
+
+func TestForwardAsChatCompletions_ClientDisconnectWithoutProviderDoneIsIncomplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Writer = &openAIChatFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"ok"}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":11,"output_tokens":5,"total_tokens":16}}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_disconnect_no_done"}},
+		Body: &openAIStreamReadThenErrorCloser{
+			reader: strings.NewReader(upstreamBody),
+			err:    context.Canceled,
+		},
+	}}
+
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.1")
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.False(t, result.CaptureResponseComplete)
+}
+
+func TestForwardAsChatCompletions_ClientDisconnectDoesNotHideProviderTerminalError(t *testing.T) {
+	for _, eventType := range []string{"response.failed", "response.incomplete", "response.cancelled", "response.canceled"} {
+		t.Run(eventType, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Writer = &openAIChatPartialFailingWriter{ResponseWriter: c.Writer}
+			body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			status := strings.TrimPrefix(eventType, "response.")
+			upstreamBody := strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp_error","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+				"",
+				`data: {"type":"response.output_text.delta","delta":"partial"}`,
+				"",
+				fmt.Sprintf(`event: %s`, eventType),
+				fmt.Sprintf(`data: {"type":%q,"response":{"id":"resp_error","status":%q,"error":{"code":"upstream_error","message":"provider terminal failure"}}}`, eventType, status),
+				"",
+			}, "\n")
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+			}}
+			svc := &OpenAIGatewayService{httpUpstream: upstream}
+			account := &Account{
+				ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+			}
+
+			result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.1")
+
+			require.ErrorContains(t, err, "provider terminal failure")
+			require.NotNil(t, result)
+			require.True(t, result.ClientDisconnect)
+			require.True(t, result.CaptureTerminalError)
+			require.False(t, result.CaptureResponseComplete)
+		})
+	}
+}
+
+func TestForwardAsChatCompletions_ClientDisconnectAcceptsUnterminatedProviderDone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Writer = &openAIChatFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_done_tail","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"ok"}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_done_tail","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`,
+		"",
+		"data: [DONE]",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.1")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.True(t, result.CaptureResponseComplete)
 }
 
 func TestForwardAsChatCompletions_ClientDisconnectCapturesWebChatOutput(t *testing.T) {
@@ -1107,6 +1245,7 @@ func TestForwardAsChatCompletions_BufferedTerminalWithoutUpstreamCloseReturns(t 
 		require.Equal(t, 17, got.result.Usage.InputTokens)
 		require.Equal(t, 8, got.result.Usage.OutputTokens)
 		require.Equal(t, 6, got.result.Usage.CacheReadInputTokens)
+		require.True(t, got.result.CaptureResponseComplete, "buffered conversion requires an official provider terminal")
 		require.Contains(t, rec.Body.String(), `"finish_reason":"stop"`)
 	case <-time.After(time.Second):
 		require.Fail(t, "ForwardAsChatCompletions buffered response should return after terminal usage event even if upstream keeps the connection open")

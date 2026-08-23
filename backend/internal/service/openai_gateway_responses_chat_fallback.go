@@ -174,15 +174,16 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	c.JSON(http.StatusOK, responsesResp)
 
 	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           parsedUsage.Usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          false,
-		Duration:        time.Since(startTime),
+		RequestID:               requestID,
+		Usage:                   parsedUsage.Usage,
+		Model:                   originalModel,
+		BillingModel:            billingModel,
+		UpstreamModel:           upstreamModel,
+		ReasoningEffort:         reasoningEffort,
+		ServiceTier:             serviceTier,
+		Stream:                  false,
+		Duration:                time.Since(startTime),
+		CaptureResponseComplete: true,
 	}, nil
 }
 
@@ -243,17 +244,18 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		return writeEvents(events), nil
 	})
 	result := &OpenAIForwardResult{
-		RequestID:        requestID,
-		Usage:            scan.Usage,
-		Model:            originalModel,
-		BillingModel:     billingModel,
-		UpstreamModel:    upstreamModel,
-		ReasoningEffort:  reasoningEffort,
-		ServiceTier:      serviceTier,
-		Stream:           true,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     scan.FirstTokenMs,
-		ClientDisconnect: clientDisconnected,
+		RequestID:               requestID,
+		Usage:                   scan.Usage,
+		Model:                   originalModel,
+		BillingModel:            billingModel,
+		UpstreamModel:           upstreamModel,
+		ReasoningEffort:         reasoningEffort,
+		ServiceTier:             serviceTier,
+		Stream:                  true,
+		Duration:                time.Since(startTime),
+		FirstTokenMs:            scan.FirstTokenMs,
+		ClientDisconnect:        clientDisconnected,
+		CaptureResponseComplete: scan.SawDone,
 	}
 	if scan.Err != nil {
 		var failoverErr *UpstreamFailoverError
@@ -279,6 +281,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		}
 	}
 	result.ClientDisconnect = clientDisconnected
+	result.CaptureResponseComplete = scan.SawDone
 	if !scan.SawDone {
 		logCCStreamMissingDoneSentinel("openai responses chat fallback", requestID)
 	}

@@ -213,6 +213,8 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	imageCount := 0
 	var imageOutputSizes []string
 	var responseErr error
+	var clientDisconnect bool
+	var captureResponseComplete bool
 	if reqStream {
 		maxLineSize := defaultMaxLineSize
 		if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
@@ -245,6 +247,8 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		responseID = strings.TrimSpace(streamResult.responseID)
 		imageCount = streamResult.imageCount
 		imageOutputSizes = streamResult.imageOutputSizes
+		clientDisconnect = streamResult.clientDisconnect
+		captureResponseComplete = streamResult.terminalObserved
 	} else {
 		nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 		finishCapture()
@@ -255,6 +259,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		responseID = strings.TrimSpace(nonStreamResult.responseID)
 		imageCount = nonStreamResult.imageCount
 		imageOutputSizes = nonStreamResult.imageOutputSizes
+		captureResponseComplete = true
 	}
 
 	if usage == nil {
@@ -262,19 +267,21 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	}
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
 	result := &OpenAIForwardResult{
-		RequestID:            firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
-		ResponseID:           responseID,
-		Usage:                *usage,
-		Model:                originalModel,
-		UpstreamModel:        upstreamModel,
-		ReasoningEffort:      reasoningEffort,
-		Stream:               reqStream,
-		OpenAIWSMode:         false,
-		CaptureTerminalError: responseErr != nil,
-		UpstreamHTTPStatus:   resp.StatusCode,
-		ResponseHeaders:      resp.Header.Clone(),
-		Duration:             time.Since(startTime),
-		FirstTokenMs:         firstTokenMs,
+		RequestID:               firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+		ResponseID:              responseID,
+		Usage:                   *usage,
+		Model:                   originalModel,
+		UpstreamModel:           upstreamModel,
+		ReasoningEffort:         reasoningEffort,
+		Stream:                  reqStream,
+		OpenAIWSMode:            false,
+		ClientDisconnect:        clientDisconnect,
+		CaptureResponseComplete: captureResponseComplete,
+		CaptureTerminalError:    responseErr != nil,
+		UpstreamHTTPStatus:      resp.StatusCode,
+		ResponseHeaders:         resp.Header.Clone(),
+		Duration:                time.Since(startTime),
+		FirstTokenMs:            firstTokenMs,
 	}
 	if imageCount > 0 {
 		result.ImageCount = imageCount

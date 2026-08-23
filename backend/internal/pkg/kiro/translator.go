@@ -136,12 +136,16 @@ type StreamResult struct {
 	Usage         Usage
 	StopReason    string
 	FirstDeltaDur *time.Duration
+	// ProviderTerminalObserved is native AWS event-stream truth. It must not be
+	// inferred from the translated Anthropic message_stop emitted at clean EOF.
+	ProviderTerminalObserved bool
 }
 
 type ParseResult struct {
-	ResponseBody []byte
-	Usage        Usage
-	StopReason   string
+	ResponseBody             []byte
+	Usage                    Usage
+	StopReason               string
+	ProviderTerminalObserved bool
 }
 
 type KiroRequestContext struct {
@@ -599,16 +603,17 @@ func EstimateClaudeInputTokens(ctx context.Context, claudeBody []byte, modelID, 
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, err := parseEventStream(body)
+	content, toolUses, usage, stopReason, providerTerminalObserved, err := parseEventStream(body)
 	if err != nil {
 		return nil, err
 	}
 	usage = resolveKiroUsage(usage, requestCtx.EstimatedInputTokens)
 	usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	return &ParseResult{
-		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
-		Usage:        usage,
-		StopReason:   stopReason,
+		ResponseBody:             buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
+		Usage:                    usage,
+		StopReason:               stopReason,
+		ProviderTerminalObserved: providerTerminalObserved,
 	}, nil
 }
 
@@ -1607,9 +1612,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 
 	return &StreamResult{
-		Usage:         usage,
-		StopReason:    stopReason,
-		FirstDeltaDur: firstDelta,
+		Usage:                    usage,
+		StopReason:               stopReason,
+		FirstDeltaDur:            firstDelta,
+		ProviderTerminalObserved: providerTerminalObserved,
 	}, nil
 }
 
@@ -3195,7 +3201,7 @@ func blockToMap(block gjson.Result) map[string]any {
 	return result
 }
 
-func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, error) {
+func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, bool, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
@@ -3268,7 +3274,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 			break
 		}
 		if err != nil {
-			return "", nil, usage, stopReason, err
+			return "", nil, usage, stopReason, providerTerminalObserved, err
 		}
 		if msg == nil || len(msg.Payload) == 0 {
 			continue
@@ -3276,15 +3282,15 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 
 		event, err := decodeKiroProviderEvent(msg.EventType, msg.Payload)
 		if err != nil {
-			return "", nil, usage, stopReason, fmt.Errorf("decode kiro event %q payload: %w", msg.EventType, err)
+			return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("decode kiro event %q payload: %w", msg.EventType, err)
 		}
 		if err := validateKiroKnownEventShape(msg.EventType, event); err != nil {
-			return "", nil, usage, stopReason, fmt.Errorf("validate kiro event %q payload: %w", msg.EventType, err)
+			return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("validate kiro event %q payload: %w", msg.EventType, err)
 		}
 		semanticEvents := extractSemanticEvents(msg.EventType, event, nil)
 		terminalEvent := kiroProviderTerminalEvent(msg.EventType, event)
 		if providerTerminalObserved {
-			return "", nil, usage, stopReason, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
+			return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
 		}
 		if kiroProviderPayloadRecognized(msg.EventType, event, semanticEvents) {
 			providerPayloadObserved = true
@@ -3306,19 +3312,19 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 			}
 			for _, tool := range readToolUses(assistant, event) {
 				if err := appendToolUse(tool, toolUseSourceAggregate); err != nil {
-					return "", nil, usage, stopReason, err
+					return "", nil, usage, stopReason, providerTerminalObserved, err
 				}
 			}
 		case "toolUseEvent":
 			closeReasoning()
 			completed, next, toolErr := processToolUseEvent(event, currentTool)
 			if toolErr != nil {
-				return "", nil, usage, stopReason, toolErr
+				return "", nil, usage, stopReason, providerTerminalObserved, toolErr
 			}
 			currentTool = next
 			for _, tool := range completed {
 				if err := appendToolUse(tool, toolUseSourceStreaming); err != nil {
-					return "", nil, usage, stopReason, err
+					return "", nil, usage, stopReason, providerTerminalObserved, err
 				}
 			}
 		case "reasoningContentEvent":
@@ -3338,7 +3344,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 			}
 		default:
 			if err := updateUsageFromEvent(&usage, msg.EventType, event); err != nil {
-				return "", nil, usage, stopReason, err
+				return "", nil, usage, stopReason, providerTerminalObserved, err
 			}
 		}
 		if terminalEvent {
@@ -3346,26 +3352,26 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		}
 	}
 	if !providerPayloadObserved {
-		return "", nil, usage, "", ErrNoRecognizableProviderPayload
+		return "", nil, usage, "", providerTerminalObserved, ErrNoRecognizableProviderPayload
 	}
 	closeReasoning()
 
 	if currentTool != nil && currentTool.ToolUseID != "" {
-		return "", nil, usage, stopReason, fmt.Errorf("KIRO tool use %q ended before an explicit stop", currentTool.ToolUseID)
+		return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("KIRO tool use %q ended before an explicit stop", currentTool.ToolUseID)
 	}
 	cleanText, embeddedToolUses, pendingEmbeddedToolText := drainEmbeddedToolText(content.String())
 	if pendingEmbeddedToolText != "" {
 		if embeddedToolJSONStarted(pendingEmbeddedToolText) && len(pendingEmbeddedToolText) > maxStreamingToolInputBytes {
-			return "", nil, usage, stopReason, errors.New("KIRO embedded tool text exceeded the bounded input limit")
+			return "", nil, usage, stopReason, providerTerminalObserved, errors.New("KIRO embedded tool text exceeded the bounded input limit")
 		}
 		if embeddedToolJSONStarted(pendingEmbeddedToolText) {
-			return "", nil, usage, stopReason, errors.New("KIRO embedded tool text ended before a complete tool call")
+			return "", nil, usage, stopReason, providerTerminalObserved, errors.New("KIRO embedded tool text ended before a complete tool call")
 		}
 		cleanText += pendingEmbeddedToolText
 	}
 	for _, tool := range embeddedToolUses {
 		if err := appendToolUse(tool, toolUseSourceEmbedded); err != nil {
-			return "", nil, usage, stopReason, err
+			return "", nil, usage, stopReason, providerTerminalObserved, err
 		}
 	}
 
@@ -3395,7 +3401,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 			stopReason = "end_turn"
 		}
 	}
-	return cleanText, toolUses, usage, stopReason, nil
+	return cleanText, toolUses, usage, stopReason, providerTerminalObserved, nil
 }
 
 func kiroProviderPayloadRecognized(eventType string, event map[string]any, semanticEvents []kiroSemanticEvent) bool {

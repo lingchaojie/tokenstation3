@@ -166,6 +166,15 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	terminalObserved := false
+	resultWithUsage := func() *OpenAIForwardResult {
+		return &OpenAIForwardResult{
+			RequestID: requestID, Usage: claudeUsageToOpenAIUsage(&usage), Model: originalModel,
+			BillingModel: billingModel, UpstreamModel: upstreamModel, UpstreamEndpoint: "/v1/messages",
+			ReasoningEffort: reasoningEffort, Stream: false, Duration: time.Since(startTime),
+			CaptureResponseComplete: terminalObserved,
+		}
+	}
 
 	// 读间隔上限：上游挂住 SSE 时中止组装（缓冲路径尚未提交响应头，可回 502）。
 	streamInterval := s.anthropicNativeStreamInterval()
@@ -200,7 +209,8 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 			break
 		}
 		// SSE 规范允许 `event:xxx`（冒号后无空格）：Kimi 等上游返回紧凑格式。
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
+		eventName, ok := extractOpenAISSEEventLine(line)
+		if !ok {
 			continue
 		}
 
@@ -216,10 +226,17 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		if !ok {
 			continue
 		}
+		if anthropicStreamEventIsError(eventName, payload) {
+			writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream stream returned an error")
+			return resultWithUsage(), &sseStreamErrorEventError{RawData: payload}
+		}
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
+		}
+		if event.Type == "message_stop" {
+			terminalObserved = true
 		}
 
 		if event.Type == "message_start" && event.Message != nil {
@@ -286,15 +303,16 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 	}
 
 	return &OpenAIForwardResult{
-		RequestID:        requestID,
-		Usage:            claudeUsageToOpenAIUsage(&usage),
-		Model:            originalModel,
-		BillingModel:     billingModel,
-		UpstreamModel:    upstreamModel,
-		UpstreamEndpoint: "/v1/messages",
-		ReasoningEffort:  reasoningEffort,
-		Stream:           false,
-		Duration:         time.Since(startTime),
+		RequestID:               requestID,
+		Usage:                   claudeUsageToOpenAIUsage(&usage),
+		Model:                   originalModel,
+		BillingModel:            billingModel,
+		UpstreamModel:           upstreamModel,
+		UpstreamEndpoint:        "/v1/messages",
+		ReasoningEffort:         reasoningEffort,
+		Stream:                  false,
+		Duration:                time.Since(startTime),
+		CaptureResponseComplete: terminalObserved,
 	}, nil
 }
 
@@ -329,6 +347,8 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 	var firstTokenMs *int
 	firstChunk := true
 	clientDisconnected := false
+	sawTerminalEvent := false
+	var providerErr error
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -339,17 +359,18 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
-			RequestID:        requestID,
-			Usage:            claudeUsageToOpenAIUsage(&usage),
-			Model:            originalModel,
-			BillingModel:     billingModel,
-			UpstreamModel:    upstreamModel,
-			UpstreamEndpoint: "/v1/messages",
-			ReasoningEffort:  reasoningEffort,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: clientDisconnected,
+			RequestID:               requestID,
+			Usage:                   claudeUsageToOpenAIUsage(&usage),
+			Model:                   originalModel,
+			BillingModel:            billingModel,
+			UpstreamModel:           upstreamModel,
+			UpstreamEndpoint:        "/v1/messages",
+			ReasoningEffort:         reasoningEffort,
+			Stream:                  true,
+			Duration:                time.Since(startTime),
+			FirstTokenMs:            firstTokenMs,
+			ClientDisconnect:        clientDisconnected,
+			CaptureResponseComplete: sawTerminalEvent,
 		}
 	}
 
@@ -382,6 +403,9 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 	// output_tokens 只在末尾 message_delta 携带，提前退出会把整段生成记成 ~1
 	// token，payg 上游照常计费而平台漏记。状态机照常推进以保证 finalize 一致。
 	processAnthropicEvent := func(event *apicompat.AnthropicStreamEvent) {
+		if event.Type == "message_stop" {
+			sawTerminalEvent = true
+		}
 		if firstChunk {
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
@@ -429,9 +453,13 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 				return onIdle()
 			}
 			logReadErr(rerr)
+			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+				providerErr = rerr
+			}
 			break
 		}
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
+		eventName, ok := extractOpenAISSEEventLine(line)
+		if !ok {
 			continue
 		}
 
@@ -441,16 +469,24 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 				return onIdle()
 			}
 			logReadErr(rerr)
+			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+				providerErr = rerr
+			}
 			break
 		}
 		payload, ok := extractOpenAISSEDataLine(dataLine)
 		if !ok {
 			continue
 		}
+		if anthropicStreamEventIsError(eventName, payload) {
+			providerErr = &sseStreamErrorEventError{RawData: payload}
+			break
+		}
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			continue
+			providerErr = fmt.Errorf("invalid Anthropic provider JSON: %w", err)
+			break
 		}
 
 		processAnthropicEvent(&event)
@@ -488,5 +524,5 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 		}
 	}
 
-	return resultWithUsage(), nil
+	return resultWithUsage(), providerErr
 }

@@ -44,14 +44,14 @@ const goldenRowHex = "15cd5b0700000000" + // captured_at: DateTime64(3)
 	"01" + // response_truncated: UInt8(true)
 	"0100000000000000" + // request_observed_bytes: UInt64(1)
 	"0100000000000000" + // request_stored_bytes: UInt64(1)
-	"0300000000000000" + // response_observed_bytes: UInt64(3)
+	"1300000000000000" + // response_observed_bytes: UInt64(19)
 	"0200000000000000" + // response_stored_bytes: UInt64(2)
 	"38633235373438393230363366393935666466373536626365303766343663316135313933653534636435323833376564393165333230303863636634316163" + // request_sha256: FixedString(64)
-	"34373235653565636139653163356335363836383332626465356334386164653034633762346336363463373839376465313665393365316634383764346333" + // response_sha256: FixedString(64)
+	"37393732343264336431383132636334376265653936346166613964666333326334623030336265656137633537386164343937366530636332373232313031" + // response_sha256: FixedString(64)
 	"0200" + // spool_version: UInt16(2)
 	"0200" + // capture_version: UInt16(2)
 	"0152" + // raw_request: "R"
-	"025354" + // raw_response: "ST"
+	"027b22" + // raw_response prefix: 0x7b 0x22
 	"03484452" + // request_headers: "HDR"
 	"0448454144" // response_headers: "HEAD"
 
@@ -215,7 +215,7 @@ func goldenFixtureBatch(t *testing.T) *spool.Batch {
 		BodyLimitBytes:   2,
 		HeaderLimitBytes: 4,
 		Request:          []byte("R"),
-		Response:         []byte("STU"),
+		Response:         []byte(`{"stop_reason":"x"}`),
 		RequestHeaders:   []byte("HDR"),
 		ResponseHeaders:  []byte("HEAD"),
 		Final: model.Final{
@@ -224,7 +224,6 @@ func goldenFixtureBatch(t *testing.T) *spool.Batch {
 			OutputTokens:        2,
 			CacheReadTokens:     3,
 			CacheCreationTokens: 4,
-			StopReason:          "x",
 			ResponseComplete:    true,
 		},
 	})

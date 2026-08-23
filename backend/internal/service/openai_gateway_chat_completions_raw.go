@@ -311,6 +311,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	var usage OpenAIUsage
 	var firstTokenMs *int
 	clientDisconnected := false
+	providerDoneObserved := false
 	clientOutputStarted := false
 	semanticOutput := false
 	var staged stagedConvertedStream
@@ -353,6 +354,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			Stream:                        true,
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
+			ClientDisconnect:              clientDisconnected,
+			CaptureResponseComplete:       providerDoneObserved,
 		}
 	}
 	type rawChatScanEvent struct {
@@ -440,6 +443,7 @@ scanLoop:
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
 			if trimmedPayload == "[DONE]" {
+				providerDoneObserved = true
 				if refusalDetector.IsSilentRefusal() {
 					continue
 				}
@@ -946,6 +950,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		ServiceTier:                   serviceTier,
 		Stream:                        false,
 		Duration:                      time.Since(startTime),
+		CaptureResponseComplete:       true,
 	}, nil
 }
 

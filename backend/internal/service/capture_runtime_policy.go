@@ -17,8 +17,9 @@ const (
 type CaptureOutcome string
 
 const (
-	CaptureOutcomeSuccess       CaptureOutcome = "success"
-	CaptureOutcomeTerminalError CaptureOutcome = "terminal_error"
+	CaptureOutcomeSuccess          CaptureOutcome = "success"
+	CaptureOutcomeTerminalError    CaptureOutcome = "terminal_error"
+	captureOutcomeClientDisconnect CaptureOutcome = "client_disconnect"
 )
 
 type CapturePlatformPolicy struct {
@@ -280,6 +281,9 @@ func (p CompiledCapturePolicy) decide(platform string, outcome CaptureOutcome, u
 		if !p.outcomes.TerminalError {
 			return CaptureContentPolicy{}, false
 		}
+	case captureOutcomeClientDisconnect:
+		// Deliberately bypass outcome toggles only. User/group/model checks below
+		// and platform/master checks above remain authoritative.
 	default:
 		return CaptureContentPolicy{}, false
 	}

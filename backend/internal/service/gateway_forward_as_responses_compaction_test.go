@@ -94,6 +94,7 @@ func TestHandleResponsesCompactionResponse_StreamAndNonStream(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.Equal(t, clientStream, result.Stream)
+			require.True(t, result.CaptureResponseComplete, "the compaction collector requires native message_stop")
 
 			body := rec.Body.String()
 			if clientStream {

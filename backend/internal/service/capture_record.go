@@ -1678,10 +1678,7 @@ func attachCaptureToForwardResult(c *gin.Context, result *ForwardResult) *Forwar
 			result.CaptureTruncated = bridge.Truncated
 		}
 		if platform := firstNonEmpty(bridge.Platform, platformFromCaptureEndpoint(bridge.UpstreamEndpoint)); platform != "" {
-			outcome := CaptureOutcomeSuccess
-			if result.UpstreamFailed || result.CaptureTerminalError {
-				outcome = CaptureOutcomeTerminalError
-			}
+			outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 			if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 				result.CaptureContentPolicy = &content
 			}
@@ -1699,10 +1696,7 @@ func RefreshForwardCaptureContentPolicy(c *gin.Context, platform string, result 
 		return
 	}
 	result.CaptureContentPolicy = nil
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 		result.CaptureContentPolicy = &content
 	}
@@ -1715,10 +1709,7 @@ func RefreshOpenAIForwardCaptureContentPolicy(c *gin.Context, platform string, r
 		return
 	}
 	result.CaptureContentPolicy = nil
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 		result.CaptureContentPolicy = &content
 	}
@@ -1740,7 +1731,6 @@ const (
 func finalizeForwardResultWithUsage(c *gin.Context, result *ForwardResult, forwardErr error) (*ForwardResult, error) {
 	forwardErr = FinalizeForwardUsage(result, forwardErr)
 	if errors.Is(forwardErr, ErrUpstreamUsageMissing) && result != nil {
-		result.CaptureResponseComplete = true
 		MarkOpsPostResponseFailure(
 			c,
 			"upstream_error",
@@ -1755,8 +1745,13 @@ func finalizeForwardResultWithUsage(c *gin.Context, result *ForwardResult, forwa
 
 func finalizeOpenAIForwardResultWithUsage(c *gin.Context, result *OpenAIForwardResult, forwardErr error, upstreamRequest []byte) (*OpenAIForwardResult, error) {
 	forwardErr = FinalizeOpenAIForwardUsage(result, forwardErr)
+	if result != nil && forwardErr != nil && !isStagedConvertedClientWriteError(forwardErr) {
+		// A public forward returning both a billable partial result and a real
+		// provider/parser/timeout error is terminal even when an early protocol
+		// route bypassed its leaf handler's optional capture annotation.
+		result.CaptureTerminalError = true
+	}
 	if errors.Is(forwardErr, ErrOpenAIUpstreamUsageMissing) && result != nil {
-		result.CaptureResponseComplete = true
 		MarkOpsPostResponseFailure(
 			c,
 			"upstream_error",
@@ -1834,6 +1829,7 @@ func terminalHTTPErrorForwardResult(c *gin.Context, resp *http.Response, model, 
 // typed failover errors keep result=nil, while terminal local/parse failures
 // produce a capture-only UpstreamFailed result.
 func streamErrorForwardResult(
+	ctx context.Context,
 	c *gin.Context,
 	resp *http.Response,
 	model string,
@@ -1845,18 +1841,20 @@ func streamErrorForwardResult(
 	semanticOutput bool,
 	err error,
 ) *ForwardResult {
-	if !semanticOutput {
+	clientCancellation := isClientCausalCancellation(ctx, err, clientDisconnect)
+	if !semanticOutput && (!clientCancellation || !captureAttemptUsableForRequest(c)) {
 		return failedForwardResultForError(c, resp, model, upstreamModel, true, startedAt, err)
 	}
 	finishCaptureResponse(resp)
 	result := &ForwardResult{
-		Model:                model,
-		UpstreamModel:        upstreamModel,
-		Stream:               true,
-		Duration:             time.Since(startedAt),
-		FirstTokenMs:         firstTokenMs,
-		ClientDisconnect:     clientDisconnect,
-		CaptureTerminalError: true,
+		Model:                   model,
+		UpstreamModel:           upstreamModel,
+		Stream:                  true,
+		Duration:                time.Since(startedAt),
+		FirstTokenMs:            firstTokenMs,
+		ClientDisconnect:        clientDisconnect,
+		CaptureResponseComplete: false, // Provider-specific callers overwrite this only after an official terminal event.
+		CaptureTerminalError:    !clientCancellation,
 	}
 	if usage != nil {
 		result.Usage = *usage
@@ -1891,10 +1889,7 @@ func attachCaptureToOpenAIForwardResult(c *gin.Context, result *OpenAIForwardRes
 			result.RequestID = providerRequestID
 		}
 		if platform := firstNonEmpty(bridge.Platform, platformFromCaptureEndpoint(bridge.UpstreamEndpoint)); platform != "" {
-			outcome := CaptureOutcomeSuccess
-			if result.UpstreamFailed || result.CaptureTerminalError {
-				outcome = CaptureOutcomeTerminalError
-			}
+			outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 			if content, enabled := CaptureDecisionFor(c, platform, outcome); enabled {
 				result.CaptureContentPolicy = &content
 			}
@@ -2527,7 +2522,6 @@ func ExtractCaptureMetadataForCompatibility(record *CaptureRecord) (model.Extrac
 			OutputTokens:        captureUInt32(record.OutputTokens),
 			CacheReadTokens:     captureUInt32(record.CacheReadTokens),
 			CacheCreationTokens: captureUInt32(record.CacheCreationTokens),
-			StopReason:          record.StopReason,
 		},
 	})
 }

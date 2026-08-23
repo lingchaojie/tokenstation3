@@ -165,6 +165,7 @@ func TestForwardEmbeddings_MissingUsageIsProviderFailure(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "missing usage follows a verified full-body embedding response")
 	marked, ok := GetOpsStreamError(c)
 	require.True(t, ok)
 	require.Equal(t, "upstream_usage_missing", marked.Code)

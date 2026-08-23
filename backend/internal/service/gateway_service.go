@@ -214,6 +214,14 @@ func anthropicStreamEventIsTerminal(eventName, data string) bool {
 	return gjson.Get(trimmed, "type").String() == "message_stop"
 }
 
+func anthropicStreamEventIsError(eventName, data string) bool {
+	if strings.EqualFold(strings.TrimSpace(eventName), "error") {
+		return true
+	}
+	trimmed := strings.TrimSpace(data)
+	return trimmed != "" && gjson.Get(trimmed, "type").String() == "error"
+}
+
 func cloneStringSlice(src []string) []string {
 	if len(src) == 0 {
 		return nil
@@ -617,7 +625,7 @@ type ForwardResult struct {
 	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
 	UpstreamFailed                bool // final provider attempt was consumed but could not produce a valid response
 	CaptureTerminalError          bool // archive this exchange under terminal_error even when partial usage remains billable
-	CaptureResponseComplete       bool // final provider response bytes were fully consumed despite a terminal error
+	CaptureResponseComplete       bool // final provider terminal boundary was observed for any outcome, including a successful drain after downstream disconnect
 	ReasoningEffort               *string
 	// ServiceTier records the billable request tier. OpenAI uses service_tier;
 	// Anthropic speed=fast is normalized to "fast".
@@ -695,6 +703,12 @@ func isKiroRelayCreditsOnlyUsage(account *Account, result *ForwardResult) bool {
 // their identity while the result is prevented from entering normal billing.
 func FinalizeForwardUsage(result *ForwardResult, forwardErr error) error {
 	if result == nil || result.HasBillableUsage() {
+		return forwardErr
+	}
+	// A causally proven client disconnect is capture-only, not an upstream
+	// usage-integrity failure. The leaf classifier must already have rejected
+	// provider-side cancellations by leaving CaptureTerminalError set.
+	if result.ClientDisconnect && !result.CaptureTerminalError && forwardErr != nil {
 		return forwardErr
 	}
 	result.UpstreamFailed = true

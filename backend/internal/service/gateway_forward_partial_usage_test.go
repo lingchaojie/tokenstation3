@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,286 @@ type gatewayForwardErrorPolicyRepoStub struct {
 type gatewayForwardModelRateLimitCall struct {
 	accountID int64
 	scope     string
+}
+
+type cancelOnSemanticWriteCloser struct {
+	gin.ResponseWriter
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (w *cancelOnSemanticWriteCloser) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(`"text":"client canceled"`)) {
+		w.once.Do(w.cancel)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+type blockingCaptureBody struct {
+	prefix []byte
+	sent   bool
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newBlockingCaptureBody(prefix []byte) *blockingCaptureBody {
+	return &blockingCaptureBody{prefix: prefix, closed: make(chan struct{})}
+}
+
+func (b *blockingCaptureBody) Read(p []byte) (int, error) {
+	if !b.sent && len(b.prefix) > 0 {
+		b.sent = true
+		return copy(p, b.prefix), nil
+	}
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingCaptureBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func installDisconnectOnlyCapturePolicy(t *testing.T, c *gin.Context) {
+	t.Helper()
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.Anthropic = true
+	policy.Platforms.Kiro = true
+	policy.Platforms.Antigravity = true
+	policy.Platforms.OpenAI = true
+	policy.Outcomes.Success = false
+	policy.Outcomes.TerminalError = false
+	policy.ModelAllowlists.Anthropic = []string{}
+	policy.ModelAllowlists.Kiro = []string{}
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+}
+
+func TestGatewayForward_ClientCausalCancellationCommitsDisconnectCapture(t *testing.T) {
+	for _, family := range []struct {
+		name    string
+		account func() *Account
+	}{
+		{name: "shared_anthropic", account: newAnthropicOAuthAccountForPartialUsageTest},
+		{name: "apikey_passthrough", account: newAnthropicAPIKeyAccountForTest},
+	} {
+		for _, stage := range []struct {
+			name   string
+			prefix string
+		}{
+			{name: "before_semantic_output"},
+			{name: "after_semantic_output", prefix: anthropicAPIKeyPassthroughTestSemanticPrefix(4, "client canceled")},
+		} {
+			t.Run(family.name+"/"+stage.name, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+				require.NoError(t, err)
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
+				installDisconnectOnlyCapturePolicy(t, c)
+				if stage.prefix == "" {
+					cancel()
+				} else {
+					c.Writer = &cancelOnSemanticWriteCloser{ResponseWriter: c.Writer, cancel: cancel}
+				}
+				body := newBlockingCaptureBody([]byte(stage.prefix))
+				upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"client-cancel"}},
+					Body:       body,
+				}}
+				svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+
+				result, forwardErr := svc.Forward(ctx, c, family.account(), parsed)
+
+				require.ErrorIs(t, forwardErr, context.Canceled)
+				require.NotNil(t, result, "the public forward boundary must return an archivable disconnect result")
+				require.True(t, result.ClientDisconnect)
+				require.False(t, result.CaptureTerminalError)
+				require.False(t, result.CaptureResponseComplete)
+				require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+				attempts := transport.Attempts()
+				require.Len(t, attempts, 1)
+				if stage.prefix == "" {
+					require.Empty(t, attempts[0].ResponseBytes())
+				} else {
+					require.Equal(t, []byte(stage.prefix), attempts[0].ResponseBytes())
+				}
+				require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
+				finals := attempts[0].Finals()
+				require.Len(t, finals, 1)
+				require.False(t, finals[0].ResponseComplete)
+				require.Empty(t, finals[0].StopReason)
+			})
+		}
+	}
+}
+
+func TestGatewayForward_ProviderStreamFailuresRemainTerminal(t *testing.T) {
+	providerErrors := []struct {
+		name string
+		err  error
+	}{
+		{name: "provider_canceled", err: context.Canceled},
+		{name: "provider_deadline", err: context.DeadlineExceeded},
+		{name: "provider_read_error", err: io.ErrUnexpectedEOF},
+	}
+	families := []struct {
+		name    string
+		account func() *Account
+	}{
+		{name: "shared_anthropic", account: newAnthropicOAuthAccountForPartialUsageTest},
+		{name: "apikey_passthrough", account: newAnthropicAPIKeyAccountForTest},
+	}
+	for _, family := range families {
+		for _, provider := range providerErrors {
+			t.Run(family.name+"/"+provider.name, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+				require.NoError(t, err)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody))
+				installDisconnectOnlyCapturePolicy(t, c)
+				prefix := []byte(anthropicAPIKeyPassthroughTestSemanticPrefix(4, "provider failure"))
+				upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"provider-failure"}},
+					Body:       &streamReadCloser{payload: prefix, err: provider.err},
+				}}
+				svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+
+				result, forwardErr := svc.Forward(context.Background(), c, family.account(), parsed)
+
+				require.ErrorIs(t, forwardErr, provider.err)
+				require.NotNil(t, result)
+				require.False(t, result.ClientDisconnect)
+				require.True(t, result.CaptureTerminalError)
+				require.False(t, result.CaptureResponseComplete)
+				require.False(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+				attempts := transport.Attempts()
+				require.Len(t, attempts, 1)
+				require.Equal(t, prefix, attempts[0].ResponseBytes())
+				require.Equal(t, []captureTerminalState{captureAborted}, attempts[0].TerminalStates())
+				require.Empty(t, attempts[0].Finals())
+			})
+		}
+	}
+}
+
+func TestGatewayForward_PreSemanticClientCancellationWithoutLiveAttemptPreservesFailover(t *testing.T) {
+	families := []struct {
+		name    string
+		account func() *Account
+	}{
+		{name: "shared_anthropic", account: newAnthropicOAuthAccountForPartialUsageTest},
+		{name: "apikey_passthrough", account: newAnthropicAPIKeyAccountForTest},
+	}
+	admissions := []struct {
+		name string
+		set  func(*GatewayService)
+	}{
+		{name: "pool_nil", set: func(svc *GatewayService) { svc.capturePool = nil }},
+		{name: "capture_disabled", set: func(svc *GatewayService) { svc.cfg.Gateway.Capture.Enabled = false }},
+		{name: "runtime_disabled", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{}, func() bool { return false })
+		}},
+		{name: "ipc_begin_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{beginErr: errors.New("capture IPC unavailable")}, func() bool { return true })
+		}},
+		{name: "request_headers_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true })
+		}},
+		{name: "request_body_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 2}, func() bool { return true })
+		}},
+		{name: "response_headers_write_failed", set: func(svc *GatewayService) {
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 3}, func() bool { return true })
+		}},
+	}
+	for _, family := range families {
+		for _, admission := range admissions {
+			t.Run(family.name+"/"+admission.name, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+				require.NoError(t, err)
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
+				installDisconnectOnlyCapturePolicy(t, c)
+				body := newBlockingCaptureBody(nil)
+				upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"text/event-stream"}},
+					Body:       body,
+				}}
+				svc := newForwardPartialUsageServiceForTest(upstream)
+				admission.set(svc)
+				if svc.capturePool != nil {
+					t.Cleanup(svc.capturePool.Stop)
+				}
+
+				result, forwardErr := svc.Forward(ctx, c, family.account(), parsed)
+
+				require.Nil(t, result, "capture unavailability must not create a capture-only proxy result")
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, forwardErr, &failoverErr)
+				require.False(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+			})
+		}
+	}
+}
+
+func TestGatewayForward_PostSemanticClientCancellationWithoutLiveAttemptRemainsPartial(t *testing.T) {
+	for _, family := range []struct {
+		name    string
+		account func() *Account
+	}{
+		{name: "shared_anthropic", account: newAnthropicOAuthAccountForPartialUsageTest},
+		{name: "apikey_passthrough", account: newAnthropicAPIKeyAccountForTest},
+	} {
+		t.Run(family.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			requestBody := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformAnthropic)
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(requestBody)).WithContext(ctx)
+			installDisconnectOnlyCapturePolicy(t, c)
+			c.Writer = &cancelOnSemanticWriteCloser{ResponseWriter: c.Writer, cancel: cancel}
+			prefix := []byte(anthropicAPIKeyPassthroughTestSemanticPrefix(4, "client canceled"))
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       newBlockingCaptureBody(prefix),
+			}}
+			svc := newForwardPartialUsageServiceForTest(upstream)
+			svc.capturePool = newConversationCapturePoolForTransport(&recordingCaptureTransport{failWriteAt: 1}, func() bool { return true })
+			t.Cleanup(svc.capturePool.Stop)
+
+			result, forwardErr := svc.Forward(ctx, c, family.account(), parsed)
+
+			require.ErrorIs(t, forwardErr, context.Canceled)
+			require.NotNil(t, result, "semantic output remains a non-failover partial result even without capture")
+			require.True(t, result.ClientDisconnect)
+			require.False(t, result.CaptureTerminalError)
+			require.False(t, result.CaptureResponseComplete)
+			require.False(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+		})
+	}
 }
 
 func (r *gatewayForwardErrorPolicyRepoStub) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
@@ -165,6 +446,7 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	require.ErrorContains(t, err, "upstream response missing billable usage")
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
+	require.False(t, result.CaptureResponseComplete, "clean EOF and missing usage must not synthesize provider completion")
 	require.Zero(t, result.Usage.InputTokens)
 	require.Zero(t, result.Usage.OutputTokens)
 	require.Nil(t, result.CaptureResponse)
@@ -172,9 +454,43 @@ func TestGatewayService_Forward_SemanticOutputWithoutUsagePreservesPartialAndCap
 	require.Len(t, attempts, 1)
 	require.Equal(t, upstream.lastBody, attempts[0].RequestBytes())
 	require.Equal(t, []byte(upstreamSSE), attempts[0].ResponseBytes())
-	require.Empty(t, attempts[0].TerminalStates())
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
+	require.Len(t, attempts[0].Finals(), 1)
+	require.False(t, attempts[0].Finals()[0].ResponseComplete, "the public sink must preserve streaming clean-EOF incompleteness")
 	require.Contains(t, rec.Body.String(), `"text":"hello"`)
-	AbortCaptureAttempt(c)
+}
+
+func TestGatewayService_Forward_NonStreamingMissingUsageCommitsVerifiedFullBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	providerBody := []byte(`{"id":"msg_no_usage","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}`)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}}
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+
+	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "successful full-body read must survive missing-usage terminalization")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete, "the public sink must receive verified non-stream completion")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
 }
 
 func TestGatewayService_Forward_PreambleUsageOnlyMissingTerminalStillBills(t *testing.T) {
@@ -698,7 +1014,8 @@ func TestGatewayForwardAsResponses_MissingUsageIsProviderFailure(t *testing.T) {
 		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"responses-no-usage"}},
 		Body:       io.NopCloser(strings.NewReader(providerBody)),
 	}}
-	svc, _ := newForwardPartialUsageCaptureServiceForTest(upstream)
+	enableCaptureForTest(t, c)
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
 	account := newAnthropicOAuthAccountForPartialUsageTest()
 	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "claude-3-5-sonnet-latest", Stream: false}
 
@@ -708,7 +1025,60 @@ func TestGatewayForwardAsResponses_MissingUsageIsProviderFailure(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "native message_stop must prove the stream-to-buffer response complete")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete)
 	marked, ok := GetOpsStreamError(c)
 	require.True(t, ok)
 	require.Equal(t, "upstream_usage_missing", marked.Code)
+}
+
+func TestGatewayForwardAsChatCompletions_MissingUsageCommitsOfficialTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+	providerBody := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_no_usage","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-latest","stop_reason":null,"usage":{}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hello"}}`,
+		"",
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	enableCaptureForTest(t, c)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"chat-no-usage"}},
+		Body:       io.NopCloser(strings.NewReader(providerBody)),
+	}}
+	svc, transport := newForwardPartialUsageCaptureServiceForTest(upstream)
+	account := newAnthropicOAuthAccountForPartialUsageTest()
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "claude-3-5-sonnet-latest", Stream: false}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, parsed)
+
+	require.ErrorIs(t, err, ErrUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "native message_stop must prove the Chat stream-to-buffer response complete")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete)
 }

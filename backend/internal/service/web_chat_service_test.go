@@ -39,6 +39,24 @@ func TestWebChatResponseCapture_CapturesBoundedBody(t *testing.T) {
 	require.True(t, truncated)
 }
 
+func TestWebChatUsagePricingFailuresDoNotInferProviderCompletion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Run("gateway", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		result := &ForwardResult{Stream: true}
+		markWebChatGatewayUsagePricingFailure(c, result, errors.New("unpriced"))
+		require.True(t, result.CaptureTerminalError)
+		require.False(t, result.CaptureResponseComplete)
+	})
+	t.Run("openai", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		result := &OpenAIForwardResult{Stream: true}
+		markWebChatOpenAIUsagePricingFailure(c, result, errors.New("unpriced"))
+		require.True(t, result.CaptureTerminalError)
+		require.False(t, result.CaptureResponseComplete)
+	})
+}
+
 func TestWebChatResponseCapture_ZeroLimitRetainsCompleteBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

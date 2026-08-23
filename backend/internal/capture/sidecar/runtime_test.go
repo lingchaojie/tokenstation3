@@ -155,6 +155,93 @@ func TestClickHouseOutageRetainsReadyDataAndOnlyIncrementsRetry(t *testing.T) {
 	require.NoError(t, runtime.Shutdown(context.Background()))
 }
 
+func TestRetryableUploadTimeoutKeepsLiveWorkerAndDrainsPendingAndLaterRecords(t *testing.T) {
+	root := t.TempDir()
+	store := openRuntimeStore(t, root)
+	seedRuntimeRecord(t, store, "first")
+	clock := newManualClock(time.Unix(1_800_000_000, 0).UTC())
+	uploader := &recordingUploader{uploadResults: []error{
+		&upload.RetryableError{Cause: context.DeadlineExceeded},
+		nil,
+		nil,
+	}}
+	runtime, err := New(testConfig(root), Dependencies{
+		Store:          store,
+		Uploader:       uploader,
+		Receiver:       &blockingReceiver{},
+		Clock:          clock,
+		Random:         func() float64 { return .5 },
+		StatusInterval: time.Hour,
+	})
+	require.NoError(t, err)
+	done := startRuntime(t, runtime)
+	require.Eventually(t, func() bool {
+		return uploader.uploadCount() == 1 && runtime.Status().UploadRetries == 1
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(clock.deliveryDelaysSnapshot()) == 1
+	}, time.Second, time.Millisecond, "retry checkpoint must be followed by timer registration before advancing the manual clock")
+	require.Equal(t, []time.Duration{minimumRetryDelay}, clock.deliveryDelaysSnapshot())
+	firstAttempts := uploader.batchIDs()
+	require.Len(t, firstAttempts, 1)
+	require.Len(t, store.PendingBatches(), 1)
+
+	seedRuntimeRecord(t, store, "queued after timeout")
+	clock.Advance(minimumRetryDelay)
+	require.Eventually(t, func() bool {
+		return uploader.uploadCount() == 3 &&
+			store.Snapshot().ReadyRecords == 0 &&
+			runtime.Status().CurrentBatchID == ""
+	}, time.Second, time.Millisecond)
+	attempts := uploader.batchIDs()
+	require.Len(t, attempts, 3)
+	require.Equal(t, attempts[0], attempts[1], "retry must preserve the exact pending batch")
+	require.NotEqual(t, attempts[1], attempts[2], "later records must follow the pending batch")
+	require.Empty(t, store.PendingBatches())
+	select {
+	case runErr := <-done:
+		t.Fatalf("live runtime stopped after retryable upload timeout: %v", runErr)
+	default:
+	}
+	require.NoError(t, runtime.Shutdown(context.Background()))
+}
+
+func TestLiveContextCancellationErrorsFromUploadAreRejected(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := openRuntimeStore(t, root)
+			seedRuntimeRecord(t, store, "preserve on rejection")
+			runtime := newTestRuntime(t, root, store, &recordingUploader{alwaysUpload: test.err}, newManualClock(time.Now()), &blockingReceiver{})
+			done := make(chan error, 1)
+			go func() { done <- runtime.Run(context.Background()) }()
+			<-runtime.Started()
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = runtime.Shutdown(ctx)
+			})
+
+			select {
+			case runErr := <-done:
+				require.EqualError(t, runErr, "capture sidecar upload rejected")
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("live runtime remained alive after its upload worker silently stopped")
+			}
+			require.EqualValues(t, 1, store.Snapshot().ReadyRecords)
+			require.Len(t, store.PendingBatches(), 1)
+			require.Zero(t, runtime.Status().UploadRetries)
+			require.False(t, runtime.Status().DeliveryReady)
+		})
+	}
+}
+
 func TestLocallyCorruptBatchIsRecoveredWithoutBlockingOtherReadyRecords(t *testing.T) {
 	root := t.TempDir()
 	store := openRuntimeStore(t, root)
@@ -245,6 +332,76 @@ func TestIdleRuntimeProbesAtMostEveryThirtySeconds(t *testing.T) {
 	clock.Advance(time.Second)
 	require.Eventually(t, func() bool { return uploader.probeCount() == 2 }, time.Second, time.Millisecond)
 	require.NoError(t, runtime.Shutdown(context.Background()))
+}
+
+func TestRetryableProbeTimeoutKeepsLiveWorkerForLaterUpload(t *testing.T) {
+	root := t.TempDir()
+	store := openRuntimeStore(t, root)
+	clock := newManualClock(time.Unix(1_800_000_000, 0).UTC())
+	uploader := &recordingUploader{probeResults: []error{
+		&upload.RetryableError{Cause: context.DeadlineExceeded},
+	}}
+	runtime := newTestRuntime(t, root, store, uploader, clock, &blockingReceiver{})
+	done := startRuntime(t, runtime)
+	require.Eventually(t, func() bool { return len(clock.delaysSnapshot()) >= 2 }, time.Second, time.Millisecond)
+	timersBeforeProbe := len(clock.delaysSnapshot())
+
+	clock.Advance(idleProbeInterval)
+	require.Eventually(t, func() bool {
+		return uploader.probeCount() == 1 && runtime.Status().UploadRetries == 1
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(clock.delaysSnapshot()) > timersBeforeProbe
+	}, time.Second, time.Millisecond, "probe retry must leave the live worker polling")
+
+	seedRuntimeRecord(t, store, "queued after probe timeout")
+	clock.Advance(time.Second)
+	require.Eventually(t, func() bool {
+		return uploader.uploadCount() == 1 && store.Snapshot().ReadyRecords == 0
+	}, time.Second, time.Millisecond)
+	require.Empty(t, store.PendingBatches())
+	select {
+	case runErr := <-done:
+		t.Fatalf("live runtime stopped after retryable probe timeout: %v", runErr)
+	default:
+	}
+	require.NoError(t, runtime.Shutdown(context.Background()))
+}
+
+func TestLiveContextCancellationErrorsFromProbeAreRejected(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := openRuntimeStore(t, root)
+			clock := newManualClock(time.Now())
+			runtime := newTestRuntime(t, root, store, &recordingUploader{probeResults: []error{test.err}}, clock, &blockingReceiver{})
+			done := make(chan error, 1)
+			go func() { done <- runtime.Run(context.Background()) }()
+			<-runtime.Started()
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = runtime.Shutdown(ctx)
+			})
+			require.Eventually(t, func() bool { return len(clock.delaysSnapshot()) >= 2 }, time.Second, time.Millisecond)
+
+			clock.Advance(idleProbeInterval)
+			select {
+			case runErr := <-done:
+				require.EqualError(t, runErr, "capture sidecar delivery probe rejected")
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("live runtime remained alive after its probe worker silently stopped")
+			}
+			require.Zero(t, runtime.Status().UploadRetries)
+			require.False(t, runtime.Status().DeliveryReady)
+		})
+	}
 }
 
 func TestUploadSerializesDeliveryAndTakesPriorityOverProbe(t *testing.T) {

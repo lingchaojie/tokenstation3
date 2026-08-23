@@ -70,6 +70,41 @@ func TestRecordReconstructingUnitTransportPublishesOnlyCommittedAttempt(t *testi
 	}
 }
 
+func TestRecordReconstructingUnitTransportDerivesStopReasonOnlyFromRawResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		response []byte
+		want     string
+	}{
+		{name: "provider value wins", response: []byte(`{"stop_reason":"provider-stop"}`), want: "provider-stop"},
+		{name: "absent provider value stays empty", response: []byte(`{"usage":{"output_tokens":4}}`)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			records := make(chan *CaptureRecord, 1)
+			pool := NewConversationCapturePoolForUnitTest(records)
+			t.Cleanup(pool.Stop)
+			attempt, ok := pool.Begin(context.Background(), model.Begin{
+				CaptureID: uuid.New(),
+				Platform:  PlatformAnthropic,
+				Format:    model.PayloadJSON,
+				Policy:    model.ContentPolicy{StoreResponseBody: true},
+			})
+			require.True(t, ok)
+			require.True(t, attempt.WriteResponse(test.response))
+			require.True(t, attempt.Finalize(model.Final{
+				HTTPStatus:       200,
+				StopReason:       "gateway_custom_value",
+				ResponseComplete: true,
+			}))
+			require.True(t, attempt.Commit())
+
+			require.Equal(t, test.want, (<-records).StopReason)
+		})
+	}
+}
+
 func TestRecordReconstructingUnitTransportReportsEachTerminalOnce(t *testing.T) {
 	records := make(chan *CaptureRecord, 1)
 	terminals := make(chan string, 3)

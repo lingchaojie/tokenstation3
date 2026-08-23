@@ -3046,6 +3046,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_MissingUsageReturnsBillingErrorAn
 	require.EqualError(t, err, "upstream response missing billable usage")
 	require.NotNil(t, result, "client-visible partial output must preserve the attempt result")
 	require.True(t, result.UpstreamFailed)
+	require.False(t, result.CaptureResponseComplete, "streaming clean EOF must remain incomplete")
 	require.Nil(t, result.UpstreamRequest)
 	require.Nil(t, result.CaptureRequest)
 	require.Nil(t, result.CaptureResponse)
@@ -3056,8 +3057,56 @@ func TestOpenAIGatewayService_OAuthPassthrough_MissingUsageReturnsBillingErrorAn
 	require.Equal(t, []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"h\"}\n\n"), attempts[0].ResponseBytes())
 	require.Equal(t, captureHeaderBytes(upstream.lastReq.Header, svc.cfg.Gateway.Capture.MaxHeaderBytes), attempts[0].RequestHeaderBytes())
 	require.Equal(t, redactHTTPHeader(resp.Header), attempts[0].ResponseHeaderBytes())
-	require.Empty(t, attempts[0].TerminalStates(), "the handler-side partial-result sink owns commit")
-	AbortCaptureAttempt(c)
+	require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.False(t, attempts[0].Finals()[0].ResponseComplete, "the public sink must preserve streaming clean-EOF incompleteness")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
+}
+
+func TestOpenAIGatewayService_NonStreamingMissingUsageCommitsVerifiedFullBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	originalBody := []byte(`{"model":"gpt-5.2","stream":false,"input":"hi"}`)
+	providerBody := []byte(`{"id":"resp_no_usage","model":"gpt-5.2","output":[]}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"rid-no-usage-full-body"}},
+		Body:       io.NopCloser(bytes.NewReader(providerBody)),
+	}
+	upstream := &httpUpstreamRecorder{resp: resp}
+	transport := &recordingCaptureTransport{}
+	cfg := captureEnabledConfigForTest(64 * 1024)
+	cfg.Security.URLAllowlist.Enabled = false
+	svc := &OpenAIGatewayService{
+		cfg:          cfg,
+		httpUpstream: upstream,
+		capturePool:  newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
+	account := &Account{
+		ID: 655, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://example.com"},
+		Extra:       map[string]any{"use_responses_api": true, "openai_passthrough": true},
+		Status:      StatusActive, Schedulable: true, RateMultiplier: f64p(1),
+	}
+	result, err := svc.Forward(context.Background(), c, account, originalBody)
+
+	require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
+	require.NotNil(t, result)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete, "successful full-body read must survive missing-usage terminalization")
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, providerBody, attempts[0].ResponseBytes())
+	require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformOpenAI, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete, "the public sink must receive verified non-stream completion")
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_DefaultFiltersTimeoutHeaders(t *testing.T) {

@@ -6,6 +6,7 @@ package service
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -181,6 +182,96 @@ func TestResponsesStreamingFromNativeAnthropic_HangTimesOut(t *testing.T) {
 	}
 }
 
+func TestNativeAnthropicStreaming_ClientDisconnectDoesNotHideProviderReadError(t *testing.T) {
+	providerBody := strings.Replace(miniAnthropicSSEStream(), "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "", 1)
+	for _, tc := range []struct {
+		name string
+		run  func(*OpenAIGatewayService, *http.Response, *gin.Context) (*OpenAIForwardResult, error)
+	}{
+		{
+			name: "chat completions",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleCCStreamingFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), true)
+			},
+		},
+		{
+			name: "responses",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleResponsesStreamingFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newNativeAnthropicHangTestService(5)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			c.Writer = &failingGinWriter{ResponseWriter: c.Writer, failAfter: 0}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body: &openAIStreamReadThenErrorCloser{
+					reader: strings.NewReader(providerBody),
+					err:    io.ErrUnexpectedEOF,
+				},
+			}
+
+			result, err := tc.run(svc, resp, c)
+
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("expected provider read error, got %v", err)
+			}
+			if result == nil || !result.ClientDisconnect || result.CaptureResponseComplete {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestNativeAnthropicStreaming_ClientDisconnectDoesNotHideMalformedEvent(t *testing.T) {
+	providerBody := strings.Replace(
+		miniAnthropicSSEStream(),
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		"event: content_block_delta\ndata: {malformed-json}\n\n",
+		1,
+	)
+	for _, tc := range []struct {
+		name string
+		run  func(*OpenAIGatewayService, *http.Response, *gin.Context) (*OpenAIForwardResult, error)
+	}{
+		{
+			name: "chat completions",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleCCStreamingFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), true)
+			},
+		},
+		{
+			name: "responses",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleResponsesStreamingFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newNativeAnthropicHangTestService(5)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			c.Writer = &failingGinWriter{ResponseWriter: c.Writer, failAfter: 0}
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(providerBody))}
+
+			result, err := tc.run(svc, resp, c)
+
+			if err == nil || !strings.Contains(err.Error(), "invalid Anthropic provider JSON") {
+				t.Fatalf("expected parser error, got %v", err)
+			}
+			if result == nil || !result.ClientDisconnect || result.CaptureResponseComplete {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+		})
+	}
+}
+
 func TestCCStreamingFromNativeAnthropic_HappyPathStillConverts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newNativeAnthropicHangTestService(5)
@@ -240,5 +331,61 @@ func TestCCBufferedFromNativeAnthropic_HappyPathStillConverts(t *testing.T) {
 	}
 	if res.Usage.InputTokens != 10 || res.Usage.OutputTokens != 5 {
 		t.Fatalf("expected usage 10/5, got %+v", res.Usage)
+	}
+	if !res.CaptureResponseComplete {
+		t.Fatalf("official message_stop must prove buffered provider completion")
+	}
+}
+
+func TestNativeAnthropicBufferedCompletionRequiresMessageStop(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*OpenAIGatewayService, *http.Response, *gin.Context) (*OpenAIForwardResult, error)
+	}{
+		{
+			name: "chat completions",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleCCBufferedFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now())
+			},
+		},
+		{
+			name: "responses",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) (*OpenAIForwardResult, error) {
+				return svc.handleResponsesBufferedFromNativeAnthropic(resp, c, "glm-4.7", "glm-4.7", "glm-4.7", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, terminal := range []bool{false, true} {
+				name := "clean EOF"
+				if terminal {
+					name = "official message_stop"
+				}
+				t.Run(name, func(t *testing.T) {
+					gin.SetMode(gin.TestMode)
+					svc := newNativeAnthropicHangTestService(5)
+					rec := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(rec)
+					c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+					providerBody := miniAnthropicSSEStream()
+					if !terminal {
+						providerBody = strings.Replace(providerBody, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "", 1)
+					}
+					resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(providerBody))}
+
+					result, err := tc.run(svc, resp, c)
+
+					if err != nil {
+						t.Fatalf("unexpected error: %v", err)
+					}
+					if result == nil {
+						t.Fatal("expected result")
+					}
+					if result.CaptureResponseComplete != terminal {
+						t.Fatalf("CaptureResponseComplete = %v, want %v", result.CaptureResponseComplete, terminal)
+					}
+				})
+			}
+		})
 	}
 }

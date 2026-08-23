@@ -1869,6 +1869,7 @@ func TestForwardAsAnthropic_BufferedTerminalWithoutUpstreamCloseReturns(t *testi
 		require.Equal(t, 15, got.result.Usage.InputTokens)
 		require.Equal(t, 6, got.result.Usage.OutputTokens)
 		require.Equal(t, 5, got.result.Usage.CacheReadInputTokens)
+		require.True(t, got.result.CaptureResponseComplete, "buffered conversion requires an official provider terminal")
 		require.Contains(t, rec.Body.String(), `"stop_reason":"end_turn"`)
 	case <-time.After(time.Second):
 		require.Fail(t, "ForwardAsAnthropic buffered response should return after terminal usage event even if upstream keeps the connection open")
@@ -2055,6 +2056,7 @@ func TestForwardAsAnthropic_MissingUsageAfterOutputReturnsBillingErrorWithoutFai
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.False(t, result.ClientDisconnect)
+	require.False(t, result.CaptureResponseComplete, "clean EOF and missing usage must not synthesize provider completion")
 	require.True(t, c.Writer.Written())
 	require.Contains(t, rec.Body.String(), "event: message_start")
 	require.Contains(t, rec.Body.String(), "partial")

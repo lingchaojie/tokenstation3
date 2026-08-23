@@ -141,6 +141,19 @@ func (a *CaptureAttempt) ID() uuid.UUID {
 	return a.attempt.ID()
 }
 
+// usable reports whether this admitted attempt can still accept writes and a
+// terminal Finalize/Commit. The request slot deliberately retains failed
+// attempts for exact-once ownership, so pointer presence alone is not a live
+// capture boundary.
+func (a *CaptureAttempt) usable() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return !a.failed && !a.terminal && a.attempt != nil
+}
+
 func (a *CaptureAttempt) WriteRequest(payload []byte) bool {
 	return a.write(a != nil && a.policy.StoreRequestBody, func(attempt protocol.Attempt) bool {
 		return attempt.WriteRequest(payload)
@@ -291,7 +304,6 @@ func (p *ConversationCapturePool) Submit(record *CaptureRecord) {
 		OutputTokens:        boundedCaptureUint32(record.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(record.CacheReadTokens),
 		CacheCreationTokens: boundedCaptureUint32(record.CacheCreationTokens),
-		StopReason:          record.StopReason,
 		ResponseComplete:    !record.Truncated,
 	}) {
 		attempt.Abort()

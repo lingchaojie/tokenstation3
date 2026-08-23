@@ -1064,6 +1064,7 @@ func TestForwardKiroMessagesNonStreamOnlyWebSearchCapturesFinalProviderPair(t *t
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.CaptureResponseComplete, "native messageStopEvent must prove only-WebSearch completion")
 	require.Len(t, upstream.bodies, 2, "MCP request then final AWS runtime request")
 	require.Nil(t, result.UpstreamRequest)
 	require.Nil(t, result.CaptureResponse)
@@ -1075,6 +1076,64 @@ func TestForwardKiroMessagesNonStreamOnlyWebSearchCapturesFinalProviderPair(t *t
 	require.Equal(t, upstream.bodies[1], captureTransport.Attempts()[1].RequestBytes())
 	require.Equal(t, rawProviderBody, captureTransport.Attempts()[1].ResponseBytes())
 	require.Equal(t, []captureTerminalState{captureCommitted}, captureTransport.Attempts()[1].TerminalStates())
+}
+
+func TestForwardKiroMessagesStreamOnlyWebSearchCleanEOFDoesNotUseSyntheticTerminalForCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	endpoint := "https://q.us-east-1.amazonaws.com/mcp"
+	kiroWebSearchDescCache.Store(endpoint, "Search the web")
+	t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	enableCaptureForTest(t, c)
+	account := &Account{
+		ID: 39, Name: "kiro-stream-websearch-clean-eof", Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/STREAMWEBSEARCHCLEANEOF",
+			"region":       "us-east-1",
+		},
+	}
+	mcpBody := []byte(`{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`)
+	var providerBody bytes.Buffer
+	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "stream answer without native terminal"},
+	}))
+	_, _ = providerBody.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 4, "outputTokens": 2}},
+	}))
+	rawProviderBody := snapshotBytes(providerBody.Bytes())
+	upstream := &webChatGeminiSequenceRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(mcpBody))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}}, Body: io.NopCloser(bytes.NewReader(rawProviderBody))},
+	}}
+	captureTransport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+		capturePool: newConversationCapturePoolForTransport(captureTransport, func() bool { return true }),
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize,
+			Capture:     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20},
+		}},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"news"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, recorder.Body.String(), "event: message_stop", "client compatibility output remains unchanged")
+	require.False(t, result.CaptureResponseComplete, "synthetic only-WebSearch message_stop must not prove native completion")
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformKiro, result))
+	require.Len(t, captureTransport.Attempts(), 2)
+	require.Equal(t, rawProviderBody, captureTransport.Attempts()[1].ResponseBytes())
+	require.False(t, captureTransport.Attempts()[1].Finals()[0].ResponseComplete)
 }
 
 func TestForwardKiroMessagesStreamOnlyWebSearchPreservesProviderNativeCapture(t *testing.T) {

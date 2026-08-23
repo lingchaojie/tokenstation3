@@ -768,6 +768,7 @@ type streamingResult struct {
 	firstTokenMs     *int
 	clientDisconnect bool // 客户端是否在流式传输过程中断开
 	semanticOutput   bool // 是否已向客户端提交实际文本/工具等语义输出
+	responseComplete bool // 是否观测到上游官方 terminal 事件
 }
 
 // partialStreamUsageResult 在流式转发中途出错时，把已经提交语义输出的部分结果包装为
@@ -776,8 +777,12 @@ type streamingResult struct {
 //
 // 不变式：UpstreamFailoverError 必须保持 result=nil——failover 重试成功后按成功请求
 // 计费，若同时返回部分 usage 会造成双重计费，此处显式拦截兜底。
-func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult *streamingResult, model, upstreamModel string, startTime time.Time, err error) *ForwardResult {
-	if streamResult == nil || !streamResult.semanticOutput {
+func partialStreamUsageResult(ctx context.Context, c *gin.Context, resp *http.Response, streamResult *streamingResult, model, upstreamModel string, startTime time.Time, err error) *ForwardResult {
+	if streamResult == nil {
+		return nil
+	}
+	clientCancellation := isClientCausalCancellation(ctx, err, streamResult.clientDisconnect)
+	if !streamResult.semanticOutput && !clientCancellation {
 		return nil
 	}
 	var failoverErr *UpstreamFailoverError
@@ -795,8 +800,13 @@ func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult 
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  streamResult.firstTokenMs,
 		ClientDisconnect:              streamResult.clientDisconnect,
-		CaptureTerminalError:          true,
+		CaptureTerminalError:          !clientCancellation,
+		CaptureResponseComplete:       streamResult.responseComplete,
 	})
+}
+
+func isClientCausalCancellation(ctx context.Context, err error, clientDisconnect bool) bool {
+	return clientDisconnect && ctx != nil && errors.Is(ctx.Err(), context.Canceled) && errors.Is(err, context.Canceled)
 }
 
 // anthropicSSEEventHasSemanticOutput reports whether an Anthropic SSE event
@@ -1267,7 +1277,13 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 
 	streamResult := func() *streamingResult {
-		return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected, semanticOutput: semanticOutput}
+		return &streamingResult{
+			usage:            usage,
+			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnected,
+			semanticOutput:   semanticOutput,
+			responseComplete: sawTerminalEvent,
+		}
 	}
 	preOutputFailover := func(message string, retryable bool) error {
 		failure := newIncompleteProviderStreamFailover(resp, message)
@@ -1278,6 +1294,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	if ctx != nil {
 		ctxDone = ctx.Done()
 	}
+	var kiroCancellationTimer *time.Timer
+	var kiroCancellationTimeout <-chan time.Time
+	var kiroCancellationErr error
+	defer func() {
+		if kiroCancellationTimer != nil {
+			kiroCancellationTimer.Stop()
+		}
+	}()
 
 	for {
 		select {
@@ -1285,10 +1309,24 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if !ok {
 				providerScanFinished = true
 				pendingEventLines = nil
+				if kiroCancellationErr != nil {
+					if !semanticOutput && !captureAttemptUsableForRequest(c) {
+						return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(kiroCancellationErr), false)
+					}
+					return streamResult(), fmt.Errorf("stream usage incomplete: %w", kiroCancellationErr)
+				}
 				// 上游完成，返回结果
 				return streamResult(), nil
 			}
 			if ev.err != nil {
+				requestCanceled := ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+				if isClientCausalCancellation(ctx, ev.err, clientDisconnected || requestCanceled) {
+					clientDisconnected = true
+					if !semanticOutput && !captureAttemptUsableForRequest(c) {
+						return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(ev.err), false)
+					}
+					return streamResult(), fmt.Errorf("stream usage incomplete: %w", ev.err)
+				}
 				if !outputCommitted && !semanticOutput {
 					// Adapter-owned pipe bodies may carry a fully classified terminal
 					// provider HTTP failure (for example KIRO only-WebSearch after the
@@ -1397,10 +1435,32 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if cancelErr == nil {
 				cancelErr = context.Canceled
 			}
-			if !semanticOutput {
+			clientDisconnected = true
+			if providerNativeCapture {
+				// KIRO translates a context-bound native AWS body through an
+				// io.Pipe. Give the translated pipe its bounded opportunity to
+				// publish CloseWithError before classifying the same cancellation
+				// from the outer context. While this drain is active ctxDone is
+				// disabled, so a buffered pipe/provider error deterministically
+				// owns classification; the existing provider terminal-tail grace
+				// prevents a misbehaving transport from blocking forever.
+				kiroCancellationErr = cancelErr
+				ctxDone = nil
+				intervalCh = nil
+				kiroCancellationTimer = time.NewTimer(providerTerminalTailDrainGrace)
+				kiroCancellationTimeout = kiroCancellationTimer.C
+				continue
+			}
+			if !semanticOutput && !captureAttemptUsableForRequest(c) {
 				return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(cancelErr), false)
 			}
 			return streamResult(), fmt.Errorf("stream usage incomplete: %w", cancelErr)
+
+		case <-kiroCancellationTimeout:
+			if !semanticOutput && !captureAttemptUsableForRequest(c) {
+				return nil, preOutputFailover("upstream stream canceled: "+sanitizeStreamError(kiroCancellationErr), false)
+			}
+			return streamResult(), fmt.Errorf("stream usage incomplete: %w", kiroCancellationErr)
 
 		case <-intervalCh:
 			lastRead := readActivity.LastReadTime()

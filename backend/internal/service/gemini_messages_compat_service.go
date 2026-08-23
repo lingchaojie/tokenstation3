@@ -1126,19 +1126,27 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	var clientDisconnect bool
+	var captureResponseComplete bool
 	if req.Stream {
 		streamRes, err := s.handleStreamingResponse(c, resp, startTime, originalModel)
 		if err != nil {
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
 			}
-			return streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, false, streamRes.semanticOutput, err), err
+			result := streamErrorForwardResult(ctx, c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			if result != nil {
+				result.CaptureResponseComplete = streamRes.terminalObserved
+			}
+			return result, err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		clientDisconnect = streamRes.clientDisconnect
+		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		if useUpstreamStream {
-			collected, usageObj, err := collectGeminiSSE(resp, true, s.cfg)
+			collected, usageObj, terminalObserved, err := collectGeminiSSE(resp, true, s.cfg)
 			if err != nil {
 				var failoverErr *UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -1156,11 +1164,13 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			if usageObj != nil && (usageObj.InputTokens > 0 || usageObj.OutputTokens > 0) {
 				usage = usageObj
 			}
+			captureResponseComplete = terminalObserved
 		} else {
 			usage, err = s.handleNonStreamingResponse(c, resp, originalModel)
 			if err != nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 			}
+			captureResponseComplete = true
 		}
 	}
 
@@ -1180,6 +1190,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		Stream:                        req.Stream,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
@@ -1731,6 +1743,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	var clientDisconnect bool
+	var captureResponseComplete bool
 
 	if stream {
 		streamRes, err := s.handleNativeStreamingResponse(c, resp, startTime, isOAuth)
@@ -1738,13 +1752,19 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
 			}
-			return streamErrorForwardResult(c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, false, streamRes.semanticOutput, err), err
+			result := streamErrorForwardResult(ctx, c, resp, originalModel, mappedModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, err)
+			if result != nil {
+				result.CaptureResponseComplete = streamRes.terminalObserved
+			}
+			return result, err
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		clientDisconnect = streamRes.clientDisconnect
+		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		if useUpstreamStream {
-			collected, usageObj, err := collectGeminiSSE(resp, isOAuth, s.cfg)
+			collected, usageObj, terminalObserved, err := collectGeminiSSE(resp, isOAuth, s.cfg)
 			if err != nil {
 				var failoverErr *UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -1758,12 +1778,14 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			observeGeminiImageOutputs(c, b)
 			c.Data(http.StatusOK, "application/json", b)
 			usage = usageObj
+			captureResponseComplete = terminalObserved
 		} else {
 			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, action)
 			if err != nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 			}
 			usage = usageResp
+			captureResponseComplete = true
 		}
 	}
 
@@ -1787,6 +1809,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		Stream:                        stream,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
@@ -2216,6 +2240,7 @@ func mapGeminiStatusToClaudeErrorType(status string) string {
 type geminiStreamResult struct {
 	usage            *ClaudeUsage
 	firstTokenMs     *int
+	clientDisconnect bool
 	semanticOutput   bool
 	terminalObserved bool
 }
@@ -2281,6 +2306,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	sawToolUse := false
 	semanticOutput := false
 	commitTerminal := false
+	terminalObserved := false
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
 	writeHeaders := func() {
@@ -2291,6 +2317,20 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		c.Status(http.StatusOK)
 	}
 	wireWriter := &stagedSemanticWriter{stage: &staged, c: c, writeHeaders: writeHeaders, semantic: &semanticOutput, terminal: &commitTerminal}
+	resultSnapshot := func(forceSemanticOutput bool) *geminiStreamResult {
+		clientDisconnect := false
+		var clientWriteErr *stagedConvertedClientWriteError
+		if wireWriter.err != nil && errors.As(wireWriter.err, &clientWriteErr) {
+			clientDisconnect = true
+		}
+		return &geminiStreamResult{
+			usage:            &usage,
+			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnect,
+			semanticOutput:   semanticOutput || forceSemanticOutput,
+			terminalObserved: terminalObserved,
+		}
+	}
 	writeStart = func() {
 		if startWritten {
 			return
@@ -2335,6 +2375,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		if payload == "" || payload == "[DONE]" {
 			if payload == "[DONE]" {
 				commitTerminal = true
+				terminalObserved = true
 			}
 			continue
 		}
@@ -2342,7 +2383,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		unwrappedBytes, err := unwrapGeminiResponse([]byte(payload))
 		if err != nil {
 			if staged.committed {
-				return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
+				return resultSnapshot(true), fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
 		}
@@ -2356,13 +2397,14 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		geminiResp, err := decodeGeminiCompatResponse(unwrappedBytes)
 		if err != nil {
 			if staged.committed {
-				return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid Gemini provider JSON: %w", err)
+				return resultSnapshot(true), fmt.Errorf("invalid Gemini provider JSON: %w", err)
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
 		}
 		if fr := extractGeminiFinishReason(geminiResp); fr != "" {
 			finishReason = fr
 			commitTerminal = true
+			terminalObserved = true
 		}
 
 		parts := extractGeminiParts(geminiResp)
@@ -2514,14 +2556,14 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
-			result := &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
+			result := resultSnapshot(false)
 			if staged.committed || semanticOutput {
 				return result, fmt.Errorf("gemini stream data interval timeout")
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini stream timed out before semantic output")
 		}
 		if staged.committed {
-			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("stream read error: %w", scanErr)
+			return resultSnapshot(true), fmt.Errorf("stream read error: %w", scanErr)
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini stream read failed before semantic output: "+sanitizeStreamError(scanErr))
 	}
@@ -2532,12 +2574,12 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	if wireWriter.err != nil {
 		var clientWriteErr *stagedConvertedClientWriteError
 		if errors.As(wireWriter.err, &clientWriteErr) {
-			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+			return resultSnapshot(false), nil
 		}
 		if !staged.committed {
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini pre-output stage exceeded limit")
 		}
-		return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: true}, wireWriter.err
+		return resultSnapshot(true), wireWriter.err
 	}
 	commitTerminal = true
 	writeStart()
@@ -2579,7 +2621,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	})
 	flusher.Flush()
 
-	return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+	return resultSnapshot(false), nil
 }
 
 func writeSSE(w io.Writer, event string, data any) {
@@ -2643,11 +2685,12 @@ func unwrapIfNeeded(isOAuth bool, raw []byte) []byte {
 	return inner
 }
 
-func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (map[string]any, *ClaudeUsage, error) {
+func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (map[string]any, *ClaudeUsage, bool, error) {
 	var last map[string]any
 	var lastWithParts map[string]any
 	var collectedTextParts []string // Collect all text parts for aggregation
 	usage := &ClaudeUsage{}
+	terminalObserved := false
 	lineReader := newProviderLineReader(resp, cfg, func(r io.Reader) *bufio.Scanner {
 		return newBufferedProviderSSEScanner(r, cfg)
 	})
@@ -2674,7 +2717,7 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 					if isOAuth {
 						innerBytes, err := unwrapGeminiResponse([]byte(payload))
 						if err != nil {
-							return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
+							return nil, nil, false, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
 						}
 						rawBytes = innerBytes
 					} else {
@@ -2682,9 +2725,12 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 					}
 					parsed, err := decodeGeminiCompatResponse(rawBytes)
 					if err != nil {
-						return nil, nil, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
+						return nil, nil, false, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
 					}
 					if parsed != nil {
+						if strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" {
+							terminalObserved = true
+						}
 						last = parsed
 						if u := extractGeminiUsage(rawBytes); u != nil {
 							usage = u
@@ -2706,12 +2752,12 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
-			return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream data interval timeout")
+			return nil, nil, false, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream data interval timeout")
 		}
-		return nil, nil, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed: "+sanitizeStreamError(scanErr))
+		return nil, nil, false, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed: "+sanitizeStreamError(scanErr))
 	}
 
-	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, nil
+	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, terminalObserved, nil
 }
 
 func pickGeminiCollectResult(last map[string]any, lastWithParts map[string]any) map[string]any {
@@ -2804,6 +2850,7 @@ func mergeCollectedTextParts(response map[string]any, textParts []string) map[st
 type geminiNativeStreamResult struct {
 	usage            *ClaudeUsage
 	firstTokenMs     *int
+	clientDisconnect bool
 	semanticOutput   bool
 	terminalObserved bool
 }
@@ -2948,6 +2995,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	var firstTokenMs *int
 	semanticOutput := false
 	commitTerminal := false
+	terminalObserved := false
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
 	writeHeaders := func() {
@@ -2961,6 +3009,20 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 		c.Status(resp.StatusCode)
 	}
 	wireWriter := &stagedSemanticWriter{stage: &staged, c: c, writeHeaders: writeHeaders, semantic: &semanticOutput, terminal: &commitTerminal}
+	resultSnapshot := func(forceSemanticOutput bool) *geminiNativeStreamResult {
+		clientDisconnect := false
+		var clientWriteErr *stagedConvertedClientWriteError
+		if wireWriter.err != nil && errors.As(wireWriter.err, &clientWriteErr) {
+			clientDisconnect = true
+		}
+		return &geminiNativeStreamResult{
+			usage:            usage,
+			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnect,
+			semanticOutput:   semanticOutput || forceSemanticOutput,
+			terminalObserved: terminalObserved,
+		}
+	}
 	emit := func(output string) {
 		_, _ = io.WriteString(wireWriter, output)
 		if staged.committed {
@@ -2994,6 +3056,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 				if payload == "" || payload == "[DONE]" {
 					if payload == "[DONE]" {
 						commitTerminal = true
+						terminalObserved = true
 					}
 					if isOAuth {
 						emit(line + "\n\n")
@@ -3009,7 +3072,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 						innerBytes, err := unwrapGeminiResponse([]byte(payload))
 						if err != nil {
 							if staged.committed {
-								return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
+								return resultSnapshot(true), fmt.Errorf("invalid wrapped Gemini provider payload: %w", err)
 							}
 							return nil, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
 						}
@@ -3026,6 +3089,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					}
 					if fr := gjson.GetBytes(rawBytes, "candidates.0.finishReason").String(); strings.TrimSpace(fr) != "" {
 						commitTerminal = true
+						terminalObserved = true
 					}
 					observer.ObserveGemini(rawBytes)
 					observeGeminiImageOutputs(c, rawBytes)
@@ -3055,14 +3119,14 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
-			result := &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput}
+			result := resultSnapshot(false)
 			if staged.committed || semanticOutput {
 				return result, fmt.Errorf("gemini native stream data interval timeout")
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream timed out before semantic output")
 		}
 		if staged.committed {
-			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, scanErr
+			return resultSnapshot(true), scanErr
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, "gemini native stream read failed before semantic output: "+sanitizeStreamError(scanErr))
 	}
@@ -3072,19 +3136,19 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	if wireWriter.err != nil {
 		var clientWriteErr *stagedConvertedClientWriteError
 		if errors.As(wireWriter.err, &clientWriteErr) {
-			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+			return resultSnapshot(false), nil
 		}
 		if !staged.committed {
 			return nil, newIncompleteProviderStreamFailover(resp, "gemini native pre-output stage exceeded limit")
 		}
-		return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: true}, wireWriter.err
+		return resultSnapshot(true), wireWriter.err
 	}
 	if !staged.committed {
 		if err := staged.write(c, writeHeaders, "", true); err != nil {
 			return nil, err
 		}
 	}
-	return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs, semanticOutput: semanticOutput, terminalObserved: true}, nil
+	return resultSnapshot(false), nil
 }
 
 // ForwardAIStudioGET forwards a GET request to AI Studio (generativelanguage.googleapis.com) for

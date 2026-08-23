@@ -130,6 +130,7 @@ func TestGeminiForwardAsChatCompletions_OAuthRoutesToGeminiAndReturnsChatFormat(
 	require.Equal(t, "gemini-2.5-flash", result.Model)
 	require.Equal(t, 7, result.Usage.InputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.True(t, result.CaptureResponseComplete, "Gemini finishReason proves the forced stream-to-buffer response complete")
 
 	require.NotNil(t, httpStub.lastReq)
 	require.Contains(t, httpStub.lastReq.URL.String(), "/v1internal:streamGenerateContent?alt=sse")
@@ -163,6 +164,74 @@ func TestGeminiForwardAsChatCompletions_OAuthRoutesToGeminiAndReturnsChatFormat(
 	require.Equal(t, float64(7), usage["prompt_tokens"])
 	require.Equal(t, float64(3), usage["completion_tokens"])
 	require.Equal(t, float64(10), usage["total_tokens"])
+}
+
+func TestGeminiOAuthStreamToBufferCompletionRequiresFinishReason(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		body []byte
+		run  func(*GeminiMessagesCompatService, *gin.Context, *Account, []byte) (*ForwardResult, error)
+	}{
+		{
+			name: "chat completions",
+			path: "/v1/chat/completions",
+			body: []byte(`{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}],"stream":false}`),
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return svc.ForwardAsChatCompletions(context.Background(), c, account, body)
+			},
+		},
+		{
+			name: "messages",
+			path: "/v1/messages",
+			body: []byte(`{"model":"gemini-2.5-flash","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"stream":false}`),
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return svc.Forward(context.Background(), c, account, body)
+			},
+		},
+		{
+			name: "native",
+			path: "/v1beta/models/gemini-2.5-flash:generateContent",
+			body: []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`),
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+				return svc.ForwardNative(context.Background(), c, account, "gemini-2.5-flash", "generateContent", false, body)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, terminal := range []bool{false, true} {
+				name := "clean EOF"
+				candidate := `{"content":{"parts":[{"text":"ok"}]}}`
+				if terminal {
+					name = "finishReason"
+					candidate = `{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}`
+				}
+				t.Run(name, func(t *testing.T) {
+					gin.SetMode(gin.TestMode)
+					providerBody := `data: {"response":{"candidates":[` + candidate + `],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2}}}` + "\n\n"
+					upstream := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": {"text/event-stream"}},
+						Body:       io.NopCloser(strings.NewReader(providerBody)),
+					}}
+					svc := &GeminiMessagesCompatService{tokenProvider: &GeminiTokenProvider{}, httpUpstream: upstream, cfg: &config.Config{}}
+					account := &Account{ID: 190, Platform: PlatformGemini, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{
+						"access_token": "ya29.test-token", "project_id": "project-1",
+					}}
+					rec := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(rec)
+					c.Request = httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(tc.body))
+
+					result, err := tc.run(svc, c, account, tc.body)
+
+					require.NoError(t, err)
+					require.NotNil(t, result)
+					require.False(t, result.Stream)
+					require.Equal(t, terminal, result.CaptureResponseComplete)
+				})
+			}
+		})
+	}
 }
 
 func TestGeminiForwardAsChatCompletions_StreamsOpenAIChunksFromGeminiSSE(t *testing.T) {
@@ -1390,7 +1459,12 @@ func (w *geminiPartialClientWriteErrorWriter) Write(p []byte) (int, error) {
 func TestGeminiStreamingClientDisconnectReturnsCollectedProviderResult(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	providerBody := "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n"
+	providerBody := strings.Join([]string{
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}`,
+		"",
+		`data: {"candidates":[{"index":0,"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":5}}`,
+		"",
+	}, "\n")
 	for _, tc := range []struct {
 		name string
 		run  func(*GeminiMessagesCompatService, *gin.Context, *http.Response) (any, error)
@@ -1422,6 +1496,72 @@ func TestGeminiStreamingClientDisconnectReturnsCollectedProviderResult(t *testin
 			result, err := tc.run(&GeminiMessagesCompatService{}, c, resp)
 			require.NotNil(t, result)
 			require.NoError(t, err)
+			switch typed := result.(type) {
+			case *geminiStreamResult:
+				require.True(t, typed.clientDisconnect)
+				require.True(t, typed.terminalObserved)
+			case *geminiNativeStreamResult:
+				require.True(t, typed.clientDisconnect)
+				require.True(t, typed.terminalObserved)
+			default:
+				t.Fatalf("unexpected streaming result type %T", result)
+			}
+		})
+	}
+}
+
+func TestGeminiClientDisconnectReadErrorSnapshotsTerminalState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	providerBody := []byte(`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":5}}` + "\n\n")
+	forcedErr := errors.New("forced post-disconnect Gemini read failure")
+	for _, tc := range []struct {
+		name string
+		run  func(*GeminiMessagesCompatService, *gin.Context, *http.Response) (any, error)
+	}{
+		{
+			name: "messages compatibility",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleStreamingResponse(c, resp, time.Now(), "claude-3-5-sonnet")
+			},
+		},
+		{
+			name: "native oauth",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleNativeStreamingResponse(c, resp, time.Now(), true)
+			},
+		},
+		{
+			name: "chat completions compatibility",
+			run: func(svc *GeminiMessagesCompatService, c *gin.Context, resp *http.Response) (any, error) {
+				return svc.handleChatCompletionsStreamingResponseFromGemini(context.Background(), c, resp, time.Now(), "gemini-2.5-pro", true, false)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &geminiPartialThenErrorBody{data: providerBody, err: forcedErr},
+			}
+
+			result, err := tc.run(&GeminiMessagesCompatService{}, c, resp)
+
+			require.ErrorIs(t, err, forcedErr)
+			require.NotNil(t, result)
+			switch typed := result.(type) {
+			case *geminiStreamResult:
+				require.True(t, typed.clientDisconnect)
+				require.True(t, typed.terminalObserved)
+			case *geminiNativeStreamResult:
+				require.True(t, typed.clientDisconnect)
+				require.True(t, typed.terminalObserved)
+			default:
+				t.Fatalf("unexpected streaming result type %T", result)
+			}
 		})
 	}
 }
@@ -1439,6 +1579,7 @@ func TestGeminiMessagesStreamingResponseHonorsProviderIdleTimeout(t *testing.T) 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
 	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
 
 	type outcome struct {
@@ -1455,6 +1596,8 @@ func TestGeminiMessagesStreamingResponseHonorsProviderIdleTimeout(t *testing.T) 
 	case got := <-done:
 		require.NotNil(t, got.result)
 		require.ErrorContains(t, got.err, "stream data interval timeout")
+		require.True(t, got.result.clientDisconnect)
+		require.False(t, got.result.terminalObserved)
 	case <-time.After(2 * time.Second):
 		_ = body.Close()
 		<-done
@@ -1476,6 +1619,7 @@ func TestGeminiNativeStreamingResponseHonorsProviderIdleTimeout(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini:streamGenerateContent", nil)
+	c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
 	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
 
 	type outcome struct {
@@ -1492,6 +1636,8 @@ func TestGeminiNativeStreamingResponseHonorsProviderIdleTimeout(t *testing.T) {
 	case got := <-done:
 		require.NotNil(t, got.result)
 		require.ErrorContains(t, got.err, "stream data interval timeout")
+		require.True(t, got.result.clientDisconnect)
+		require.False(t, got.result.terminalObserved)
 	case <-time.After(2 * time.Second):
 		_ = body.Close()
 		<-done
@@ -1539,6 +1685,7 @@ func TestGeminiChatCompatibilityStreamingResponseHonorsProviderIdleTimeout(t *te
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Writer = &geminiPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
 	svc := &GeminiMessagesCompatService{cfg: &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}}}
 
 	type outcome struct {
@@ -1557,6 +1704,8 @@ func TestGeminiChatCompatibilityStreamingResponseHonorsProviderIdleTimeout(t *te
 	case got := <-done:
 		require.NotNil(t, got.result)
 		require.ErrorContains(t, got.err, "stream data interval timeout")
+		require.True(t, got.result.clientDisconnect)
+		require.False(t, got.result.terminalObserved)
 	case <-time.After(2 * time.Second):
 		_ = body.Close()
 		<-done
@@ -1576,7 +1725,7 @@ func TestCollectGeminiSSEHonorsProviderIdleTimeout(t *testing.T) {
 	}
 	started := time.Now()
 
-	result, usage, err := collectGeminiSSE(
+	result, usage, _, err := collectGeminiSSE(
 		resp, true, &config.Config{Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1}},
 	)
 	require.Nil(t, result)
@@ -1602,7 +1751,7 @@ func TestCollectGeminiSSEDrainsCapturePastSmallerFunctionalLimit(t *testing.T) {
 		UpstreamResponseReadMaxBytes: 1024,
 	}}
 
-	result, usage, err := collectGeminiSSE(resp, false, cfg)
+	result, usage, _, err := collectGeminiSSE(resp, false, cfg)
 
 	require.Nil(t, result)
 	require.Nil(t, usage)

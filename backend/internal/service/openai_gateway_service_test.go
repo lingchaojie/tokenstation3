@@ -2285,12 +2285,44 @@ func TestOpenAIStreamingClientDisconnectDrainsUpstreamUsage(t *testing.T) {
 	if result == nil || result.usage == nil {
 		t.Fatalf("expected usage result")
 	}
+	require.True(t, result.clientDisconnect)
+	require.True(t, result.terminalObserved)
 	if result.usage.InputTokens != 3 || result.usage.OutputTokens != 5 || result.usage.CacheReadInputTokens != 1 {
 		t.Fatalf("unexpected usage: %+v", *result.usage)
 	}
 	if strings.Contains(rec.Body.String(), "event: error") || strings.Contains(rec.Body.String(), "write_failed") {
 		t.Fatalf("expected no injected SSE error event, got %q", rec.Body.String())
 	}
+}
+
+func TestOpenAIStreamingClientDisconnectWithoutResponseCompletedIsIncomplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	c.Writer = &failingGinWriter{ResponseWriter: c.Writer, failAfter: 0}
+	providerBody := strings.Join([]string{
+		`data: {"type":"response.in_progress","response":{}}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: &openAIStreamReadThenErrorCloser{
+			reader: strings.NewReader(providerBody),
+			err:    context.Canceled,
+		},
+		Header: http.Header{},
+	}
+
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.False(t, result.terminalObserved)
 }
 
 func TestOpenAIStreamingMissingTerminalEventIsForwarded(t *testing.T) {
@@ -2324,6 +2356,7 @@ func TestOpenAIStreamingMissingTerminalEventIsForwarded(t *testing.T) {
 	_ = pr.Close()
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.False(t, result.terminalObserved)
 	require.Contains(t, rec.Body.String(), "response.output_item.added")
 }
 
@@ -2632,6 +2665,7 @@ func TestOpenAIStreamingPassthroughResponseIncompleteBeforeOutputFailsOver(t *te
 	_ = pr.Close()
 	require.Error(t, err)
 	require.NotNil(t, result)
+	require.False(t, result.terminalObserved)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.True(t, failoverErr.HasUpstreamHTTPResponse)

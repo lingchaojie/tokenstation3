@@ -170,7 +170,6 @@ func (a *recordReconstructingTestAttempt) recordLocked() *CaptureRecord {
 		ResponseHeaders:     snapshotBytes(a.responseHeaders.buf),
 		Truncated:           !a.final.ResponseComplete || a.request.truncated || a.response.truncated || a.requestHeaders.truncated || a.responseHeaders.truncated,
 		ContentPolicy:       &content,
-		StopReason:          a.final.StopReason,
 		InputTokens:         int(a.final.InputTokens),
 		OutputTokens:        int(a.final.OutputTokens),
 		CacheReadTokens:     int(a.final.CacheReadTokens),
@@ -186,9 +185,6 @@ func (a *recordReconstructingTestAttempt) recordLocked() *CaptureRecord {
 		record.RequestID = CaptureRequestID("")
 	}
 	extractCaptureColumns(record)
-	if a.final.StopReason != "" {
-		record.StopReason = a.final.StopReason
-	}
 	ApplyCaptureContentPolicy(record, content)
 	return record
 }

@@ -385,6 +385,7 @@ func TestOpenAIResponseFlush_FailedAndErrorEventsFlushAtBoundaries(t *testing.T)
 
 		require.Error(t, err)
 		require.NotNil(t, result)
+		require.False(t, result.terminalObserved)
 		require.Equal(t, 3, result.usage.InputTokens)
 		gotBody, flushes := recorder.snapshot()
 		expectedBody := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n" +
@@ -469,6 +470,8 @@ func TestOpenAIResponseFlush_ClientDisconnectStillDrainsUsage(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.True(t, result.terminalObserved)
 	require.Equal(t, 7, result.usage.InputTokens)
 	require.Equal(t, 5, result.usage.OutputTokens)
 	require.Equal(t, 2, result.usage.CacheReadInputTokens)

@@ -384,7 +384,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			}
 		}
 		result.UpstreamFailed = captureOnlyFailure
-		result.CaptureTerminalError = true
+		if !isStagedConvertedClientWriteError(handleErr) {
+			result.CaptureTerminalError = true
+		}
 		s.applyOpenAIHTTPSuccessCapture(c, account, result)
 	}
 
@@ -612,6 +614,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
 		Stream:                        false,
 		Duration:                      time.Since(startTime),
+		CaptureResponseComplete:       true,
 		ImageCount:                    len(imageResults),
 		ImageOutputSizes:              openAIResponsesImageResultSizes(imageResults),
 		imageResults:                  imageResults,
@@ -654,6 +657,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	defer func() { _ = staged.close() }()
 	var stagedWriteErr error
 	providerTerminalObserved := false
+	captureResponseComplete := false
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
@@ -695,6 +699,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			ImageOutputSizes:              openAIResponsesImageResultSizes(imageResults),
 			imageResults:                  append([]openAIResponsesImageResult(nil), imageResults...),
 			ClientDisconnect:              clientDisconnected,
+			CaptureResponseComplete:       captureResponseComplete,
 		}
 		return out
 	}
@@ -862,6 +867,15 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 
 	finalizeStream := func() (*OpenAIForwardResult, error) {
+		if streamFailoverErr != nil {
+			if c == nil || c.Writer == nil || !c.Writer.Written() {
+				return nil, streamFailoverErr
+			}
+			return resultWithUsage(), streamFailoverErr
+		}
+		if streamNonFailoverErr != nil {
+			return resultWithUsage(), streamNonFailoverErr
+		}
 		if stagedWriteErr != nil {
 			var deliveryErr *stagedConvertedClientWriteError
 			if errors.As(stagedWriteErr, &deliveryErr) && providerTerminalObserved {
@@ -871,15 +885,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "OpenAI chat_completions first-output staging failed: "+sanitizeStreamError(stagedWriteErr), resp)
 			}
 			return resultWithUsage(), stagedWriteErr
-		}
-		if streamFailoverErr != nil {
-			if c == nil || c.Writer == nil || !c.Writer.Written() {
-				return nil, streamFailoverErr
-			}
-			return resultWithUsage(), streamFailoverErr
-		}
-		if streamNonFailoverErr != nil {
-			return resultWithUsage(), streamNonFailoverErr
 		}
 		if finalChunks := apicompat.FinalizeResponsesChatStream(state); len(finalChunks) > 0 && !clientDisconnected {
 			for _, chunk := range finalChunks {
@@ -939,6 +944,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 		if strings.TrimSpace(payload) == "[DONE]" {
+			captureResponseComplete = true
 			return false
 		}
 		return processDataLine(payload)
@@ -969,7 +975,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					}
 					return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 				}
-				if !ok || strings.TrimSpace(frame.Data) == "[DONE]" {
+				if !ok {
+					continue
+				}
+				if strings.TrimSpace(frame.Data) == "[DONE]" {
+					captureResponseComplete = true
 					continue
 				}
 				if processFrame(frame) {
@@ -991,7 +1001,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 			} else if complete {
 				hadPendingProviderData = false
-				if strings.TrimSpace(frame.Data) != "[DONE]" && processFrame(frame) {
+				if strings.TrimSpace(frame.Data) == "[DONE]" {
+					captureResponseComplete = true
+				} else if processFrame(frame) {
 					return finalizeStream()
 				}
 			}
@@ -1017,6 +1029,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				continue
 			}
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
+				captureResponseComplete = true
 				if providerTerminalObserved {
 					if openAICompatHasKnownFiniteBody(resp) {
 						continue
@@ -1026,10 +1039,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return missingTerminalErr()
 			}
 			if processFrame(frame) {
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil && openAICompatHasKnownFiniteBody(resp) {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) && openAICompatHasKnownFiniteBody(resp) {
 					continue
 				}
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) {
 					return finishOpenTerminal()
 				}
 				return finalizeStream()
@@ -1053,6 +1066,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 		} else if ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
+				captureResponseComplete = true
 				return missingTerminalErr()
 			}
 			if processFrame(frame) {
@@ -1146,6 +1160,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					return resultWithUsage(), newOpenAIUpstreamStreamReadError(err)
 				} else if ok {
 					if strings.TrimSpace(frame.Data) == "[DONE]" {
+						captureResponseComplete = true
 						hadPendingProviderData = false
 						if !providerTerminalObserved {
 							return missingTerminalErr()
@@ -1198,6 +1213,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				continue
 			}
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
+				captureResponseComplete = true
 				if providerTerminalObserved {
 					if openAICompatHasKnownFiniteBody(resp) {
 						continue
@@ -1208,10 +1224,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return missingTerminalErr()
 			}
 			if processFrame(frame) {
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil && openAICompatHasKnownFiniteBody(resp) {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) && openAICompatHasKnownFiniteBody(resp) {
 					continue
 				}
-				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && stagedWriteErr == nil {
+				if providerTerminalObserved && streamFailoverErr == nil && streamNonFailoverErr == nil && (stagedWriteErr == nil || clientDisconnected) {
 					armTerminalTail()
 					continue
 				}
@@ -1256,11 +1272,13 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			// Keep pre-semantic comments inside the attempt stage.
 			if err := staged.write(c, writeStreamHeaders, ":\n\n", staged.committed); err != nil {
 				stagedWriteErr = err
-				var deliveryErr *stagedConvertedClientWriteError
-				clientDisconnected = errors.As(err, &deliveryErr) || staged.committed
+				clientDisconnected = isStagedConvertedClientWriteError(err) || staged.committed
 				logger.L().Info("openai chat_completions stream: keepalive delivery or staging failed",
 					zap.String("request_id", requestID),
 				)
+				if isStagedConvertedClientWriteError(err) {
+					continue
+				}
 				return finalizeStream()
 			}
 			c.Writer.Flush()

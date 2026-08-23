@@ -296,6 +296,24 @@ func TestHandleResponsesStreamingResponse_KiroMarkedFinalUsageClearsProvisionalT
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_final_usage")
 }
 
+func TestAnthropicToResponsesCompatibilityClientDisconnectCompleteAfterProviderTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	failed := make(chan struct{})
+	c.Writer = &signalFailWriteResponseWriter{ResponseWriter: c.Writer, failed: failed}
+	resp, providerDone := anthropicCompatTerminalAfterClientWriteFailure(failed)
+
+	result, err := (&GatewayService{}).handleResponsesStreamingResponse(
+		resp, c, "gpt-5", "claude-sonnet-4.5", nil, time.Now(), true, apicompat.ResponsesClientToolMapping{},
+	)
+	<-providerDone
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.True(t, result.CaptureResponseComplete)
+}
+
 func TestAnthropicToResponsesCompatibilityRejectsIncompleteProviderTailAfterTerminal(t *testing.T) {
 	complete := strings.Join([]string{
 		`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_tail","type":"message","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":2}}}`,
@@ -340,7 +358,11 @@ func TestAnthropicToResponsesCompatibilityHonorsProviderIdleTimeout(t *testing.T
 		t.Run(name, func(t *testing.T) {
 			body := newRawChatBlockingAfterPrefixReadCloser(incompleteAnthropicCompatStreamPrefix())
 			resp := &http.Response{Body: body}
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			if streamed {
+				c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
+			}
 			svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
 				MaxLineSize:               defaultMaxLineSize,
 				StreamDataIntervalTimeout: 1,
@@ -365,6 +387,8 @@ func TestAnthropicToResponsesCompatibilityHonorsProviderIdleTimeout(t *testing.T
 				if streamed {
 					require.ErrorContains(t, got.err, "stream data interval timeout")
 					require.NotNil(t, got.result)
+					require.True(t, got.result.ClientDisconnect)
+					require.False(t, got.result.CaptureResponseComplete)
 					require.True(t, got.result.CaptureTerminalError)
 				} else {
 					require.Nil(t, got.result)

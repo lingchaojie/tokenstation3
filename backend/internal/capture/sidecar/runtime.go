@@ -360,8 +360,18 @@ func (r *Runtime) uploadLoop(ctx context.Context, store SpoolStore, uploaderClie
 				batch = nil
 				continue
 			}
-			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if ctx.Err() != nil {
 				return nil
+			}
+			if errors.Is(err, upload.ErrRetryable) {
+				retryAttempt++
+				if statusErr := r.status.recordRetry(); statusErr != nil {
+					return errors.New("capture sidecar status checkpoint failed")
+				}
+				if err := waitTimer(ctx, r.deps.Clock, retryDelay(retryAttempt, r.deps.Random())); err != nil {
+					return nil
+				}
+				continue
 			}
 			var corruptRecord *upload.CorruptRecordError
 			if errors.As(err, &corruptRecord) {
@@ -390,20 +400,10 @@ func (r *Runtime) uploadLoop(ctx context.Context, store SpoolStore, uploaderClie
 				batch = nil
 				continue
 			}
-			if !errors.Is(err, upload.ErrRetryable) {
-				if statusErr := r.status.recordDelivery(false, false); statusErr != nil {
-					return errors.New("capture sidecar status checkpoint failed")
-				}
-				return errors.New("capture sidecar upload rejected")
-			}
-			retryAttempt++
-			if statusErr := r.status.recordRetry(); statusErr != nil {
+			if statusErr := r.status.recordDelivery(false, false); statusErr != nil {
 				return errors.New("capture sidecar status checkpoint failed")
 			}
-			if err := waitTimer(ctx, r.deps.Clock, retryDelay(retryAttempt, r.deps.Random())); err != nil {
-				return nil
-			}
-			continue
+			return errors.New("capture sidecar upload rejected")
 		}
 
 		now := r.deps.Clock.Now()
@@ -418,7 +418,7 @@ func (r *Runtime) uploadLoop(ctx context.Context, store SpoolStore, uploaderClie
 				continue
 			}
 			probeErr := uploaderClient.Probe(ctx)
-			if ctx.Err() != nil || errors.Is(probeErr, context.Canceled) || errors.Is(probeErr, context.DeadlineExceeded) {
+			if ctx.Err() != nil {
 				return nil
 			}
 			if probeErr == nil {

@@ -204,6 +204,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Stream)
+	require.True(t, result.CaptureResponseComplete)
 
 	require.Equal(t, "claude-3-haiku-20240307", gjson.GetBytes(upstream.lastBody, "model").String(), "透传模式应应用账号级模型映射")
 
@@ -1168,16 +1169,10 @@ func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *tes
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	// Use a canceled context recorder to simulate client disconnect behavior.
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	ctx, cancel := context.WithCancel(req.Context())
-	cancel()
-	req = req.WithContext(ctx)
-
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	c.Request = req
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failWriteResponseWriter{ResponseWriter: c.Writer}
 
 	svc := &GatewayService{
 		cfg: &config.Config{
@@ -1194,9 +1189,13 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAf
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
 			`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":11}}}`,
 			"",
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			"",
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+			"",
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
 			"",
-			"data: [DONE]",
+			`data: {"type":"message_stop"}`,
 			"",
 		}, "\n") + "\n")),
 	}
@@ -1204,6 +1203,8 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAf
 	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-3-7-sonnet-20250219")
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.clientDisconnect)
+	require.True(t, result.responseComplete)
 	require.NotNil(t, result.usage)
 	require.Equal(t, 11, result.usage.InputTokens)
 	require.Equal(t, 5, result.usage.OutputTokens)
@@ -1281,6 +1282,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuc
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 5, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+	require.True(t, result.CaptureResponseComplete)
 	require.Equal(t, upstreamJSON, rec.Body.String())
 }
 
@@ -1498,13 +1500,16 @@ func TestAnthropicAPIKeyPassthroughCapturePreservesRawStreamFraming(t *testing.T
 		"claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest", true, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.CaptureResponseComplete, "successful passthrough full-body read must prove completion")
 	require.Nil(t, result.CaptureResponse)
 	attempts := transport.Attempts()
 	require.Len(t, attempts, 1)
 	require.Equal(t, body, attempts[0].RequestBytes())
 	require.Equal(t, raw, attempts[0].ResponseBytes())
-	require.Empty(t, attempts[0].TerminalStates())
-	AbortCaptureAttempt(c)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempts[0].Finals(), 1)
+	require.True(t, attempts[0].Finals()[0].ResponseComplete)
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[0].TerminalStates())
 }
 
 func TestAnthropicAPIKeyPassthroughCapturePreservesRawNonStreamResponse(t *testing.T) {
@@ -1983,12 +1988,10 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingTimeoutAfterClientDi
 			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
 			"",
 		}, "\n") + "\n"))
-		// 保持上游连接静默，触发数据间隔超时分支。
-		time.Sleep(1500 * time.Millisecond)
-		_ = pw.Close()
 	}()
 
 	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 7}, time.Now(), "claude-3-7-sonnet-20250219")
+	_ = pw.Close()
 	_ = pr.Close()
 	<-done
 
@@ -1996,6 +1999,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingTimeoutAfterClientDi
 	require.Contains(t, err.Error(), "stream usage incomplete after timeout")
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.False(t, result.responseComplete)
 	require.Equal(t, 9, result.usage.InputTokens)
 }
 
@@ -2065,6 +2069,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingUpstreamReadErrorAft
 	require.Contains(t, err.Error(), "stream usage incomplete after disconnect")
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.False(t, result.responseComplete)
 	require.Equal(t, 8, result.usage.InputTokens)
 }
 

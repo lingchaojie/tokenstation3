@@ -73,6 +73,7 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 	result, err := svc.Forward(context.Background(), c, account, parsed)
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.CaptureResponseComplete, "successful Bedrock full-body read must prove completion")
 	require.NotEmpty(t, upstream.lastBody)
 	require.Nil(t, result.UpstreamRequest)
 	require.Nil(t, result.CaptureRequest)
@@ -95,8 +96,10 @@ func TestGatewayService_BedrockCapturesFinalProviderRequestAndResponse(t *testin
 	require.NotContains(t, strings.ToLower(string(attempt.RequestHeaderBytes())), "x-amz-security-token")
 	require.Contains(t, string(attempt.ResponseHeaderBytes()), "X-Amzn-Requestid")
 	require.NotContains(t, string(attempt.ResponseHeaderBytes()), "X-Request-Id", "capture must not synthesize provider response headers")
-	require.Empty(t, attempt.TerminalStates(), "the handler-side usage sink owns commit")
-	AbortCaptureAttempt(c)
+	require.True(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	require.Len(t, attempt.Finals(), 1)
+	require.True(t, attempt.Finals()[0].ResponseComplete)
+	require.Equal(t, []captureTerminalState{captureCommitted}, attempt.TerminalStates())
 }
 
 type bedrockCloseReleasedReader struct {
@@ -207,6 +210,134 @@ func TestGatewayService_BedrockTerminalErrorArchivesFinalProviderRequest(t *test
 	require.NotContains(t, string(record.RequestHeaders), "bedrock-provider-secret")
 	require.Contains(t, string(record.ResponseHeaders), "X-Amzn-Requestid")
 	require.NotContains(t, string(record.ResponseHeaders), "X-Request-Id")
+}
+
+func TestGatewayService_BedrockClientDisconnectDoesNotHideProviderReadError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &bedrockPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
+
+	inbound := []byte(`{"model":"anthropic.claude-3-5-sonnet-20240620-v1:0","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(inbound), PlatformAnthropic)
+	require.NoError(t, err)
+
+	var frames bytes.Buffer
+	for _, event := range []string{
+		`{"type":"message_start","message":{"id":"msg_bedrock_read_error","type":"message","role":"assistant","model":"bedrock","content":[],"usage":{"input_tokens":3,"output_tokens":0}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+	} {
+		_, _ = frames.Write(buildBedrockServiceChunkFrame(t, event))
+	}
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     {"application/vnd.amazon.eventstream"},
+			"X-Amzn-Requestid": {"bedrock-read-error-id"},
+		},
+		Body: &bedrockFramesThenError{frames: bytes.NewReader(frames.Bytes()), err: io.ErrUnexpectedEOF},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		deferredService:  &DeferredService{},
+	}
+	account := &Account{
+		ID: 814, Name: "bedrock-read-error", Platform: PlatformAnthropic,
+		Type: AccountTypeBedrock, Concurrency: 1,
+		Credentials: map[string]any{
+			"auth_mode": "apikey", "api_key": "bedrock-provider-secret", "aws_region": "us-east-1",
+		},
+		Status: StatusActive, Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.NotNil(t, result)
+	require.False(t, result.UpstreamFailed, "billable partial usage remains eligible for accounting")
+	require.True(t, result.CaptureTerminalError)
+	require.False(t, result.CaptureResponseComplete)
+}
+
+func TestGatewayService_BedrockProviderDeadlineAfterDisconnectAbortsTerminalDisabledCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &bedrockPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.ModelAllowlists.Anthropic = []string{}
+	policy.Outcomes.Success = false
+	policy.Outcomes.TerminalError = false
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	setCompiledCaptureScopeForTest(c, compiled, 9, nil)
+
+	inbound := []byte(`{"model":"anthropic.claude-3-5-sonnet-20240620-v1:0","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(inbound), PlatformAnthropic)
+	require.NoError(t, err)
+
+	var frames bytes.Buffer
+	for _, event := range []string{
+		`{"type":"message_start","message":{"id":"msg_bedrock_deadline","type":"message","role":"assistant","model":"bedrock","content":[],"usage":{"input_tokens":3,"output_tokens":0}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+	} {
+		_, _ = frames.Write(buildBedrockServiceChunkFrame(t, event))
+	}
+	providerFrames := append([]byte(nil), frames.Bytes()...)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/vnd.amazon.eventstream"}},
+		Body: &bedrockFramesThenError{
+			frames: bytes.NewReader(providerFrames),
+			err:    context.DeadlineExceeded,
+		},
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: defaultMaxLineSize,
+		Capture: config.GatewayCaptureConfig{
+			Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20,
+		},
+	}}
+	transport := &recordingCaptureTransport{}
+	svc := &GatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		deferredService:  &DeferredService{},
+		capturePool:      newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
+	account := &Account{
+		ID: 815, Name: "bedrock-deadline", Platform: PlatformAnthropic,
+		Type: AccountTypeBedrock, Concurrency: 1,
+		Credentials: map[string]any{
+			"auth_mode": "apikey", "api_key": "bedrock-provider-secret", "aws_region": "us-east-1",
+		},
+		Status: StatusActive, Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotNil(t, result)
+	require.Equal(t, 3, result.Usage.InputTokens)
+	require.True(t, result.ClientDisconnect)
+	require.True(t, result.CaptureTerminalError)
+	require.False(t, result.CaptureResponseComplete)
+	require.False(t, CommitForwardCaptureAttempt(c, PlatformAnthropic, result))
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, providerFrames, attempts[0].ResponseBytes())
+	require.Equal(t, []captureTerminalState{captureAborted}, attempts[0].TerminalStates())
+	require.Empty(t, attempts[0].Finals())
 }
 
 func TestBedrockBoundedFailoverPreservesIncompleteTypedResponse(t *testing.T) {

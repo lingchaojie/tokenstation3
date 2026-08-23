@@ -33,7 +33,7 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func TestExtractJSONMetadataAndAuthoritativeFinal(t *testing.T) {
+func TestExtractJSONMetadataKeepsProviderStopReasonAndAuthoritativeFinalUsage(t *testing.T) {
 	request := strings.NewReader(`{
 		"metadata":{"user_id":"{\"device_id\":\"device-1\",\"session_id\":\"session-1\"}"},
 		"output_config":{"effort":"HIGH"},
@@ -68,8 +68,68 @@ func TestExtractJSONMetadataAndAuthoritativeFinal(t *testing.T) {
 		OutputTokens:        80,
 		CacheReadTokens:     20,
 		CacheCreationTokens: 10,
-		StopReason:          "final-stop",
+		StopReason:          "payload-stop",
 	}, got)
+}
+
+func TestExtractJSONPreservesUnknownProviderStopReasonExactly(t *testing.T) {
+	got, err := FromReaders(context.Background(), Input{
+		Format:   model.PayloadJSON,
+		Response: strings.NewReader(`{"stop_reason":"future_provider_reason"}`),
+		Final:    model.Final{StopReason: "gateway_custom_value"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "future_provider_reason", got.StopReason)
+}
+
+func TestExtractJSONIgnoresInitialStopReasonWithoutProviderValue(t *testing.T) {
+	got, err := FromReaders(context.Background(), Input{
+		Format:   model.PayloadJSON,
+		Response: strings.NewReader(`{"provider":"opaque"}`),
+		Initial:  model.Extracted{StopReason: "gateway_custom_value"},
+	})
+	require.NoError(t, err)
+	require.Empty(t, got.StopReason)
+}
+
+func TestExtractJSONPreservesProviderStopReasonWhitespace(t *testing.T) {
+	got, err := FromReaders(context.Background(), Input{
+		Format:   model.PayloadJSON,
+		Response: strings.NewReader(`{"stop_reason":"  Future.Provider-Reason  "}`),
+		Final:    model.Final{StopReason: "gateway_custom_value"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "  Future.Provider-Reason  ", got.StopReason)
+}
+
+func TestExtractJSONPreservesHTTP200ProviderTerminalStopReasons(t *testing.T) {
+	for _, fixture := range []struct {
+		name       string
+		response   string
+		stopReason string
+	}{
+		{name: "anthropic refusal", response: `{"stop_reason":"refusal"}`, stopReason: "refusal"},
+		{name: "anthropic content filtered", response: `{"stop_reason":"content_filtered"}`, stopReason: "content_filtered"},
+		{name: "anthropic guardrail", response: `{"stop_reason":"guardrail_intervened"}`, stopReason: "guardrail_intervened"},
+		{name: "openai finish reason", response: `{"choices":[{"finish_reason":"content_filter"}]}`, stopReason: "content_filter"},
+		{name: "gemini finish reason", response: `{"candidates":[{"finishReason":"SAFETY"}]}`, stopReason: "SAFETY"},
+		{name: "aws stop reason", response: `{"stopReason":"guardrail_intervened"}`, stopReason: "guardrail_intervened"},
+		{name: "kiro message stop reason", response: `{"messageStopEvent":{"stopReason":"end_turn"}}`, stopReason: "end_turn"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			got, err := FromReaders(context.Background(), Input{
+				Format:   model.PayloadJSON,
+				Response: strings.NewReader(fixture.response),
+				Final: model.Final{
+					HTTPStatus:       200,
+					ResponseComplete: true,
+					StopReason:       "gateway_custom_value",
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, fixture.stopReason, got.StopReason)
+		})
+	}
 }
 
 func TestExtractJSONInvalidMetadataUserIDFallsBackToConversationID(t *testing.T) {

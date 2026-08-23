@@ -132,6 +132,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	var clientDisconnect bool
+	var captureResponseComplete bool
 
 	if claudeReq.Stream {
 		// 流式响应：透传
@@ -144,11 +145,16 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, originalModel, true, startTime, streamErr), streamErr
 			}
-			return streamErrorForwardResult(c, resp, originalModel, originalModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, streamErr), streamErr
+			result := streamErrorForwardResult(ctx, c, resp, originalModel, originalModel, startTime, streamRes.usage, streamRes.firstTokenMs, streamRes.clientDisconnect, streamRes.semanticOutput, streamErr)
+			if result != nil {
+				result.CaptureResponseComplete = streamRes.terminalObserved
+			}
+			return result, streamErr
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
 		clientDisconnect = streamRes.clientDisconnect
+		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		// 非流式响应：直接透传
 		var cfg *config.Config
@@ -167,6 +173,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		c.Header("Content-Type", resp.Header.Get("Content-Type"))
 		c.Status(http.StatusOK)
 		_, _ = c.Writer.Write(respBody)
+		captureResponseComplete = true
 	}
 
 	// 构建计费结果
@@ -183,6 +190,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		Duration:                      duration,
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 		Usage: ClaudeUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,
@@ -302,7 +310,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 		case ev, ok := <-events:
 			if !ok {
 				providerScanFinished = true
-				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 			}
 			if ev.err != nil {
 				if terminalObserved {
@@ -312,7 +320,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 					}
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity upstream stream read failed after an uncommitted terminal event")
 				}
-				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity upstream"); handled {
+				if disconnect, handled := handleStreamReadError(c.Request.Context(), ev.err, cw.Disconnected(), "antigravity upstream"); handled {
 					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
 				}
 				if !staged.committed && !cw.Disconnected() {

@@ -48,8 +48,9 @@ type Stream interface {
 }
 
 // Input is the reader-based fixture and compatibility surface. Initial seeds
-// trusted legacy columns: payload fields overwrite a seed only when they are
-// actually observed, including when the observed value is zero.
+// trusted legacy columns except StopReason, which is always cleared and must
+// come from an observed response payload. Other payload fields overwrite a seed
+// only when they are actually observed, including when the observed value is zero.
 type Input struct {
 	Format   model.PayloadFormat
 	Request  io.Reader
@@ -188,6 +189,7 @@ func (s *metadataStream) finalize(final model.Final, finalPresent bool) (model.E
 	request, requestErr := s.request.finishRequest()
 	response, responseErr := s.response.finish()
 	extracted := s.initial
+	extracted.StopReason = ""
 	mergeRequest(&extracted, request)
 	mergeResponse(&extracted, response)
 
@@ -196,9 +198,6 @@ func (s *metadataStream) finalize(final model.Final, finalPresent bool) (model.E
 		extracted.OutputTokens = final.OutputTokens
 		extracted.CacheReadTokens = final.CacheReadTokens
 		extracted.CacheCreationTokens = final.CacheCreationTokens
-		if final.StopReason != "" {
-			extracted.StopReason = final.StopReason
-		}
 	}
 	return extracted, firstSanitizedError(requestErr, responseErr, s.ctx.Err())
 }
@@ -1130,7 +1129,7 @@ func geminiPath(path []string) int {
 
 func (s *responseState) setStop(value string, rank int) {
 	if !s.stopPresent || rank >= s.stopRank {
-		s.value.StopReason, s.stopPresent, s.stopRank = strings.TrimSpace(value), true, rank
+		s.value.StopReason, s.stopPresent, s.stopRank = value, true, rank
 	}
 }
 

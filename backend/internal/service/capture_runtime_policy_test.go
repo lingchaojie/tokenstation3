@@ -125,6 +125,95 @@ func TestCompiledCapturePolicyMatchesOutcomeAndReturnsContentPolicy(t *testing.T
 	require.False(t, ok)
 }
 
+func TestCompiledCapturePolicyClientDisconnectIgnoresOutcomeTogglesOnly(t *testing.T) {
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Outcomes.Success = false
+	policy.Outcomes.TerminalError = false
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+
+	content, ok := compiled.DecideForModel(
+		PlatformAnthropic,
+		"claude-opus-5",
+		captureOutcomeClientDisconnect,
+		9,
+		nil,
+	)
+	require.True(t, ok)
+	require.Equal(t, policy.Content, content)
+
+	otherGroup := int64(8)
+	tests := []struct {
+		name      string
+		configure func(*CaptureRuntimePolicy)
+		platform  string
+		model     string
+		userID    int64
+		groupID   *int64
+	}{
+		{
+			name:     "platform filter",
+			platform: PlatformOpenAI,
+			model:    "claude-opus-5",
+			userID:   9,
+		},
+		{
+			name:     "model allowlist",
+			platform: PlatformAnthropic,
+			model:    "claude-haiku-4-5-20251001",
+			userID:   9,
+		},
+		{
+			name: "user filter",
+			configure: func(policy *CaptureRuntimePolicy) {
+				policy.UserIDs = []int64{10}
+			},
+			platform: PlatformAnthropic,
+			model:    "claude-opus-5",
+			userID:   9,
+		},
+		{
+			name: "group filter",
+			configure: func(policy *CaptureRuntimePolicy) {
+				policy.GroupIDs = []int64{7}
+			},
+			platform: PlatformAnthropic,
+			model:    "claude-opus-5",
+			userID:   9,
+			groupID:  &otherGroup,
+		},
+		{
+			name: "master policy",
+			configure: func(policy *CaptureRuntimePolicy) {
+				policy.Enabled = false
+			},
+			platform: PlatformAnthropic,
+			model:    "claude-opus-5",
+			userID:   9,
+		},
+		{
+			name:     "unknown platform",
+			platform: "unknown",
+			model:    "claude-opus-5",
+			userID:   9,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testPolicy := policy
+			if tt.configure != nil {
+				tt.configure(&testPolicy)
+			}
+			compiled, err := CompileCaptureRuntimePolicy(testPolicy)
+			require.NoError(t, err)
+
+			_, ok := compiled.DecideForModel(tt.platform, tt.model, captureOutcomeClientDisconnect, tt.userID, tt.groupID)
+			require.False(t, ok)
+		})
+	}
+}
+
 func TestCompiledCapturePolicyAppliesModelAllowlistsOnlyToConfiguredPlatforms(t *testing.T) {
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true

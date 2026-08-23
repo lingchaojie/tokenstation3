@@ -33,6 +33,8 @@ type captureAttemptRequestSlot struct {
 	attempt            *CaptureAttempt
 	owner              captureAttemptOwner
 	responseHTTPStatus int
+	stream             bool
+	streamKnown        bool
 }
 
 type captureAttemptOwner uint8
@@ -195,8 +197,12 @@ func CaptureDecisionFor(c *gin.Context, platform string, outcome CaptureOutcome)
 }
 
 // CaptureMayApplyFor is the allocation guard used before an upstream result is
-// known. It is true only when at least one configured terminal outcome matches.
+// known. It is true when a configured terminal outcome or possible client
+// disconnect matches.
 func CaptureMayApplyFor(c *gin.Context, platform string) bool {
+	if _, ok := CaptureDecisionFor(c, platform, captureOutcomeClientDisconnect); ok {
+		return true
+	}
 	if _, ok := CaptureDecisionFor(c, platform, CaptureOutcomeSuccess); ok {
 		return true
 	}
@@ -205,6 +211,9 @@ func CaptureMayApplyFor(c *gin.Context, platform string) bool {
 }
 
 func captureContentPolicyForAttempt(c *gin.Context, platform string) (CaptureContentPolicy, bool) {
+	if content, ok := CaptureDecisionFor(c, platform, captureOutcomeClientDisconnect); ok {
+		return content, true
+	}
 	if content, ok := CaptureDecisionFor(c, platform, CaptureOutcomeSuccess); ok {
 		return content, true
 	}
@@ -255,6 +264,8 @@ func transitionCaptureAttemptOwner(c *gin.Context, owner captureAttemptOwner) {
 	slot.attempt = nil
 	slot.owner = owner
 	slot.responseHTTPStatus = 0
+	slot.stream = false
+	slot.streamKnown = false
 	slot.mu.Unlock()
 	if previous != nil {
 		previous.Abort()
@@ -285,6 +296,11 @@ func captureAttemptForRequest(c *gin.Context) *CaptureAttempt {
 	return slot.attempt
 }
 
+func captureAttemptUsableForRequest(c *gin.Context) bool {
+	attempt := captureAttemptForRequest(c)
+	return attempt != nil && attempt.usable()
+}
+
 func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 	slot := captureAttemptSlotForRequest(c, next != nil)
 	if slot == nil {
@@ -295,6 +311,8 @@ func replaceCaptureAttemptForRequest(c *gin.Context, next *CaptureAttempt) {
 	slot.attempt = next
 	if previous != next {
 		slot.responseHTTPStatus = 0
+		slot.stream = false
+		slot.streamKnown = false
 	}
 	slot.mu.Unlock()
 	if previous != nil && previous != next {
@@ -312,6 +330,8 @@ func takeCaptureAttemptForRequest(c *gin.Context) *CaptureAttempt {
 	slot.attempt = nil
 	slot.owner = captureAttemptOwnerNone
 	slot.responseHTTPStatus = 0
+	slot.stream = false
+	slot.streamKnown = false
 	slot.mu.Unlock()
 	return attempt
 }
@@ -344,6 +364,35 @@ func captureAttemptResponseHTTPStatus(c *gin.Context) int {
 	return slot.responseHTTPStatus
 }
 
+func setCaptureAttemptStreamGeometry(c *gin.Context, attempt *CaptureAttempt, stream, known bool) {
+	if attempt == nil || !known {
+		return
+	}
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	if slot.owner == captureAttemptOwnerTyped && slot.attempt == attempt {
+		slot.stream = stream
+		slot.streamKnown = true
+	}
+	slot.mu.Unlock()
+}
+
+func captureAttemptStreamGeometry(c *gin.Context) (bool, bool) {
+	slot := captureAttemptSlotForRequest(c, false)
+	if slot == nil {
+		return false, false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.owner != captureAttemptOwnerTyped || slot.attempt == nil || !slot.streamKnown {
+		return false, false
+	}
+	return slot.stream, true
+}
+
 // AbortCaptureAttempt transfers and terminates the request's current attempt.
 // Repeated terminal paths are inert because the slot is cleared first.
 func AbortCaptureAttempt(c *gin.Context) {
@@ -370,12 +419,26 @@ func CommitCaptureAttempt(c *gin.Context, platform string, outcome CaptureOutcom
 	return attempt.Commit()
 }
 
-// CommitCapturePreCommitDisconnect preserves the naturally observed partial
-// provider exchange while identifying that no client-visible commit occurred.
-func CommitCapturePreCommitDisconnect(c *gin.Context, platform string, final model.Final) bool {
-	final.StopReason = "pre_commit_disconnect"
-	final.ResponseComplete = false
-	return CommitCaptureAttempt(c, platform, CaptureOutcomeTerminalError, final)
+func captureTerminalOutcome(upstreamFailed, terminalError, clientDisconnect bool) CaptureOutcome {
+	if upstreamFailed || terminalError {
+		return CaptureOutcomeTerminalError
+	}
+	if clientDisconnect {
+		return captureOutcomeClientDisconnect
+	}
+	return CaptureOutcomeSuccess
+}
+
+func captureFinalResponseComplete(stream, upstreamFailed, terminalError, clientDisconnect, explicitlyComplete bool) bool {
+	if explicitlyComplete {
+		return true
+	}
+	if stream || upstreamFailed || terminalError || clientDisconnect {
+		return false
+	}
+	// Non-streaming success is returned only after the provider body reader has
+	// reached the verified full-body EOF boundary.
+	return true
 }
 
 // CommitTerminalErrorCaptureAttempt commits only an observed final provider
@@ -421,13 +484,13 @@ func CommitForwardCaptureAttempt(c *gin.Context, platform string, result *Forwar
 		AbortCaptureAttempt(c)
 		return false
 	}
-	responseComplete := !result.UpstreamFailed && !result.CaptureTerminalError && !result.ClientDisconnect
-	if result.CaptureResponseComplete && !result.ClientDisconnect {
-		responseComplete = true
-	}
 	httpStatus := result.HTTPStatusForCapture()
 	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
 		httpStatus = observed
+	}
+	stream, streamKnown := captureAttemptStreamGeometry(c)
+	if !streamKnown {
+		stream = result.StreamForCapture()
 	}
 	final := model.Final{
 		HTTPStatus:          boundedCaptureUint16(httpStatus),
@@ -435,15 +498,15 @@ func CommitForwardCaptureAttempt(c *gin.Context, platform string, result *Forwar
 		OutputTokens:        boundedCaptureUint32(result.Usage.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
-		ResponseComplete:    responseComplete,
+		ResponseComplete: captureFinalResponseComplete(
+			stream,
+			result.UpstreamFailed,
+			result.CaptureTerminalError,
+			result.ClientDisconnect,
+			result.CaptureResponseComplete,
+		),
 	}
-	if result.ClientDisconnect {
-		return CommitCapturePreCommitDisconnect(c, platform, final)
-	}
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	return CommitCaptureAttempt(c, platform, outcome, final)
 }
 
@@ -454,13 +517,13 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 		AbortCaptureAttempt(c)
 		return false
 	}
-	responseComplete := !result.UpstreamFailed && !result.CaptureTerminalError && !result.ClientDisconnect
-	if result.CaptureResponseComplete && !result.ClientDisconnect {
-		responseComplete = true
-	}
 	httpStatus := result.HTTPStatusForCapture()
 	if observed := captureAttemptResponseHTTPStatus(c); observed != 0 {
 		httpStatus = observed
+	}
+	stream, streamKnown := captureAttemptStreamGeometry(c)
+	if !streamKnown {
+		stream = result.StreamForCapture()
 	}
 	final := model.Final{
 		HTTPStatus:          boundedCaptureUint16(httpStatus),
@@ -468,15 +531,15 @@ func CommitOpenAIForwardCaptureAttempt(c *gin.Context, platform string, result *
 		OutputTokens:        boundedCaptureUint32(result.Usage.OutputTokens),
 		CacheReadTokens:     boundedCaptureUint32(result.Usage.CacheReadInputTokens),
 		CacheCreationTokens: boundedCaptureUint32(result.Usage.CacheCreationInputTokens),
-		ResponseComplete:    responseComplete,
+		ResponseComplete: captureFinalResponseComplete(
+			stream,
+			result.UpstreamFailed,
+			result.CaptureTerminalError,
+			result.ClientDisconnect,
+			result.CaptureResponseComplete,
+		),
 	}
-	if result.ClientDisconnect {
-		return CommitCapturePreCommitDisconnect(c, platform, final)
-	}
-	outcome := CaptureOutcomeSuccess
-	if result.UpstreamFailed || result.CaptureTerminalError {
-		outcome = CaptureOutcomeTerminalError
-	}
+	outcome := captureTerminalOutcome(result.UpstreamFailed, result.CaptureTerminalError, result.ClientDisconnect)
 	return CommitCaptureAttempt(c, platform, outcome, final)
 }
 
@@ -539,6 +602,7 @@ func beginCaptureAttemptForWireRequest(
 	}
 	attempt.headerLimit = headerLimit
 	replaceCaptureAttemptForRequest(c, attempt)
+	setCaptureAttemptStreamGeometry(c, attempt, stream, streamKnown)
 	attempt.WriteRequestHeaders(captureHeaderBytes(req.Header, headerLimit))
 	attempt.WriteRequest(body)
 	return attempt, true

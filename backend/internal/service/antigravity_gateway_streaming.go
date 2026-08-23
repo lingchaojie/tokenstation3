@@ -105,9 +105,10 @@ func (cw *antigravityClientWriter) markDisconnected() {
 
 // handleStreamReadError 处理上游读取错误的通用逻辑。
 // 返回 (clientDisconnect, handled)：handled=true 表示错误已处理，调用方应返回已收集的 usage。
-func handleStreamReadError(err error, clientDisconnected bool, prefix string) (disconnect bool, handled bool) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		logger.LegacyPrintf("service.antigravity_gateway", "Context canceled during streaming (%s), returning collected usage", prefix)
+func handleStreamReadError(ctx context.Context, err error, clientDisconnected bool, prefix string) (disconnect bool, handled bool) {
+	requestCanceled := ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+	if isClientCausalCancellation(ctx, err, clientDisconnected || requestCanceled) {
+		logger.LegacyPrintf("service.antigravity_gateway", "Client request canceled during streaming (%s), returning collected usage", prefix)
 		return true, true
 	}
 	if clientDisconnected {
@@ -265,7 +266,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 						return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true, semanticOutput: semanticOutput}, nil
 					}
 				}
-				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 			}
 			if ev.err != nil {
 				if terminalObserved {
@@ -275,7 +276,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 					}
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity gemini stream read failed after an uncommitted terminal event")
 				}
-				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity gemini"); handled {
+				if disconnect, handled := handleStreamReadError(c.Request.Context(), ev.err, cw.Disconnected(), "antigravity gemini"); handled {
 					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
 				}
 				if !staged.committed {
@@ -413,6 +414,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	var lastWithParts map[string]any
 	var collectedImageParts []map[string]any // 收集所有包含图片的 parts
 	var collectedTextParts []string          // 收集所有文本片段
+	var terminalObserved bool
 
 	for {
 		line, ok, err := lineReader.Next()
@@ -457,6 +459,9 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 		}
 
 		last = parsed
+		if strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" {
+			terminalObserved = true
+		}
 		// 提取 usage
 		if u := extractGeminiUsage(inner); u != nil {
 			usage = u
@@ -512,7 +517,7 @@ returnResponse:
 	}
 	c.Data(http.StatusOK, "application/json", respBody)
 
-	return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+	return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, terminalObserved: terminalObserved}, nil
 }
 
 // getOrCreateGeminiParts 获取 Gemini 响应的 parts 结构，返回深拷贝和更新回调
@@ -810,6 +815,7 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 	var lastWithParts map[string]any
 	var collectedParts []map[string]any // 收集所有 parts（包括 text、thinking、functionCall、inlineData 等）
 	var meaningfulResponse bool
+	var terminalObserved bool
 
 	for {
 		line, ok, err := lineReader.Next()
@@ -831,6 +837,7 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 
 		payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 		if payload == "[DONE]" {
+			terminalObserved = true
 			continue
 		}
 		if payload == "" {
@@ -858,7 +865,11 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 			// 收集所有 parts（text、thinking、functionCall、inlineData 等）
 			collectedParts = append(collectedParts, parts...)
 		}
-		if len(parts) > 0 || strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" ||
+		finishReason := strings.TrimSpace(extractGeminiFinishReason(parsed))
+		if finishReason != "" {
+			terminalObserved = true
+		}
+		if len(parts) > 0 || finishReason != "" ||
 			strings.TrimSpace(gjson.GetBytes(inner, "promptFeedback.blockReason").String()) != "" {
 			meaningfulResponse = true
 			if firstTokenMs == nil {
@@ -906,7 +917,7 @@ returnResponse:
 		ImageOutputTokens:        agUsage.ImageOutputTokens,
 	}
 
-	return claudeResp, &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+	return claudeResp, &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, terminalObserved: terminalObserved}, nil
 }
 
 // handleClaudeStreamToNonStreaming 收集上游流式响应，转换为 Claude 非流式格式返回
@@ -1107,7 +1118,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 						return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, semanticOutput: true}, stagedErr
 					}
 				}
-				return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: true}, nil
+				return &antigravityStreamResult{usage: convertedUsage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
 			}
 			if ev.err != nil {
 				if terminalObserved {
@@ -1117,7 +1128,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 					}
 					return nil, newIncompleteProviderStreamFailover(resp, "antigravity claude stream read failed after an uncommitted terminal event")
 				}
-				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity claude"); handled {
+				if disconnect, handled := handleStreamReadError(c.Request.Context(), ev.err, cw.Disconnected(), "antigravity claude"); handled {
 					return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, clientDisconnect: disconnect, semanticOutput: semanticOutput}, fmt.Errorf("stream read error: %w", ev.err)
 				}
 				if !staged.committed {

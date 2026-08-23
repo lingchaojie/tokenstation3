@@ -687,6 +687,7 @@ func TestAntigravityCompatClientDisconnectDrainsUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.True(t, result.terminalObserved)
 	require.Equal(t, 15, result.usage.OutputTokens)
 }
 
@@ -707,6 +708,7 @@ func TestAntigravityCompatClientDisconnectDoesNotHideProviderReadError(t *testin
 	result, err := svc.handleChatCompletionsStreamingFromAntigravity(c, resp, time.Now(), "gemini-3.1-pro-high", false)
 	require.NotNil(t, result)
 	require.True(t, result.clientDisconnect)
+	require.False(t, result.terminalObserved)
 	require.ErrorContains(t, err, "stream read error")
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }

@@ -23,9 +23,10 @@ var (
 )
 
 type kiroWebSearchExecution struct {
-	ResponseBody []byte
-	Usage        ClaudeUsage
-	RequestID    string
+	ResponseBody             []byte
+	Usage                    ClaudeUsage
+	RequestID                string
+	ProviderTerminalObserved bool
 }
 
 type kiroStreamChunkCollector struct {
@@ -118,10 +119,10 @@ func writeAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens in
 
 func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	ctx context.Context, c *gin.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, cachePlan *kiroCacheEmulationPlan,
-) error {
+) (*kiropkg.StreamResult, error) {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
-		return errKiroWebSearchFallback
+		return nil, errKiroWebSearchFallback
 	}
 
 	currentBody, err := kiropkg.ReplaceWebSearchToolDescription(anthropicBody)
@@ -132,7 +133,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	nextContentBlockIndex := 0
 
 	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, cachePlan.result()); err != nil {
-		return err
+		return nil, err
 	}
 
 	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
@@ -147,18 +148,18 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		}
 
 		if err := writeSSEChunks(w, kiropkg.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
-			return err
+			return nil, err
 		}
 		nextContentBlockIndex += 2
 
 		currentBody, err = kiropkg.InjectToolResultsClaude(currentBody, currentToolUseID, query, results)
 		if err != nil {
-			return errKiroWebSearchFallback
+			return nil, errKiroWebSearchFallback
 		}
 
 		resp, _, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			responseBody, truncated, readErr := s.readKiroUpstreamErrorBody(ctx, resp)
@@ -166,7 +167,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			failureErr := s.handleKiroHTTPErrorBody(ctx, resp, c, account, mappedModel, currentBody, responseBody, false)
 			var failure *UpstreamFailoverError
 			if !errors.As(failureErr, &failure) {
-				return failureErr
+				return nil, failureErr
 			}
 			if readErr != nil {
 				failure.ClientMessage = sanitizeUpstreamErrorMessage(readErr.Error())
@@ -180,7 +181,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 				)
 				publishWebChatStreamTerminalError(ctx, failure)
 			}
-			return failure
+			return nil, failure
 		}
 		if iteration == 0 {
 			cachePlan.commit()
@@ -205,14 +206,14 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		}()
 		finishRawCapture()
 		if streamErr != nil {
-			return streamErr
+			return streamResult, streamErr
 		}
 
 		analysis := kiropkg.AnalyzeBufferedStream(chunks)
 		if analysis.HasWebSearchToolUse && strings.TrimSpace(analysis.WebSearchQuery) != "" && iteration+1 < kiroMaxWebSearchIterations {
 			filtered := kiropkg.FilterChunksForClient(chunks, analysis.WebSearchToolUseIndex, nextContentBlockIndex)
 			if err := writeSSEChunks(w, filtered); err != nil {
-				return err
+				return streamResult, err
 			}
 			if maxIndex := kiropkg.MaxContentBlockIndex(filtered); maxIndex >= nextContentBlockIndex {
 				nextContentBlockIndex = maxIndex + 1
@@ -232,7 +233,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 				continue
 			}
 			if _, err := w.Write(adjusted); err != nil {
-				return err
+				return streamResult, err
 			}
 		}
 		usage := streamResult.Usage
@@ -256,12 +257,12 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			"usage": usagePayload,
 		})
 		if _, err := fmt.Fprintf(w, "event: message_delta\ndata: %s\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", finalDelta); err != nil {
-			return err
+			return streamResult, err
 		}
-		return nil
+		return streamResult, nil
 	}
 
-	return fmt.Errorf("kiro web search exceeded max iterations")
+	return nil, fmt.Errorf("kiro web search exceeded max iterations")
 }
 
 func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*kiroWebSearchExecution, error) {
@@ -356,9 +357,10 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 				parseResult.ResponseBody = finalBody
 			}
 			return &kiroWebSearchExecution{
-				ResponseBody: parseResult.ResponseBody,
-				Usage:        kiroUsageToClaude(parseResult.Usage, inputTokens),
-				RequestID:    requestID,
+				ResponseBody:             parseResult.ResponseBody,
+				Usage:                    kiroUsageToClaude(parseResult.Usage, inputTokens),
+				RequestID:                requestID,
+				ProviderTerminalObserved: parseResult.ProviderTerminalObserved,
 			}, nil
 		}
 

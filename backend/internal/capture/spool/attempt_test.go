@@ -180,7 +180,7 @@ func TestMalformedExtractionDoesNotPreventCommitOrLeakPayloadInWarning(t *testin
 
 	manifest := readManifest(t, s, a.ID())
 	require.EqualValues(t, 4, manifest.Extracted.OutputTokens)
-	require.Equal(t, "terminal", manifest.Extracted.StopReason)
+	require.Empty(t, manifest.Extracted.StopReason)
 	require.Equal(t, append(body, []byte("still-do-not-log")...), readZstdFile(t, readyPath(s, a.ID(), "response.zst")))
 	logOutput := logs.String()
 	require.Equal(t, 1, strings.Count(logOutput, `"msg":"capture metadata extraction failed"`))
