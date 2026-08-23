@@ -398,6 +398,13 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
+func validateCursorAccountType(platform, accountType string) error {
+	if platform == PlatformCursor && accountType == AccountTypeAPIKey {
+		return infraerrors.New(http.StatusBadRequest, "CURSOR_APIKEY_ACCOUNT_UNSUPPORTED", "import a crsr_ credential through the Cursor login flow")
+	}
+	return nil
+}
+
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
@@ -469,6 +476,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if err := validateCursorAccountType(input.Platform, input.Type); err != nil {
+		return nil, err
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -606,6 +616,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		account.Name = input.Name
 	}
 	if input.Type != "" {
+		if err := validateCursorAccountType(account.Platform, input.Type); err != nil {
+			return nil, err
+		}
 		account.Type = input.Type
 	}
 	if input.Notes != nil {

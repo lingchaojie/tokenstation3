@@ -309,6 +309,45 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestAccountRepository_ListOAuthRefreshCandidatePage_CursorRefreshCandidatesUseAlternateCredentialSources(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var capturedSQL string
+	var capturedArgs []any
+	mock.ExpectQuery("SELECT id").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	repo := newAccountRepositoryWithSQL(nil, captureQuerySQL{db: db, captured: &capturedSQL, args: &capturedArgs}, nil)
+
+	page, err := repo.ListOAuthRefreshCandidatePage(context.Background(), service.OAuthRefreshPageOptions{
+		Platforms:           []string{service.PlatformAnthropic, service.PlatformCursor},
+		AfterID:             100,
+		Limit:               200,
+		ActiveOnly:          true,
+		RequireRefreshToken: true,
+		AltRefreshCredentialSources: []service.AltRefreshCredentialSource{
+			{Platform: service.PlatformCursor, CredentialKeys: []string{"api_key", "web_session_token"}},
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, page.Accounts)
+
+	normalized := normalizeSQLWhitespace(capturedSQL)
+	require.Contains(t, normalized, "credentials ? 'refresh_token'")
+	require.Contains(t, normalized, "btrim(credentials->>'refresh_token') <> ''")
+	require.Contains(t, normalized, "btrim(coalesce(credentials->>$3, '')) <> ''")
+	require.Contains(t, normalized, "btrim(coalesce(credentials->>$4, '')) <> ''")
+	require.Contains(t, normalized, "platform = $5")
+	require.Contains(t, normalized, "LIMIT $6")
+	require.Len(t, capturedArgs, 6)
+	require.Equal(t, int64(100), capturedArgs[1])
+	require.Equal(t, "api_key", capturedArgs[2])
+	require.Equal(t, "web_session_token", capturedArgs[3])
+	require.Equal(t, service.PlatformCursor, capturedArgs[4])
+	require.Equal(t, 200, capturedArgs[5])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestAccountRepository_ListOAuthRefreshCandidatePage_ReconciliationExcludesAPIKeys(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)

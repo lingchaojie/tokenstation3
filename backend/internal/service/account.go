@@ -17,6 +17,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
@@ -284,6 +285,14 @@ func (a *Account) IsGrokOAuth() bool {
 	return a.IsGrok() && a.Type == AccountTypeOAuth
 }
 
+func (a *Account) IsCursor() bool {
+	return a != nil && a.Platform == PlatformCursor
+}
+
+func (a *Account) IsCursorOAuth() bool {
+	return a.IsCursor() && a.Type == AccountTypeOAuth
+}
+
 // IsKimi / IsZhipu / IsDeepseek 标识国产 OpenAI 兼容供应商账号。
 func (a *Account) IsKimi() bool {
 	return a.Platform == PlatformKimi
@@ -303,10 +312,10 @@ func (a *Account) IsCNProvider() bool {
 }
 
 // IsOpenAICompatible 报告账号是否走 OpenAI 网关（OpenAI 协议族）。
-// openai/grok 原生走 OpenAI 网关；kimi/zhipu/deepseek 同为 OpenAI Chat Completions
+// openai/grok/cursor 原生走 OpenAI 网关；kimi/zhipu/deepseek 同为 OpenAI Chat Completions
 // 兼容上游，也经 OpenAI 网关转发。
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok ||
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.Platform == PlatformCursor ||
 		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek)
 }
 
@@ -589,6 +598,16 @@ func stringMappingFromRaw(raw any) map[string]string {
 	}
 }
 
+// HasExplicitModelMapping distinguishes an operator-provided mapping from a
+// platform fallback mapping.
+func (a *Account) HasExplicitModelMapping() bool {
+	if a == nil || a.Credentials == nil {
+		return false
+	}
+	raw, _ := a.Credentials["model_mapping"].(map[string]any)
+	return len(raw) > 0
+}
+
 func (a *Account) GetModelMapping() map[string]string {
 	runtimeVersion := xai.RuntimeModelMappingVersion()
 	credentialsPtr := mapPtr(a.Credentials)
@@ -686,9 +705,20 @@ func defaultModelMappingForPlatform(platform string) map[string]string {
 		return domain.DefaultAntigravityModelMapping
 	case domain.PlatformKiro:
 		return domain.DefaultKiroModelMapping
+	case domain.PlatformCursor:
+		return cursorDefaultModelMapping()
 	default:
 		return nil
 	}
+}
+
+func cursorDefaultModelMapping() map[string]string {
+	ids := cursorpkg.DefaultModelIDs()
+	mapping := make(map[string]string, len(ids))
+	for _, id := range ids {
+		mapping[id] = id
+	}
+	return mapping
 }
 
 func mapPtr(m map[string]any) uintptr {
@@ -1671,6 +1701,56 @@ func (a *Account) GetGrokRefreshToken() string {
 	return a.GetCredential("refresh_token")
 }
 
+// GetCursorAccessToken returns only a minted Cursor session token. A crsr_
+// API key is an exchange source and is never used as an upstream bearer.
+func (a *Account) GetCursorAccessToken() string {
+	if !a.IsCursor() {
+		return ""
+	}
+	return a.GetCredential("access_token")
+}
+
+func (a *Account) GetCursorRefreshToken() string {
+	if !a.IsCursor() {
+		return ""
+	}
+	return a.GetCredential("refresh_token")
+}
+
+func (a *Account) GetCursorAPIKey() string {
+	if !a.IsCursor() {
+		return ""
+	}
+	return a.GetCredential("api_key")
+}
+
+// GetCursorWebSessionToken prefers the dedicated browser-cookie field. Legacy
+// imports stored that cookie in access_token, so a verified web JWT is the only
+// access-token fallback.
+func (a *Account) GetCursorWebSessionToken() string {
+	if !a.IsCursor() {
+		return ""
+	}
+	if stored := strings.TrimSpace(a.GetCredential("web_session_token")); stored != "" {
+		return stored
+	}
+	if access := strings.TrimSpace(a.GetCredential("access_token")); cursorpkg.IsWebSessionToken(access) {
+		return access
+	}
+	return ""
+}
+
+func (a *Account) GetCursorBaseURL() string {
+	if !a.IsCursor() {
+		return ""
+	}
+	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
+	if baseURL == "" {
+		return cursorpkg.DefaultBaseURL
+	}
+	return strings.TrimRight(baseURL, "/")
+}
+
 func (a *Account) GetOpenAIIDToken() string {
 	if !a.IsOpenAIOAuth() {
 		return ""
@@ -1779,6 +1859,14 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 			// forwarding gate itself fails closed if that probe is unavailable or
 			// cannot produce positive paid-entitlement evidence.
 			return eligible || reason == "billing_unobserved"
+		default:
+			return false
+		}
+	}
+	if a.IsCursor() {
+		switch capability {
+		case OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityResponses:
+			return true
 		default:
 			return false
 		}
