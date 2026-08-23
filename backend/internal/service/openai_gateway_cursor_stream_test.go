@@ -293,3 +293,40 @@ func TestConsumeCursorAgentEventsStopsOnDownstreamErrorWithPartialMetadata(t *te
 	require.Equal(t, "one", outcome.content)
 	require.False(t, outcome.providerTerminal)
 }
+
+func TestCursorResponsesAndAnthropicChunkSynthesizerMapsRoleReasoningToolsFinishAndUsage(t *testing.T) {
+	var chunks []*apicompat.ChatCompletionsChunk
+	synth := newCursorChunkSynthesizer("caller-model", func(chunk *apicompat.ChatCompletionsChunk) {
+		chunks = append(chunks, chunk)
+	})
+	synth.onDelta(cursorDelta{kind: cursorDeltaReasoning, text: "think"})
+	synth.onDelta(cursorDelta{kind: cursorDeltaText, text: "answer"})
+	synth.onDelta(cursorDelta{kind: cursorDeltaToolCall, toolIndex: 1, toolID: "call_1", toolName: "lookup", toolArguments: `{"q":"x"}`})
+	synth.finish("tool_calls", OpenAIUsage{InputTokens: 7, OutputTokens: 5, CacheReadInputTokens: 2, CacheCreationInputTokens: 1})
+
+	require.Len(t, chunks, 5)
+	require.Equal(t, "assistant", chunks[0].Choices[0].Delta.Role)
+	require.Equal(t, "think", *chunks[1].Choices[0].Delta.ReasoningContent)
+	require.Equal(t, "answer", *chunks[2].Choices[0].Delta.Content)
+	require.Equal(t, 1, *chunks[3].Choices[0].Delta.ToolCalls[0].Index)
+	require.Equal(t, "tool_calls", *chunks[4].Choices[0].FinishReason)
+	require.Equal(t, 7, chunks[4].Usage.PromptTokens)
+	require.Equal(t, 5, chunks[4].Usage.CompletionTokens)
+	require.Equal(t, 2, chunks[4].Usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1, chunks[4].Usage.PromptTokensDetails.CacheWriteTokens)
+	for _, chunk := range chunks {
+		require.Equal(t, chunks[0].ID, chunk.ID)
+		require.Equal(t, "caller-model", chunk.Model)
+	}
+}
+
+func TestCursorResponsesAndAnthropicChunkSynthesizerEmitsRoleForZeroDeltaSuccess(t *testing.T) {
+	var chunks []*apicompat.ChatCompletionsChunk
+	synth := newCursorChunkSynthesizer("caller-model", func(chunk *apicompat.ChatCompletionsChunk) {
+		chunks = append(chunks, chunk)
+	})
+	synth.finish("stop", OpenAIUsage{})
+	require.Len(t, chunks, 2)
+	require.Equal(t, "assistant", chunks[0].Choices[0].Delta.Role)
+	require.Equal(t, "stop", *chunks[1].Choices[0].FinishReason)
+}

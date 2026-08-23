@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -370,4 +371,395 @@ func TestCursorAgentFailureDoesNotExposeCredentialFromMalformedEndpoint(t *testi
 	require.ErrorAs(t, err, &failover)
 	require.Equal(t, NextAccountStop, failover.NextAccountAction)
 	require.NotContains(t, strings.ToLower(string(failover.ResponseBody)), secret)
+}
+
+func cursorProtocolTestContext(t *testing.T, path string) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, path, nil)
+	return c, recorder
+}
+
+func cursorBridgeEvents() []cursorpkg.AgentEvent {
+	return []cursorpkg.AgentEvent{
+		{Type: cursorpkg.AgentEventThinking, Text: "careful"},
+		{Type: cursorpkg.AgentEventText, Text: "answer"},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`}},
+		{Type: cursorpkg.AgentEventToolCall, ToolCall: &cursorpkg.AgentToolCall{ID: "call_time", Name: "time", Arguments: `{"tz":"UTC"}`}},
+		{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true, Usage: &cursorpkg.AgentUsage{InputTokens: 13, OutputTokens: 8, CacheReadTokens: 2, CacheWriteTokens: 1}},
+	}
+}
+
+func cursorBridgeStream(events ...cursorpkg.AgentEvent) cursorChatEventStream {
+	return cursorChatTestStreamWithHeader(events...)
+}
+
+// Removing either DEV request converter, or bypassing buildCursorAgentRunParams
+// for one protocol, breaks this parity contract. Expected values come from the
+// independently-authored Chat request rather than a production bridge helper.
+func TestCursorRunParamsIdenticalAcrossInboundProtocols(t *testing.T) {
+	chatJSON := `{
+		"model":"auto","max_completion_tokens":128,
+		"messages":[
+			{"role":"system","content":"be precise"},
+			{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]},
+			{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]},
+			{"role":"tool","tool_call_id":"call_1","content":"found"}
+		],
+		"tools":[{"type":"function","function":{"name":"lookup","description":"look up","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}}]
+	}`
+	responsesJSON := `{
+		"model":"auto","max_output_tokens":128,"instructions":"be precise",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]},
+			{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"},
+			{"type":"function_call_output","call_id":"call_1","output":"found"}
+		],
+		"tools":[{"type":"function","name":"lookup","description":"look up","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}]
+	}`
+	messagesJSON := `{
+		"model":"auto","max_tokens":128,"system":"be precise",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},
+			{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"x"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"found"}]}
+		],
+		"tools":[{"name":"lookup","description":"look up","input_schema":{"type":"object","properties":{"q":{"type":"string"}}}}]
+	}`
+
+	var chatReq apicompat.ChatCompletionsRequest
+	require.NoError(t, json.Unmarshal([]byte(chatJSON), &chatReq))
+	var responsesReq apicompat.ResponsesRequest
+	require.NoError(t, json.Unmarshal([]byte(responsesJSON), &responsesReq))
+	responsesChat, err := apicompat.ResponsesToChatCompletionsRequest(&responsesReq)
+	require.NoError(t, err)
+	var messagesReq apicompat.AnthropicRequest
+	require.NoError(t, json.Unmarshal([]byte(messagesJSON), &messagesReq))
+	messagesChat, err := apicompat.AnthropicToChatCompletionsRequest(&messagesReq)
+	require.NoError(t, err)
+
+	build := func(req *apicompat.ChatCompletionsRequest) (cursorpkg.AgentRunParams, cursorInputEstimate) {
+		params, input, buildErr := buildCursorAgentRunParams("auto", req, cursorTranslateOptions{
+			nativeTools: true, nativeImages: true, cwd: cursorpkg.AgentDefaultCwd,
+		})
+		require.NoError(t, buildErr)
+		return params, input
+	}
+	wantParams, wantInput := build(&chatReq)
+	responsesParams, responsesInput := build(responsesChat)
+	messagesParams, messagesInput := build(messagesChat)
+	require.Equal(t, wantParams, responsesParams)
+	require.Equal(t, wantParams, messagesParams)
+	require.Equal(t, wantInput, responsesInput)
+	require.Equal(t, wantInput, messagesInput)
+	require.Equal(t, 128, cursorRequestOutputLimit(&chatReq))
+	require.Equal(t, 128, cursorRequestOutputLimit(responsesChat))
+	require.Equal(t, 128, cursorRequestOutputLimit(messagesChat))
+}
+
+func TestCursorResponsesBufferedUsesNativeShapeReasoningParallelToolsAndUsage(t *testing.T) {
+	c, recorder := cursorProtocolTestContext(t, "/v1/responses")
+	result, err := (&OpenAIGatewayService{}).bufferCursorResponses(
+		c, cursorGatewayAccount(), cursorBridgeStream(cursorBridgeEvents()...), cursorChatTestMeta(false, false),
+		cursorInputEstimate{}, time.Now(), nil, false, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "application/json; charset=utf-8", recorder.Header().Get("Content-Type"))
+	var response apicompat.ResponsesResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, "response", response.Object)
+	require.Equal(t, "completed", response.Status)
+	require.Equal(t, "caller-model", response.Model)
+	require.Len(t, response.Output, 4)
+	require.Equal(t, "reasoning", response.Output[0].Type)
+	require.Equal(t, "message", response.Output[1].Type)
+	require.Equal(t, "answer", response.Output[1].Content[0].Text)
+	require.Equal(t, "function_call", response.Output[2].Type)
+	require.Equal(t, "call_weather", response.Output[2].CallID)
+	require.Equal(t, "function_call", response.Output[3].Type)
+	require.Equal(t, "call_time", response.Output[3].CallID)
+	require.Equal(t, 13, response.Usage.InputTokens)
+	require.Equal(t, 8, response.Usage.OutputTokens)
+	require.Equal(t, "cursor-request-id", result.RequestID)
+	require.True(t, result.CaptureResponseComplete)
+	require.NotContains(t, recorder.Body.String(), "chat.completion")
+	require.NotContains(t, recorder.Body.String(), "connect_proto")
+}
+
+func TestCursorResponsesSSEUsesNativeLifecycleParallelToolsUsageAndIncompleteLength(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		c, recorder := cursorProtocolTestContext(t, "/v1/responses")
+		result, err := (&OpenAIGatewayService{}).streamCursorResponses(
+			c, cursorGatewayAccount(), cursorBridgeStream(cursorBridgeEvents()...), cursorChatTestMeta(true, false),
+			cursorInputEstimate{}, time.Now(), nil, false, nil,
+		)
+		require.NoError(t, err)
+		body := recorder.Body.String()
+		require.Contains(t, body, "event: response.created")
+		require.Contains(t, body, "event: response.reasoning_summary_text.delta")
+		require.Equal(t, 2, strings.Count(body, "event: response.output_item.added")-2, "two function items plus reasoning and message")
+		require.Contains(t, body, `"input_tokens":13`)
+		require.Contains(t, body, `"cache_creation_input_tokens":1`)
+		require.Contains(t, body, `"cached_tokens":2`)
+		require.Contains(t, body, "event: response.completed")
+		require.Equal(t, 1, strings.Count(body, "data: [DONE]\n\n"))
+		require.NotContains(t, body, "chat.completion.chunk")
+		require.NotContains(t, body, "exec_stream_close")
+		require.True(t, result.CaptureResponseComplete)
+	})
+
+	t.Run("local length", func(t *testing.T) {
+		c, recorder := cursorProtocolTestContext(t, "/v1/responses")
+		meta := cursorChatTestMeta(true, false)
+		meta.maxOutputTokens = 1
+		result, err := (&OpenAIGatewayService{}).streamCursorResponses(
+			c, cursorGatewayAccount(), cursorBridgeStream(
+				cursorpkg.AgentEvent{Type: cursorpkg.AgentEventText, Text: strings.Repeat("a", 100)},
+				cursorpkg.AgentEvent{Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true},
+			), meta, cursorInputEstimate{}, time.Now(), nil, false, nil,
+		)
+		require.NoError(t, err)
+		body := recorder.Body.String()
+		require.Contains(t, body, `"status":"incomplete"`)
+		require.Contains(t, body, `"reason":"max_output_tokens"`)
+		require.False(t, result.CaptureResponseComplete)
+	})
+}
+
+func TestCursorAnthropicBufferedUsesNativeThinkingParallelToolsUsageAndMaxTokens(t *testing.T) {
+	c, recorder := cursorProtocolTestContext(t, "/v1/messages")
+	result, err := (&OpenAIGatewayService{}).bufferCursorAnthropic(
+		c, cursorGatewayAccount(), cursorBridgeStream(cursorBridgeEvents()...), cursorChatTestMeta(false, false),
+		cursorInputEstimate{}, time.Now(),
+	)
+	require.NoError(t, err)
+	var response apicompat.AnthropicResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, "message", response.Type)
+	require.Equal(t, "caller-model", response.Model)
+	require.Len(t, response.Content, 4)
+	require.Equal(t, "thinking", response.Content[0].Type)
+	require.Equal(t, "text", response.Content[1].Type)
+	require.Equal(t, "tool_use", response.Content[2].Type)
+	require.Equal(t, "tool_use", response.Content[3].Type)
+	require.Equal(t, "tool_use", apicompat.AnthropicStopReasonString(response.StopReason))
+	require.Equal(t, 13, response.Usage.InputTokens+response.Usage.CacheReadInputTokens+response.Usage.CacheCreationInputTokens)
+	require.Equal(t, 8, response.Usage.OutputTokens)
+	require.True(t, result.CaptureResponseComplete)
+	require.NotContains(t, recorder.Body.String(), "chat.completion")
+}
+
+func TestCursorAnthropicSSEUsesNativeLifecycleParallelToolsUsageAndMaxTokenStop(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		c, recorder := cursorProtocolTestContext(t, "/v1/messages")
+		result, err := (&OpenAIGatewayService{}).streamCursorAnthropic(
+			c, cursorGatewayAccount(), cursorBridgeStream(cursorBridgeEvents()...), cursorChatTestMeta(true, false),
+			cursorInputEstimate{}, time.Now(),
+		)
+		require.NoError(t, err)
+		body := recorder.Body.String()
+		require.Contains(t, body, "event: message_start")
+		require.Contains(t, body, `"type":"thinking_delta"`)
+		require.Equal(t, 2, strings.Count(body, `"type":"tool_use"`))
+		require.Contains(t, body, `"input_tokens":10`)
+		require.Contains(t, body, `"cache_creation_input_tokens":1`)
+		require.Contains(t, body, `"cache_read_input_tokens":2`)
+		require.Contains(t, body, "event: message_stop")
+		require.NotContains(t, body, "[DONE]")
+		require.NotContains(t, body, "chat.completion.chunk")
+		require.True(t, result.CaptureResponseComplete)
+	})
+
+	t.Run("local max tokens", func(t *testing.T) {
+		c, recorder := cursorProtocolTestContext(t, "/v1/messages")
+		meta := cursorChatTestMeta(true, false)
+		meta.maxOutputTokens = 1
+		result, err := (&OpenAIGatewayService{}).streamCursorAnthropic(
+			c, cursorGatewayAccount(), cursorBridgeStream(cursorpkg.AgentEvent{Type: cursorpkg.AgentEventText, Text: strings.Repeat("z", 100)}),
+			meta, cursorInputEstimate{}, time.Now(),
+		)
+		require.NoError(t, err)
+		require.Contains(t, recorder.Body.String(), `"stop_reason":"max_tokens"`)
+		require.False(t, result.CaptureResponseComplete)
+	})
+}
+
+func TestCursorResponsesMidStreamFailureUsesNativeErrorWithoutCompleted(t *testing.T) {
+	c, recorder := cursorProtocolTestContext(t, "/v1/responses")
+	secret := "private-provider-prompt-token"
+	result, err := (&OpenAIGatewayService{}).streamCursorResponses(
+		c, cursorGatewayAccount(), cursorBridgeStream(
+			cursorpkg.AgentEvent{Type: cursorpkg.AgentEventText, Text: "partial"},
+			cursorpkg.AgentEvent{Type: cursorpkg.AgentEventError, Err: &cursorpkg.AgentError{Code: "internal", Message: secret, Raw: secret, HTTPStatus: http.StatusBadGateway}},
+		), cursorChatTestMeta(true, false), cursorInputEstimate{}, time.Now(), nil, false, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := recorder.Body.String()
+	require.Contains(t, body, "event: error")
+	require.NotContains(t, body, "response.completed")
+	require.NotContains(t, body, secret)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+	require.False(t, result.CaptureResponseComplete)
+}
+
+func TestCursorAnthropicMidStreamFailureUsesNativeErrorWithoutMessageStop(t *testing.T) {
+	c, recorder := cursorProtocolTestContext(t, "/v1/messages")
+	secret := "private-provider-prompt-token"
+	result, err := (&OpenAIGatewayService{}).streamCursorAnthropic(
+		c, cursorGatewayAccount(), cursorBridgeStream(
+			cursorpkg.AgentEvent{Type: cursorpkg.AgentEventText, Text: "partial"},
+			cursorpkg.AgentEvent{Type: cursorpkg.AgentEventError, Err: &cursorpkg.AgentError{Code: "internal", Message: secret, Raw: secret, HTTPStatus: http.StatusBadGateway}},
+		), cursorChatTestMeta(true, false), cursorInputEstimate{}, time.Now(),
+	)
+	require.NoError(t, err)
+	body := recorder.Body.String()
+	require.Contains(t, body, "event: error")
+	require.NotContains(t, body, "event: message_stop")
+	require.NotContains(t, body, secret)
+	require.True(t, result.UpstreamFailed)
+	require.True(t, result.CaptureTerminalError)
+}
+
+func TestCursorResponsesAndAnthropicPreOutputFailuresWithholdProtocolBytes(t *testing.T) {
+	providerErr := &cursorpkg.AgentError{Code: "unavailable", Message: "secret", Raw: `{"token":"secret"}`, HTTPStatus: http.StatusServiceUnavailable}
+	tests := []struct {
+		name string
+		path string
+		run  func(*gin.Context) (*OpenAIForwardResult, error)
+	}{
+		{name: "responses", path: "/v1/responses", run: func(c *gin.Context) (*OpenAIForwardResult, error) {
+			return (&OpenAIGatewayService{}).streamCursorResponses(c, cursorGatewayAccount(), cursorBridgeStream(cursorpkg.AgentEvent{Type: cursorpkg.AgentEventError, Err: providerErr}), cursorChatTestMeta(true, false), cursorInputEstimate{}, time.Now(), nil, false, nil)
+		}},
+		{name: "anthropic", path: "/v1/messages", run: func(c *gin.Context) (*OpenAIForwardResult, error) {
+			return (&OpenAIGatewayService{}).streamCursorAnthropic(c, cursorGatewayAccount(), cursorBridgeStream(cursorpkg.AgentEvent{Type: cursorpkg.AgentEventError, Err: providerErr}), cursorChatTestMeta(true, false), cursorInputEstimate{}, time.Now())
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c, recorder := cursorProtocolTestContext(t, test.path)
+			result, err := test.run(c)
+			require.Nil(t, result)
+			var failover *UpstreamFailoverError
+			require.ErrorAs(t, err, &failover)
+			require.Empty(t, recorder.Body.Bytes())
+			require.False(t, IsResponseCommitted(c))
+		})
+	}
+}
+
+func TestCursorResponsesAndAnthropicWriterFailureUseBoundedRelay(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		run  func(*gin.Context, cursorChatEventStream, cursorChatMeta) (*OpenAIForwardResult, error)
+	}{
+		{name: "responses", path: "/v1/responses", run: func(c *gin.Context, stream cursorChatEventStream, meta cursorChatMeta) (*OpenAIForwardResult, error) {
+			return (&OpenAIGatewayService{}).streamCursorResponses(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now(), nil, false, nil)
+		}},
+		{name: "anthropic", path: "/v1/messages", run: func(c *gin.Context, stream cursorChatEventStream, meta cursorChatMeta) (*OpenAIForwardResult, error) {
+			return (&OpenAIGatewayService{}).streamCursorAnthropic(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now())
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c, _ := cursorProtocolTestContext(t, test.path)
+			failed := make(chan struct{})
+			c.Writer = &cursorChatFailingWriter{ResponseWriter: c.Writer, failAt: 2, failed: failed}
+			stream := newCursorAsyncChatTestStream()
+			defer stream.finish()
+			meta := cursorChatTestMeta(true, false)
+			meta.disconnectDrainTimeout = 25 * time.Millisecond
+			done := make(chan cursorChatAsyncResult, 1)
+			go func() {
+				result, err := test.run(c, stream, meta)
+				done <- cursorChatAsyncResult{result: result, err: err}
+			}()
+			go func() { stream.events <- cursorpkg.AgentEvent{Type: cursorpkg.AgentEventText, Text: "visible"} }()
+			select {
+			case <-failed:
+			case <-time.After(time.Second):
+				t.Fatal("protocol writer did not reach deterministic failure")
+			}
+			select {
+			case <-stream.closed:
+			case <-time.After(time.Second):
+				t.Fatal("writer-failed protocol stream was not closed at drain deadline")
+			}
+			got := awaitCursorChatAsyncResult(t, done)
+			require.NoError(t, got.err)
+			require.True(t, got.result.ClientDisconnect)
+			require.False(t, got.result.CaptureResponseComplete)
+		})
+	}
+}
+
+func TestCursorResponsesAndAnthropicCallerCancellationDrainsBoundedly(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		run  func(*gin.Context, cursorChatEventStream, cursorChatMeta) (*OpenAIForwardResult, error)
+	}{
+		{name: "responses", path: "/v1/responses", run: func(c *gin.Context, stream cursorChatEventStream, meta cursorChatMeta) (*OpenAIForwardResult, error) {
+			return (&OpenAIGatewayService{}).streamCursorResponses(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now(), nil, false, nil)
+		}},
+		{name: "anthropic", path: "/v1/messages", run: func(c *gin.Context, stream cursorChatEventStream, meta cursorChatMeta) (*OpenAIForwardResult, error) {
+			return (&OpenAIGatewayService{}).streamCursorAnthropic(c, cursorGatewayAccount(), stream, meta, cursorInputEstimate{}, time.Now())
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c, recorder := cursorProtocolTestContext(t, test.path)
+			requestCtx, cancel := context.WithCancel(c.Request.Context())
+			c.Request = c.Request.WithContext(requestCtx)
+			stream := newCursorAsyncChatTestStream()
+			defer stream.finish()
+			meta := cursorChatTestMeta(true, false)
+			meta.disconnectDrainTimeout = 100 * time.Millisecond
+			done := make(chan cursorChatAsyncResult, 1)
+			go func() {
+				result, err := test.run(c, stream, meta)
+				done <- cursorChatAsyncResult{result: result, err: err}
+			}()
+			go func() {
+				<-requestCtx.Done()
+				stream.events <- cursorpkg.AgentEvent{
+					Type: cursorpkg.AgentEventTurnEnded, ProviderTerminal: true,
+					Usage: &cursorpkg.AgentUsage{InputTokens: 17, OutputTokens: 9},
+				}
+				stream.finish()
+			}()
+			cancel()
+			got := awaitCursorChatAsyncResult(t, done)
+			require.NoError(t, got.err)
+			require.True(t, got.result.ClientDisconnect)
+			require.True(t, got.result.CaptureResponseComplete)
+			require.Equal(t, OpenAIUsage{InputTokens: 17, OutputTokens: 9}, got.result.Usage)
+			require.Empty(t, recorder.Body.Bytes())
+		})
+	}
+}
+
+func TestCursorResponsesAndAnthropicValidationIsNativeAndSecretFree(t *testing.T) {
+	t.Run("responses", func(t *testing.T) {
+		c, recorder := cursorProtocolTestContext(t, "/v1/responses")
+		result, err := (&OpenAIGatewayService{}).forwardCursorResponses(context.Background(), c, cursorGatewayAccount(), []byte(`{"model":`), "", false, time.Now())
+		require.Nil(t, result)
+		require.Error(t, err)
+		require.Contains(t, recorder.Body.String(), `"code":"invalid_request_error"`)
+		require.NotContains(t, recorder.Body.String(), "chat.completion")
+	})
+	t.Run("anthropic requires positive max_tokens", func(t *testing.T) {
+		c, recorder := cursorProtocolTestContext(t, "/v1/messages")
+		body := []byte(`{"model":"auto","max_tokens":0,"messages":[{"role":"user","content":"private-secret"}]}`)
+		result, err := (&OpenAIGatewayService{}).forwardCursorAnthropic(context.Background(), c, cursorGatewayAccount(), body, "")
+		require.Nil(t, result)
+		require.Error(t, err)
+		require.Contains(t, recorder.Body.String(), `"type":"invalid_request_error"`)
+		require.NotContains(t, recorder.Body.String(), "private-secret")
+		require.NotContains(t, recorder.Body.String(), "chat.completion")
+	})
 }
