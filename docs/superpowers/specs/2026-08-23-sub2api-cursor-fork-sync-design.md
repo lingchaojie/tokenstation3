@@ -103,7 +103,8 @@ Capture records remain uniform with the rest of DEV:
 - A stream response is captured as the caller-protocol SSE bytes produced by the final encoder.
 - Chat Completions, Responses, and Messages therefore retain their own requested delivery formats.
 - Connect acknowledgements, heartbeats, envelope headers, and other internal control frames never appear in the capture payload.
-- Parsed usage, finish reason, upstream failure, response completeness, and client disconnect are supplied as structured capture terminal metadata.
+- Parsed usage, upstream failure, response completeness, and client disconnect are supplied as structured capture terminal metadata.
+- Finish/stop reason is extracted from the delivered JSON/SSE bytes by the current capture extractor. Cursor must not populate the legacy `Final.StopReason` field.
 
 Cursor integrates with the current typed capture-attempt ownership model rather than creating a parallel capture lifecycle. Retry replacement, exact-once commit, client-disconnect causality, and preservation of provider terminal truth must match the latest DEV behavior at the integration baseline.
 
@@ -178,4 +179,3 @@ No live Cursor or production-account request is required for automated acceptanc
 - Cursor credentials, proxies, model discovery, scheduling, retry, and accounting behave as specified.
 - Backend tests, frontend lint/typecheck/tests, generated-code checks, migration tests, and focused Cursor parity tests pass.
 - No unsupported Cursor monitor or API-key bearer behavior is exposed.
-
