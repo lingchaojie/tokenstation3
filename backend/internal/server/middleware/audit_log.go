@@ -144,6 +144,8 @@ var auditActionOverrides = map[string]string{
 var auditBodyOmittedRoutes = map[string]string{
 	"POST /api/v1/auth/passkey/login/finish":                    "<credential-bearing body omitted>",
 	"POST /api/v1/user/passkeys/register/finish":                "<credential-bearing body omitted>",
+	"POST /api/v1/admin/cursor/oauth/poll":                      "<credential-bearing body omitted>",
+	"POST /api/v1/admin/cursor/oauth/exchange-code":             "<credential-bearing body omitted>",
 	"POST /api/v1/admin/accounts/import/codex-session":          "<credential-bearing body omitted>",
 	"PUT /api/v1/admin/accounts/:id/ollama-cloud-usage/session": "<credential-bearing body omitted>",
 	"POST /api/v1/chat/conversations/:id/messages":              "<prompt-bearing body omitted>",

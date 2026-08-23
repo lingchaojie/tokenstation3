@@ -11,26 +11,28 @@ import (
 // maxRedactDepth 限制递归深度以防止栈溢出
 const maxRedactDepth = 32
 
-var defaultSensitiveKeys = map[string]struct{}{
-	"authorization_code": {},
-	"code":               {},
-	"code_verifier":      {},
-	"access_token":       {},
-	"refresh_token":      {},
-	"id_token":           {},
-	"client_secret":      {},
-	"password":           {},
-}
-
 var defaultSensitiveKeyList = []string{
 	"authorization_code",
 	"code",
 	"code_verifier",
+	"verifier",
+	"challenge",
+	"state",
 	"access_token",
 	"refresh_token",
 	"id_token",
 	"client_secret",
 	"password",
+	"clear_text_password",
+	"session",
+	"session_id",
+	"session_token",
+	"web_session_token",
+	"workos_cursor_session_token",
+	"api_key",
+	"sso",
+	"sso_token",
+	"sso-rw",
 }
 
 type textRedactPatterns struct {
@@ -164,7 +166,7 @@ func buildKeyAlternation(extraKeys []string) string {
 	keys := make([]string, 0, len(defaultSensitiveKeyList)+len(extraKeys))
 	for _, k := range defaultSensitiveKeyList {
 		seen[k] = struct{}{}
-		keys = append(keys, regexp.QuoteMeta(k))
+		keys = append(keys, keyAlternationPattern(k))
 	}
 	for _, k := range extraKeys {
 		n := normalizeKey(k)
@@ -175,22 +177,34 @@ func buildKeyAlternation(extraKeys []string) string {
 			continue
 		}
 		seen[n] = struct{}{}
-		keys = append(keys, regexp.QuoteMeta(n))
+		keys = append(keys, keyAlternationPattern(n))
 	}
 	return strings.Join(keys, "|")
 }
 
+func keyAlternationPattern(key string) string {
+	parts := strings.FieldsFunc(key, isKeySeparator)
+	if len(parts) == 0 {
+		return regexp.QuoteMeta(key)
+	}
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		quoted = append(quoted, regexp.QuoteMeta(part))
+	}
+	return strings.Join(quoted, `[-_.]?`)
+}
+
 func buildKeySet(extraKeys []string) map[string]struct{} {
-	keys := make(map[string]struct{}, len(defaultSensitiveKeys)+len(extraKeys))
-	for k := range defaultSensitiveKeys {
-		keys[k] = struct{}{}
+	keys := make(map[string]struct{}, len(defaultSensitiveKeyList)+len(extraKeys))
+	for _, key := range defaultSensitiveKeyList {
+		keys[foldKey(key)] = struct{}{}
 	}
 	for _, key := range extraKeys {
-		normalized := normalizeKey(key)
-		if normalized == "" {
+		folded := foldKey(key)
+		if folded == "" {
 			continue
 		}
-		keys[normalized] = struct{}{}
+		keys[folded] = struct{}{}
 	}
 	return keys
 }
@@ -223,10 +237,29 @@ func redactValueWithDepth(value any, keys map[string]struct{}, depth int) any {
 }
 
 func isSensitiveKey(key string, keys map[string]struct{}) bool {
-	_, ok := keys[normalizeKey(key)]
+	_, ok := keys[foldKey(key)]
 	return ok
 }
 
 func normalizeKey(key string) string {
 	return strings.ToLower(strings.TrimSpace(key))
+}
+
+func foldKey(key string) string {
+	lowered := strings.ToLower(strings.TrimSpace(key))
+	if !strings.ContainsFunc(lowered, isKeySeparator) {
+		return lowered
+	}
+	var builder strings.Builder
+	builder.Grow(len(lowered))
+	for _, r := range lowered {
+		if !isKeySeparator(r) {
+			_, _ = builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+func isKeySeparator(r rune) bool {
+	return r == '_' || r == '-' || r == '.' || r == ' '
 }
