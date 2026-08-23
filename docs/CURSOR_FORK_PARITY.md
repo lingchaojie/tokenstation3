@@ -86,8 +86,11 @@ These tests are in `backend/internal/service/openai_gateway_cursor_bridges_test.
 ### `53294c5b3` — exact model IDs, OAuth-only accounts, authoritative observations, bounded gzip
 
 - `TestCursorAgentWireModelPreservesCursorIDsAndObservedThinkingVariants` — preserves model IDs and thinking/max variants.
-- `TestCursorAccountRejectsAPIKeyType` and `TestCursorAccountCreateAndUpdateRejectAPIKeyBeforeWrite` — `backend/internal/service/cursor_account_test.go`.
+- `TestCursorAccountTypeValidatorRequiresExactlyOAuth`, `TestCursorAccountCreateRejectsEveryNonOAuthTypeBeforeWrite`, and `TestAdminCursorAccountUpdateRejectsEveryNonOAuthTypeBeforeMutation` — `backend/internal/service/cursor_account_test.go`; cover every supported non-OAuth account type at validation, admin create, account-service create, and explicit admin update boundaries.
+- `TestCursorAccountServiceUpdateRejectsLegacyNonOAuthRowsBeforeMutation`, `TestAdminCursorAccountUpdateWithoutTypeRejectsLegacyNonOAuthRowsBeforeMutation`, `TestAdminCursorRecoveryRejectsEveryLegacyNonOAuthTypeBeforeMutation`, and `TestAdminCursorSchedulableToggleRejectsInvalidEnableButAllowsQuarantine` — the same file; close omitted-type update and admin recovery/enable paths while retaining quarantine.
+- `TestSchedulableEntQueriesExcludeLegacyCursorNonOAuthAccounts`, `TestSchedulableCapacityQueryExcludesLegacyCursorNonOAuthAccounts`, `TestGroupAvailabilityQueriesExcludeLegacyCursorNonOAuthAccounts`, and `TestDashboardNormalAccountCountExcludesLegacyCursorNonOAuthAccounts` — `backend/internal/repository/cursor_oauth_schedulable_query_test.go`; prove legacy non-OAuth rows cannot re-enter scheduling, capacity, group availability, or normal-account counts.
 - `TestCursorObservedModelsAreAuthoritativeNormalizedAndAliasDefault` and `TestGatewayCursorObservedSnapshotIsAuthoritativeAndFiltersAliases` — `backend/internal/service/cursor_observed_models_test.go`.
+- `TestApplicationOwnsCursorObservedModelsLifecycle` — `backend/cmd/server/wire_gen_test.go`; `TestProvideCursorObservedModelsServiceWaitsForExplicitStartAndStartsOnce` and `TestCursorObservedModelsServiceStopBeforeStartPreventsWorkerLaunch` — `backend/internal/service/cursor_observed_models_test.go`. Together they prove Application-owned explicit start, single initial refresh, cancellation/join on cleanup, and no post-stop worker launch.
 - `TestFrameReaderRejectsGzipExpansionOver64MiB` and `TestFrameReaderAcceptsGzipPayloadAt64MiB` — `backend/internal/pkg/cursor/envelope_test.go`.
 - `renders Cursor as OAuth-only and fills its whitelist from observed account snapshots` — `frontend/src/components/account/__tests__/CreateAccountModal.cursor.spec.ts`.
 
@@ -97,6 +100,7 @@ These tests are in `backend/internal/service/openai_gateway_cursor_bridges_test.
 - `TestConsumeCursorAgentEventsLocalLimitIsUnicodeSafeAndNotProviderTerminal` and `TestResolveCursorUsageAuthoritativeFallbackAndSaturation` — `backend/internal/service/openai_gateway_cursor_stream_test.go`.
 - `TestCursorChatStreamingProviderErrorAfterOutputIsSafeTerminalFailure` — `backend/internal/service/openai_gateway_cursor_chat_test.go`.
 - `TestCursorResponsesMidStreamFailureUsesNativeErrorWithoutCompleted`, `TestCursorAnthropicMidStreamFailureUsesNativeErrorWithoutMessageStop`, and `TestCursorResponsesAndAnthropicValidationIsNativeAndSecretFree` — `backend/internal/service/openai_gateway_cursor_bridges_test.go`.
+- `TestCursorTerminalErrorCaptureStoresExactCallerProtocolDelivery` — `backend/internal/handler/openai_cursor_dispatch_integration_test.go`; covers all six caller protocol/mode combinations against both real non-2xx Agent responses and HTTP-200 Connect error trailers, and requires capture `RawResponse` to equal the exact delivered terminal bytes.
 
 ### `3709f0f6c` — route/catalog gaps, audit redaction, and parallel tool draining
 
@@ -108,6 +112,8 @@ These tests are in `backend/internal/service/openai_gateway_cursor_bridges_test.
 - `TestCursorDeepLinkCanaryIsRedacted` and `TestCursorCredentialTextSpellingsAreRedacted` — `backend/internal/util/logredact/redact_test.go`.
 - `TestAgentStreamParallelToolCallsDrainTogether` — `backend/internal/pkg/cursor/agent_stream_test.go`.
 - `TestParseAgentServerMessagePreservesParallelMCPCalls` — `backend/internal/pkg/cursor/agent_response_test.go`.
+- `TestCursorToolIdentityIsStableAcrossAllCallerProtocolsAndModes` — `backend/internal/service/openai_gateway_cursor_bridges_test.go`; proves preserved/synthesized IDs and duplicate suppression remain identical across Chat, Responses, and Messages in buffered and streaming modes.
+- `TestConsumeCursorAgentEventsNormalizesToolIdentityIndependentOfEventOrder`, `TestConsumeCursorAgentEventsFlushesAcceptedToolsAtEveryTerminalBoundary`, and `TestConsumeCursorAgentEventsDoesNotEmitBufferedToolsAfterDownstreamError` — `backend/internal/service/openai_gateway_cursor_stream_test.go`; cover interleaved genuine/synthesized IDs, turn-end/channel-close/upstream-error/local-limit boundaries, and downstream-write failure.
 
 ## Local capture and route authority
 
