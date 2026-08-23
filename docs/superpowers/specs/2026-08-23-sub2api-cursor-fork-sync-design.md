@@ -1,7 +1,7 @@
 # Sub2API Cursor Fork Sync Design
 
-**Date:** 2026-08-23  
-**Status:** Approved  
+**Date:** 2026-08-23
+**Status:** Approved
 **Implementation branch:** `sub2api-cursor-fork-sync`
 
 ## Baselines
