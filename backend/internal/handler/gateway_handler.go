@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	pkgerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
@@ -1220,6 +1221,14 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	// Get available models from account configurations for the selected group platform.
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
+	if platform == service.PlatformCursor && len(availableModels) == 0 {
+		// Unlike static provider catalogues, Cursor must not appear available
+		// solely because a disabled account left a snapshot behind.
+		if _, ok := h.gatewayService.GetSchedulablePlatforms(c.Request.Context(), groupID)[service.PlatformCursor]; !ok {
+			writeModelsList(c, platform, nil)
+			return
+		}
+	}
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
 		fallbackModels := defaultModelIDsForPlatform(platform)
 		availableModels = filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models)
@@ -1250,6 +1259,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 	if platform == service.PlatformGrok {
 		writeGrokModelsList(c, xai.DefaultModelIDs())
+		return
+	}
+	if platform == service.PlatformCursor {
+		writeModelsList(c, platform, cursorpkg.DefaultModelIDs())
 		return
 	}
 
@@ -1465,6 +1478,8 @@ func defaultModelIDsForPlatform(platform string) []string {
 		return ids
 	case service.PlatformGrok:
 		return xai.DefaultModelIDs()
+	case service.PlatformCursor:
+		return cursorpkg.DefaultModelIDs()
 	default:
 		ids := make([]string, 0, len(claude.DefaultModels))
 		for _, model := range claude.DefaultModels {

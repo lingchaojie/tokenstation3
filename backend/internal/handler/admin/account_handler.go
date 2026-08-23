@@ -2787,6 +2787,21 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	// Cursor observations are account-scoped and authoritative. Until the
+	// first successful AvailableModels discovery, use the fork fallback
+	// catalogue supplied by the account's implicit model mapping.
+	if account.Platform == service.PlatformCursor {
+		ids := service.CursorAvailableModelIDs(account)
+		models := make([]claude.Model, 0, len(ids))
+		for _, id := range ids {
+			models = append(models, claude.Model{
+				ID: id, Type: "model", DisplayName: id,
+			})
+		}
+		response.Success(c, models)
+		return
+	}
+
 	// Handle Claude/Anthropic accounts
 	// For OAuth and Setup-Token accounts: return default models
 	if account.IsOAuth() {

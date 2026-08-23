@@ -25,6 +25,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -120,6 +121,7 @@ type AccountTestService struct {
 	claudeTokenProvider       *ClaudeTokenProvider
 	kiroTokenProvider         *KiroTokenProvider
 	grokTokenProvider         *GrokTokenProvider
+	cursorTokenProvider       *CursorTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
@@ -132,6 +134,12 @@ type AccountTestService struct {
 func (s *AccountTestService) SetSettingService(settingService *SettingService) {
 	if s != nil {
 		s.settingService = settingService
+	}
+}
+
+func (s *AccountTestService) SetCursorTokenProvider(tokenProvider *CursorTokenProvider) {
+	if s != nil {
+		s.cursorTokenProvider = tokenProvider
 	}
 }
 
@@ -288,11 +296,104 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.routeAntigravityTest(c, account, modelID, prompt)
 	}
 
+	// Never let a Cursor bearer fall through to the Claude probe below.
+	if account.Platform == PlatformCursor {
+		return s.testCursorAccountConnection(c, account)
+	}
+
 	if isKiroDirectModeAccount(account) {
 		return s.testKiroAccountConnection(c, account, modelID)
 	}
 
 	return s.testClaudeAccountConnection(c, account, modelID)
+}
+
+// testCursorAccountConnection verifies transport and credential readiness via
+// Cursor's raw unary api2 AvailableModels RPC. It intentionally never opens a
+// billed Agent/Run or Anthropic chat request.
+func (s *AccountTestService) testCursorAccountConnection(c *gin.Context, account *Account) error {
+	ctx := c.Request.Context()
+	s.prepareGrokTestSSE(c)
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: "cursor/available-models"})
+
+	if s.httpUpstream == nil {
+		return s.sendErrorAndEnd(c, "HTTP upstream not configured")
+	}
+	proxyURL, err := cursorResolvedProxyURL(account, time.Now())
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
+
+	token := ""
+	if s.cursorTokenProvider != nil && account.IsCursorOAuth() {
+		resolved, tokenErr := s.cursorTokenProvider.GetAccessToken(ctx, account)
+		if tokenErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Cursor credential is unavailable: %s", tokenErr.Error()))
+		}
+		token = strings.TrimSpace(resolved)
+	} else {
+		token = strings.TrimSpace(account.GetCursorAccessToken())
+	}
+	if token == "" {
+		return s.sendErrorAndEnd(c, "No Cursor access token available")
+	}
+
+	baseURL, err := s.validateUpstreamBaseURL(account.GetCursorBaseURL())
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Cursor base URL: %s", err.Error()))
+	}
+	targetURL := strings.TrimRight(baseURL, "/") + cursorpkg.EndpointAvailableModels
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		targetURL,
+		bytes.NewReader(cursorpkg.EncodeAvailableModelsRequest(false, false)),
+	)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create Cursor request")
+	}
+	copyCursorHeaders(req.Header, cursorpkg.BuildHeaders(token, cursorpkg.ContentTypeProto))
+	account.ApplyHeaderOverrides(req.Header)
+
+	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Cursor AvailableModels request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := readCursorAvailableModelsBody(resp.Body)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read Cursor AvailableModels response: %s", err.Error()))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Cursor AvailableModels returned HTTP %d", resp.StatusCode))
+	}
+	models, err := cursorpkg.ParseAvailableModelsResponse(body)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse Cursor AvailableModels response: %s", err.Error()))
+	}
+	ids := cursorObservedModelIDs(models)
+	if len(ids) == 0 {
+		return s.sendErrorAndEnd(c, "Cursor AvailableModels returned no usable models")
+	}
+
+	// AvailableModels accepts a browser cookie that the Agent endpoint rejects;
+	// report success only for a client/session bearer (or an upgraded token
+	// returned by CursorTokenProvider).
+	if cursorpkg.IsWebSessionToken(token) {
+		return s.sendErrorAndEnd(c, "Cursor credential is a web session token and is not chat-ready; complete the deep-link upgrade")
+	}
+	if err := persistCursorObservedModels(ctx, s.accountRepo, account.ID, ids, time.Now()); err != nil {
+		return s.sendErrorAndEnd(c, "Failed to persist Cursor AvailableModels snapshot")
+	}
+
+	preview := ids
+	if len(preview) > 8 {
+		preview = preview[:8]
+	}
+	s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf(
+		"Cursor credential is valid. %d models available: %s", len(ids), strings.Join(preview, ", "))})
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
 }
 
 func (s *AccountTestService) testCNProviderChatCompletionsConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
