@@ -396,7 +396,7 @@ func sanitizeCursorImportValue(value any) (any, bool) {
 func cursorImportSensitiveOperatorKey(key string) bool {
 	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(key)))
 	switch normalized {
-	case "authorization", "proxyauthorization", "cookie", "setcookie", "xapikey", "apikey", "accesstoken", "refreshtoken", "websessiontoken", "password", "ssotoken", "token", "secret", "clientsecret":
+	case "authorization", "proxyauthorization", "cookie", "setcookie", "xapikey", "apikey", "accesstoken", "refreshtoken", "websessiontoken", "sessiontoken", "sessionid", "state", "verifier", "codeverifier", "challenge", "password", "ssotoken", "token", "secret", "clientsecret":
 		return true
 	default:
 		return service.IsSensitiveCredentialKey(key)

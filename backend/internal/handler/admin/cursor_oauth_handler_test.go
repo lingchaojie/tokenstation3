@@ -238,7 +238,11 @@ func TestCursorOAuthImportSanitizesNestedCredentialsAndExtra(t *testing.T) {
 	r.POST("/sso-to-oauth", h.CreateAccountsFromSSO)
 	const credentialCanary = "credential-authorization-canary"
 	const extraCanary = "extra-cookie-canary"
-	body := `{"sso_token":"crsr_safe","credentials":{"header_overrides":{"Authorization":"` + credentialCanary + `","X-Safe":"safe-value","nested":[{"Cookie":"nested-cookie-canary","X-List-Safe":"list-safe"}]},"custom_headers":{"X-Operator":"operator-safe"}},"extra":{"custom_headers":{"Cookie":"` + extraCanary + `","X-Extra-Safe":"extra-safe"},"list":[{"Proxy-Authorization":"proxy-canary","X-List-Extra":"list-extra-safe"}]}}`
+	secretCanaries := []string{
+		"session-token-canary", "session_token-canary", "state-canary", "verifier-canary",
+		"code-verifier-canary", "challenge-canary", "session-id-canary",
+	}
+	body := `{"sso_token":"crsr_safe","credentials":{"header_overrides":{"Authorization":"` + credentialCanary + `","Session-Token":"` + secretCanaries[0] + `","session_token":"` + secretCanaries[1] + `","X-Safe":"safe-value","nested":[{"Cookie":"nested-cookie-canary","State":"` + secretCanaries[2] + `","Verifier":"` + secretCanaries[3] + `","X-List-Safe":"list-safe"}]},"custom_headers":{"Code-Verifier":"` + secretCanaries[4] + `","X-Operator":"operator-safe"}},"extra":{"custom_headers":{"Cookie":"` + extraCanary + `","challenge":"` + secretCanaries[5] + `","X-Extra-Safe":"extra-safe"},"list":[{"Proxy-Authorization":"proxy-canary","session_id":"` + secretCanaries[6] + `","X-List-Extra":"list-extra-safe"}]}}`
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/sso-to-oauth", strings.NewReader(body)))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -248,6 +252,10 @@ func TestCursorOAuthImportSanitizesNestedCredentialsAndExtra(t *testing.T) {
 	require.NotContains(t, string(created), extraCanary)
 	require.NotContains(t, string(created), "nested-cookie-canary")
 	require.NotContains(t, string(created), "proxy-canary")
+	for _, canary := range secretCanaries {
+		require.NotContains(t, string(created), canary)
+		require.NotContains(t, w.Body.String(), canary)
+	}
 	require.Contains(t, string(created), "safe-value")
 	require.Contains(t, string(created), "operator-safe")
 	require.Contains(t, string(created), "extra-safe")
