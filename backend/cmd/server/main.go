@@ -168,6 +168,7 @@ func runMainServer() {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
 	defer app.Cleanup()
+	app.Start()
 
 	// 启动服务器
 	go func() {

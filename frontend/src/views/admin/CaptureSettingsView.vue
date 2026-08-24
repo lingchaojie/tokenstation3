@@ -96,6 +96,13 @@
               <Toggle v-model="form.platforms.grok" />
             </SettingRow>
             <SettingRow
+              data-test="capture-cursor"
+              :title="t('admin.captureSettings.platforms.cursor')"
+              :description="t('admin.captureSettings.platforms.cursorDescription')"
+            >
+              <Toggle v-model="form.platforms.cursor" />
+            </SettingRow>
+            <SettingRow
               data-test="capture-openai"
               :title="t('admin.captureSettings.platforms.openai')"
               :description="t('admin.captureSettings.platforms.openaiDescription')"
@@ -324,7 +331,7 @@ const historyRanges: CaptureHistoryRange[] = ['24h', '7d', '30d']
 const defaultPolicy = (): CaptureRuntimePolicy => ({
   version: 1,
   enabled: false,
-  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
+  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true, cursor: true },
   outcomes: { success: true, terminal_error: true },
   content: { raw_request: true, raw_response: true, request_headers: true, response_headers: true },
   model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'] },

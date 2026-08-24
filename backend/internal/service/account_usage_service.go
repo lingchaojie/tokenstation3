@@ -473,6 +473,12 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return usage, err
 	}
 
+	// Cursor has no active usage endpoint. Do not let its OAuth access token
+	// fall through to the Anthropic usage client.
+	if account.Platform == PlatformCursor {
+		return nil, fmt.Errorf("cursor accounts do not support active usage query; only passive usage statistics are available")
+	}
+
 	// 只有oauth类型账号可以通过API获取usage（有profile scope）
 	if account.CanGetUsage() {
 		var apiResp *ClaudeUsageResponse

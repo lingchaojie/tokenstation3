@@ -110,7 +110,10 @@ const groups = ref<Array<{ id: number; name: string; platform: string }>>([])
 
 const platformOptions = computed(() => [
   { value: '', label: t('common.all') },
-  ...CONCRETE_PLATFORM_OPTIONS
+  ...CONCRETE_PLATFORM_OPTIONS.map((option) => ({
+    ...option,
+    label: t(`admin.groups.platforms.${option.value}`, option.label)
+  }))
 ])
 
 const timeRangeOptions = computed(() => [

@@ -1907,6 +1907,9 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	if err != nil {
 		return nil, err
 	}
+	if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+		return nil, err
+	}
 
 	result := &SuccessfulTestRecoveryResult{}
 	if account.Status == StatusError {

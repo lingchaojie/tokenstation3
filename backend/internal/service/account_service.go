@@ -29,6 +29,15 @@ type OAuthRefreshPageOptions struct {
 	IncludeSetupToken    bool
 	RequireRefreshToken  bool
 	ExcludeRetryCooldown bool
+
+	// AltRefreshCredentialSources allows a platform to qualify from credential
+	// sources other than refresh_token when RequireRefreshToken is enabled.
+	AltRefreshCredentialSources []AltRefreshCredentialSource
+}
+
+type AltRefreshCredentialSource struct {
+	Platform       string
+	CredentialKeys []string
 }
 
 // OAuthRefreshCandidatePage keeps cursor metadata from the raw SQL ID page.
@@ -208,6 +217,9 @@ func NewAccountService(accountRepo AccountRepository, groupRepo GroupRepository)
 
 // Create 创建账号
 func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (*Account, error) {
+	if err := validateCursorAccountType(req.Platform, req.Type); err != nil {
+		return nil, err
+	}
 	// 验证分组是否存在（如果指定了分组）
 	if len(req.GroupIDs) > 0 {
 		if err := s.validateGroupIDsExist(ctx, req.GroupIDs); err != nil {
@@ -246,7 +258,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini || g.Platform == PlatformKiro || g.Platform == PlatformGrok) {
+			if g.RequireOAuthOnly && groupSupportsOAuthOnlyFilter(g.Platform) {
 				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
 			}
 		}
@@ -303,6 +315,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get account: %w", err)
+	}
+	if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+		return nil, err
 	}
 
 	// 更新字段
@@ -371,7 +386,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini || g.Platform == PlatformKiro || g.Platform == PlatformGrok) {
+			if g.RequireOAuthOnly && groupSupportsOAuthOnlyFilter(g.Platform) {
 				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
 			}
 		}

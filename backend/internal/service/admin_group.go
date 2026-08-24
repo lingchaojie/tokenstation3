@@ -11,6 +11,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
@@ -73,6 +74,9 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 	if err != nil {
 		return nil, err
 	}
+	if platform == PlatformCursor {
+		return cursorGroupModelCandidateIDs(accounts), nil
+	}
 
 	seen := make(map[string]struct{}, len(candidates))
 	for _, model := range candidates {
@@ -122,6 +126,8 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return ids
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
+	case PlatformCursor:
+		return cursorpkg.DefaultModelIDs()
 	default:
 		ids := make([]string, 0, len(claude.DefaultModels))
 		for _, model := range claude.DefaultModels {
@@ -129,6 +135,27 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		}
 		return ids
 	}
+}
+
+func cursorGroupModelCandidateIDs(accounts []Account) []string {
+	ids := make([]string, 0)
+	hasCursorAccount := false
+	needsFallback := false
+	for i := range accounts {
+		account := &accounts[i]
+		if account.Platform != PlatformCursor {
+			continue
+		}
+		hasCursorAccount = true
+		ids = append(ids, CursorAvailableModelIDs(account)...)
+		if !cursorObservedModelsAccountEligible(account) || len(CursorObservedModelIDs(account.Extra)) == 0 {
+			needsFallback = true
+		}
+	}
+	if !hasCursorAccount || needsFallback {
+		ids = append(ids, cursorpkg.DefaultModelIDs()...)
+	}
+	return sortedCursorModelIDs(ids)
 }
 
 func defaultAllowImageGenerationForPlatform(platform string) bool {
@@ -146,7 +173,9 @@ func groupSupportsOAuthOnlyFilter(platform string) bool {
 		platform == PlatformAntigravity ||
 		platform == PlatformAnthropic ||
 		platform == PlatformGemini ||
-		platform == PlatformGrok
+		platform == PlatformKiro ||
+		platform == PlatformGrok ||
+		platform == PlatformCursor
 }
 
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {

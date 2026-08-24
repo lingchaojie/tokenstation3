@@ -21,6 +21,7 @@ func TestDefaultCaptureRuntimePolicyKeepsOpenAIOff(t *testing.T) {
 	require.True(t, got.Platforms.Gemini)
 	require.True(t, got.Platforms.Antigravity)
 	require.True(t, got.Platforms.Grok)
+	require.True(t, got.Platforms.Cursor)
 	require.True(t, got.Outcomes.Success)
 	require.True(t, got.Outcomes.TerminalError)
 	require.True(t, got.Content.RawRequest)
@@ -29,6 +30,74 @@ func TestDefaultCaptureRuntimePolicyKeepsOpenAIOff(t *testing.T) {
 	require.True(t, got.Content.ResponseHeaders)
 	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Anthropic)
 	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Kiro)
+}
+
+func TestCursorCaptureRuntimePolicyLegacyStoredValueKeepsCursorOff(t *testing.T) {
+	policy, err := DecodeCaptureRuntimePolicy([]byte(`{
+      "version":1,"enabled":true,
+      "platforms":{"anthropic":true,"kiro":true,"openai":false,"gemini":true,"antigravity":true,"grok":true},
+      "outcomes":{"success":true,"terminal_error":true},
+      "content":{"raw_request":true,"raw_response":true,"request_headers":true,"response_headers":true},
+      "group_ids":[],"user_ids":[]
+    }`))
+	require.NoError(t, err)
+	require.False(t, policy.Platforms.Cursor, "an already-stored version-one policy must not silently enable Cursor")
+
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	_, ok := compiled.Decide(PlatformCursor, CaptureOutcomeSuccess, 1, nil)
+	require.False(t, ok)
+}
+
+func TestCursorCaptureRuntimePolicyIndependentSwitchKeepsAllFilters(t *testing.T) {
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	policy.Platforms.OpenAI = false
+	policy.Platforms.Anthropic = false
+	policy.UserIDs = []int64{9}
+	policy.GroupIDs = []int64{7}
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+
+	group := int64(7)
+	_, ok := compiled.Decide(PlatformCursor, CaptureOutcomeSuccess, 9, &group)
+	require.True(t, ok, "Cursor must not alias disabled OpenAI or Anthropic switches")
+	_, ok = compiled.Decide(PlatformCursor, CaptureOutcomeSuccess, 8, &group)
+	require.False(t, ok, "the existing user filter remains authoritative")
+	wrongGroup := int64(8)
+	_, ok = compiled.Decide(PlatformCursor, CaptureOutcomeSuccess, 9, &wrongGroup)
+	require.False(t, ok, "the existing group filter remains authoritative")
+
+	policy.Content.RawRequest = false
+	policy.Content.ResponseHeaders = false
+	compiled, err = CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	content, ok := compiled.Decide(PlatformCursor, CaptureOutcomeSuccess, 9, &group)
+	require.True(t, ok)
+	require.False(t, content.RawRequest)
+	require.False(t, content.ResponseHeaders)
+
+	policy.Outcomes.Success = false
+	compiled, err = CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	_, ok = compiled.Decide(PlatformCursor, CaptureOutcomeSuccess, 9, &group)
+	require.False(t, ok, "the existing outcome filter remains authoritative")
+	_, ok = compiled.Decide(PlatformCursor, CaptureOutcomeTerminalError, 9, &group)
+	require.True(t, ok)
+
+	policy.Enabled = false
+	compiled, err = CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	_, ok = compiled.Decide(PlatformCursor, CaptureOutcomeTerminalError, 9, &group)
+	require.False(t, ok, "the master switch remains authoritative")
+
+	policy.Enabled = true
+	policy.Outcomes.Success = true
+	policy.Platforms.Cursor = false
+	compiled, err = CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	_, ok = compiled.Decide(PlatformCursor, CaptureOutcomeSuccess, 9, &group)
+	require.False(t, ok, "the independent Cursor switch is authoritative")
 }
 
 func TestNormalizeCaptureRuntimePolicySortsAndDeduplicatesIDs(t *testing.T) {
@@ -245,7 +314,7 @@ func TestCompiledCapturePolicyMatchesEveryLocallySupportedPlatform(t *testing.T)
 	compiled, err := CompileCaptureRuntimePolicy(policy)
 	require.NoError(t, err)
 
-	for _, platform := range []string{"anthropic", "kiro", "openai", "gemini", "antigravity", "grok"} {
+	for _, platform := range []string{"anthropic", "kiro", "openai", "gemini", "antigravity", "grok", "cursor"} {
 		t.Run(platform, func(t *testing.T) {
 			_, ok := compiled.Decide(platform, CaptureOutcomeSuccess, 1, nil)
 			require.True(t, ok)

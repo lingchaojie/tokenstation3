@@ -79,7 +79,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(apiMocks.getPlatformQuotas).toHaveBeenCalledWith(99)
   })
 
-  it('空数据渲染全部 9 个 platform 行', async () => {
+  it('空数据渲染全部 10 个 platform 行', async () => {
     const w = await mountAndOpen()
     const html = w.html()
     expect(html).toContain('anthropic')
@@ -91,6 +91,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(html).toContain('kimi')
     expect(html).toContain('zhipu')
     expect(html).toContain('deepseek')
+    expect(html).toContain('cursor')
   })
 
   it('已有数据正确填充 limit input', async () => {
@@ -102,13 +103,13 @@ describe('UserPlatformQuotaModal', () => {
     })
     const w = await mountAndOpen()
     const inputs = w.findAll('input[type=number]')
-    // 9 platforms × 3 windows = 27 inputs
-    expect(inputs.length).toBe(27)
+    // 10 platforms × 3 windows = 30 inputs
+    expect(inputs.length).toBe(30)
     // 第一个 input 是 anthropic.daily = 10
     expect((inputs[0].element as HTMLInputElement).value).toBe('10')
   })
 
-  it('保存提交完整 9 platform payload，并保留国产平台现有值', async () => {
+  it('保存提交完整 10 platform payload，并保留国产平台现有值', async () => {
     apiMocks.getPlatformQuotas.mockResolvedValueOnce({
       platform_quotas: [
         { platform: 'openai', daily_limit_usd: null, weekly_limit_usd: 20, monthly_limit_usd: null,
@@ -131,7 +132,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(apiMocks.updatePlatformQuotas).toHaveBeenCalledTimes(1)
     const [uid, payload] = apiMocks.updatePlatformQuotas.mock.calls[0]
     expect(uid).toBe(99)
-    expect(payload).toHaveLength(9)
+    expect(payload).toHaveLength(10)
     const openai = payload.find((p: any) => p.platform === 'openai')
     expect(openai.weekly_limit_usd).toBe(20)
     expect(payload.find((p: any) => p.platform === 'kimi')).toMatchObject({
@@ -142,6 +143,9 @@ describe('UserPlatformQuotaModal', () => {
     })
     expect(payload.find((p: any) => p.platform === 'deepseek')).toMatchObject({
       daily_limit_usd: 5, weekly_limit_usd: 20, monthly_limit_usd: 60,
+    })
+    expect(payload.find((p: any) => p.platform === 'cursor')).toMatchObject({
+      daily_limit_usd: null, weekly_limit_usd: null, monthly_limit_usd: null,
     })
   })
 

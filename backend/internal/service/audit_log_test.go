@@ -63,17 +63,31 @@ func TestRedactAuditBody_JSONRedactsSecrets(t *testing.T) {
 	}
 }
 
-// 裸键 "session"（Ollama Cloud 会话保存的请求体字段）值整体就是浏览器 Cookie 明文，
-// 必须命中键级脱敏；session_id 等运行态标识不受影响，保留以便追责。
+// 裸键 "session" 与 Cursor/Grok 深链登录的 session_id 都是凭证材料，必须脱敏。
 func TestRedactAuditBody_BareSessionKeyRedacted(t *testing.T) {
 	raw := []byte(`{"session": "wos-session=cookie-canary", "session_id": "sid-visible"}`)
 	out := RedactAuditBody(raw, "application/json")
 
-	if strings.Contains(out, "cookie-canary") {
-		t.Fatalf("redacted body still contains the session cookie: %s", out)
+	for _, secret := range []string{"cookie-canary", "sid-visible"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("redacted body still contains %q: %s", secret, out)
+		}
 	}
-	if !strings.Contains(out, "sid-visible") {
-		t.Fatalf("session_id should be preserved for accountability: %s", out)
+}
+
+func TestRedactAuditBody_CursorDeepLinkPasswordAndSSOFields(t *testing.T) {
+	raw := []byte(`{"state":"CURSOR_TOKEN_CANARY","verifier":"verifier-canary",` +
+		`"challenge":"challenge-canary","rt":"refresh-canary",` +
+		`"password":"password-canary","sso":"sso-canary","sso-rw":"sso-rw-canary"}`)
+	out := RedactAuditBody(raw, "application/json")
+
+	for _, secret := range []string{
+		"CURSOR_TOKEN_CANARY", "verifier-canary", "challenge-canary", "refresh-canary",
+		"password-canary", "sso-canary", "sso-rw-canary",
+	} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("redacted body still contains %q: %s", secret, out)
+		}
 	}
 }
 

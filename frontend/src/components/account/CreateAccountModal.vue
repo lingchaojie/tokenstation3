@@ -50,7 +50,7 @@
         <input
           v-model="form.name"
           type="text"
-          :required="!isGrokSSOInputMethod"
+          :required="!isGrokSSOInputMethod && !isCursorSSOInputMethod"
           class="input"
           :placeholder="t('admin.accounts.enterAccountName')"
           data-tour="account-form-name"
@@ -172,6 +172,19 @@
           >
             <PlatformIcon platform="grok" size="sm" />
             Grok
+          </button>
+          <button
+            type="button"
+            @click="form.platform = 'cursor'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'cursor'
+                ? 'bg-white text-indigo-600 shadow-sm dark:bg-dark-600 dark:text-indigo-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="cursor" size="sm" />
+            Cursor
           </button>
         </div>
         <!-- CN providers row: Kimi / Zhipu GLM / DeepSeek -->
@@ -722,6 +735,26 @@
             </div>
           </button>
         </div>
+      </div>
+
+      <div v-if="form.platform === 'cursor'">
+        <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
+        <div class="mt-2 grid grid-cols-1 gap-3" data-tour="account-form-type">
+          <button
+            type="button"
+            @click="accountCategory = 'oauth-based'"
+            class="flex items-center gap-3 rounded-lg border-2 border-indigo-500 bg-indigo-50 p-3 text-left dark:bg-indigo-900/20"
+          >
+            <PlatformIcon platform="cursor" size="sm" />
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">OAuth</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.cursorOauth') }}</span>
+            </div>
+          </button>
+        </div>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400" data-testid="cursor-oauth-only-hint">
+          {{ t('admin.accounts.cursor.oauthOnlyHint') }}
+        </p>
       </div>
 
       <!-- Account Mode Selection (Kimi / Zhipu / DeepSeek) -->
@@ -2522,9 +2555,33 @@
         </div>
       </div>
 
+      <div
+        v-if="form.platform === 'cursor' && isOAuthFlow"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.cursorCustomBaseUrl.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.cursorCustomBaseUrl.hint') }}</p>
+          </div>
+          <button
+            type="button"
+            data-testid="cursor-custom-base-url-toggle"
+            @click="cursorOAuthCustomBaseUrlEnabled = !cursorOAuthCustomBaseUrlEnabled"
+            :class="['relative inline-flex h-6 w-11 rounded-full border-2 border-transparent', cursorOAuthCustomBaseUrlEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600']"
+          >
+            <span :class="['inline-block h-5 w-5 rounded-full bg-white transition', cursorOAuthCustomBaseUrlEnabled ? 'translate-x-5' : 'translate-x-0']" />
+          </button>
+        </div>
+        <div v-if="cursorOAuthCustomBaseUrlEnabled" class="space-y-2">
+          <input v-model="cursorOAuthBaseUrl" type="text" class="input" data-testid="cursor-custom-base-url-input" :placeholder="t('admin.accounts.cursorCustomBaseUrl.placeholder')" />
+          <CursorBaseUrlPresets @select="cursorOAuthBaseUrl = $event" />
+        </div>
+      </div>
+
       <!-- OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(form.platform === 'openai' || form.platform === 'kiro' || form.platform === 'grok' || form.platform === 'anthropic') && accountCategory === 'oauth-based'"
+        v-if="(form.platform === 'openai' || form.platform === 'kiro' || form.platform === 'grok' || form.platform === 'cursor' || form.platform === 'anthropic') && accountCategory === 'oauth-based'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -3806,17 +3863,17 @@
         :loading="currentOAuthLoading"
         :error="currentOAuthError"
         :show-help="form.platform === 'anthropic'"
-        :show-proxy-warning="form.platform !== 'openai' && form.platform !== 'grok' && !!form.proxy_id"
+        :show-proxy-warning="form.platform !== 'openai' && form.platform !== 'grok' && form.platform !== 'cursor' && !!form.proxy_id"
         :allow-multiple="form.platform === 'anthropic'"
         :show-cookie-option="form.platform === 'anthropic'"
-        :show-refresh-token-option="form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok'"
+        :show-refresh-token-option="form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok' || form.platform === 'cursor'"
         :show-mobile-refresh-token-option="form.platform === 'openai'"
         :show-session-token-option="false"
         :show-access-token-option="false"
         :show-codex-session-import-option="form.platform === 'openai'"
         :show-agent-identity-option="form.platform === 'openai'"
         :show-codex-pat-option="form.platform === 'openai'"
-        :show-sso-option="form.platform === 'grok'"
+        :show-sso-option="form.platform === 'grok' || form.platform === 'cursor'"
         :show-email-password-option="false"
         :show-manual-option="true"
         :initial-input-method="'manual'"
@@ -3831,9 +3888,13 @@
         @validate-session-token="handleValidateSessionToken"
         @import-codex-session="handleOpenAIImportCodexSession"
         @import-codex-pat="handleOpenAIImportCodexPAT"
-        @import-sso="handleGrokImportSSO"
+        @import-sso="handleImportSSO"
         @authorize-password="handleGrokAuthorizePassword"
       />
+
+      <div v-if="form.platform === 'cursor' && cursorOAuth.polling.value" data-testid="cursor-oauth-polling" class="rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-700">
+        {{ t('admin.accounts.oauth.cursor.waitingForAuthorization') }}
+      </div>
 
     </div>
 
@@ -4194,6 +4255,7 @@ import {
   buildModelMappingObject,
   fetchAntigravityDefaultMappings,
   fetchKiroDefaultMappings,
+  registerCursorObservedModels,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 import { useAuthStore } from '@/stores/auth'
@@ -4209,6 +4271,7 @@ import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useKiroOAuth } from '@/composables/useKiroOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { useCursorOAuth } from '@/composables/useCursorOAuth'
 import type {
   Proxy,
   AdminGroup,
@@ -4234,6 +4297,7 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import CursorBaseUrlPresets from '@/components/account/CursorBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
@@ -4244,6 +4308,7 @@ import {
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   isHeaderOverrideCapable,
+  isCustomCursorBaseUrl,
   isUpstreamBillingProbeCapable,
   validateHeaderOverrideRows,
   type CnAccountMode,
@@ -4283,6 +4348,8 @@ interface OAuthFlowExposed {
   oauthLoginOption: string
   ssoCookie: string
   inputMethod: AuthInputMethod
+  clearRefreshToken: () => void
+  clearSSOInput: () => void
   reset: () => void
 }
 
@@ -4299,6 +4366,7 @@ const oauthStepTitle = computed(() => {
       : t('admin.accounts.oauth.kiro.title')
   }
   if (form.platform === 'grok') return t('admin.accounts.oauth.grok.title')
+  if (form.platform === 'cursor') return t('admin.accounts.oauth.cursor.title')
   return t('admin.accounts.oauth.title')
 })
 
@@ -4380,6 +4448,7 @@ const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
 const kiroOAuth = useKiroOAuth() // For Kiro OAuth / Builder ID
 const grokOAuth = useGrokOAuth() // For Grok OAuth
+const cursorOAuth = useCursorOAuth()
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
@@ -4388,6 +4457,7 @@ const currentAuthUrl = computed(() => {
   if (form.platform === 'antigravity') return antigravityOAuth.authUrl.value
   if (form.platform === 'kiro') return kiroOAuth.authUrl.value
   if (form.platform === 'grok') return grokOAuth.authUrl.value
+  if (form.platform === 'cursor') return cursorOAuth.authUrl.value
   return oauth.authUrl.value
 })
 
@@ -4402,6 +4472,7 @@ const currentSessionId = computed(() => {
   if (form.platform === 'antigravity') return antigravityOAuth.sessionId.value
   if (form.platform === 'kiro') return kiroOAuth.sessionId.value
   if (form.platform === 'grok') return grokOAuth.sessionId.value
+  if (form.platform === 'cursor') return cursorOAuth.sessionId.value
   return oauth.sessionId.value
 })
 
@@ -4411,6 +4482,7 @@ const currentOAuthLoading = computed(() => {
   if (form.platform === 'antigravity') return antigravityOAuth.loading.value
   if (form.platform === 'kiro') return kiroOAuth.loading.value
   if (form.platform === 'grok') return grokOAuth.loading.value
+  if (form.platform === 'cursor') return cursorOAuth.loading.value
   return oauth.loading.value
 })
 
@@ -4420,6 +4492,7 @@ const currentOAuthError = computed(() => {
   if (form.platform === 'antigravity') return antigravityOAuth.error.value
   if (form.platform === 'kiro') return kiroOAuth.error.value
   if (form.platform === 'grok') return grokOAuth.error.value
+  if (form.platform === 'cursor') return cursorOAuth.error.value
   return oauth.error.value
 })
 
@@ -4630,6 +4703,10 @@ const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 // Grok OAuth：自定义上游地址（base_url 仅改写转发端点，OAuth 授权/刷新不受影响）
 const grokOAuthCustomBaseUrlEnabled = ref(false)
 const grokOAuthBaseUrl = ref('')
+const cursorOAuthCustomBaseUrlEnabled = ref(false)
+const cursorOAuthBaseUrl = ref('')
+let cursorRefreshBatchRunning = false
+let cursorObservedRequestGeneration = 0
 
 // Grok OAuth 三条创建路径（授权码/RT 批量/SSO 批量）共用的前置校验。
 // 授权码路径必须在兑换 code 之前调用，避免校验失败时白白消耗一次性授权码。
@@ -5098,6 +5175,7 @@ const isOAuthFlow = computed(() => {
 
 const isKiroImportMode = computed(() => form.platform === 'kiro' && kiroAccountType.value === 'import')
 const isGrokSSOInputMethod = computed(() => form.platform === 'grok' && oauthFlowRef.value?.inputMethod === 'sso_cookie')
+const isCursorSSOInputMethod = computed(() => form.platform === 'cursor' && oauthFlowRef.value?.inputMethod === 'sso_cookie')
 
 const isManualInputMethod = computed(() => {
   return oauthFlowRef.value?.inputMethod === 'manual'
@@ -5126,6 +5204,9 @@ const canExchangeCode = computed(() => {
   }
   if (form.platform === 'grok') {
     return authCode.trim() && grokOAuth.sessionId.value && !grokOAuth.loading.value
+  }
+  if (form.platform === 'cursor') {
+    return authCode.trim() && cursorOAuth.sessionId.value && !cursorOAuth.loading.value
   }
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
 })
@@ -5197,6 +5278,7 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
+    const cursorRequestGeneration = ++cursorObservedRequestGeneration
     // Reset base URL based on platform
     apiKeyBaseUrl.value =
       (newPlatform === 'openai')
@@ -5238,12 +5320,27 @@ watch(
       antigravityModelRestrictionMode.value = 'mapping'
       kiroModelMappings.value = []
     }
-    if (newPlatform === 'grok') {
+    if (newPlatform === 'grok' || newPlatform === 'cursor') {
       accountCategory.value = 'oauth-based'
       addMethod.value = 'oauth'
       modelRestrictionMode.value = 'mapping'
-      form.concurrency = 1
-      form.load_factor = null
+      if (newPlatform === 'grok') {
+        form.concurrency = 1
+        form.load_factor = null
+      }
+    }
+    if (newPlatform === 'cursor') {
+      modelRestrictionMode.value = 'whitelist'
+      allowedModels.value = registerCursorObservedModels([])
+      adminAPI.accounts.list(1, 100, { platform: 'cursor' })
+        .then((response) => {
+          if (cursorRequestGeneration !== cursorObservedRequestGeneration || form.platform !== 'cursor') return
+          allowedModels.value = registerCursorObservedModels(response.items)
+        })
+        .catch(() => {
+          if (cursorRequestGeneration !== cursorObservedRequestGeneration || form.platform !== 'cursor') return
+          allowedModels.value = [...getModelsByPlatform('cursor')]
+        })
     }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
@@ -5287,6 +5384,8 @@ watch(
     headerOverrideRows.value = []
     grokOAuthCustomBaseUrlEnabled.value = false
     grokOAuthBaseUrl.value = ''
+    cursorOAuthCustomBaseUrlEnabled.value = false
+    cursorOAuthBaseUrl.value = ''
     // Reset OAuth states
     oauth.resetState()
     openaiOAuth.resetState()
@@ -5295,6 +5394,7 @@ watch(
     antigravityOAuth.resetState()
     kiroOAuth.resetState()
     grokOAuth.resetState()
+    cursorOAuth.resetState()
   }
 )
 
@@ -5732,6 +5832,8 @@ const resetForm = () => {
   headerOverrideRows.value = []
   grokOAuthCustomBaseUrlEnabled.value = false
   grokOAuthBaseUrl.value = ''
+  cursorOAuthCustomBaseUrlEnabled.value = false
+  cursorOAuthBaseUrl.value = ''
   interceptWarmupRequests.value = false
   autoPauseOnExpired.value = true
   openaiPassthroughEnabled.value = false
@@ -5789,14 +5891,14 @@ const resetForm = () => {
   antigravityOAuth.resetState()
   kiroOAuth.resetState()
   grokOAuth.resetState()
+  cursorOAuth.resetState()
   oauthFlowRef.value?.reset()
   antigravityMixedChannelConfirmed.value = false
   clearMixedChannelDialog()
 }
 
 const handleClose = () => {
-  antigravityMixedChannelConfirmed.value = false
-  clearMixedChannelDialog()
+  resetForm()
   emit('close')
 }
 
@@ -6033,7 +6135,7 @@ const buildKiroCredentials = (tokenInfo: KiroTokenInfo): Record<string, unknown>
 const handleSubmit = async () => {
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
-    if (!isGrokSSOInputMethod.value && !form.name.trim()) {
+    if (!isGrokSSOInputMethod.value && !isCursorSSOInputMethod.value && !form.name.trim()) {
       appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
       return
     }
@@ -6368,6 +6470,7 @@ const goBackToBasicInfo = () => {
   antigravityOAuth.resetState()
   resetKiroOAuthLocalState()
   grokOAuth.resetState()
+  cursorOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
 
@@ -6403,6 +6506,8 @@ const handleGenerateUrl = async () => {
     }
   } else if (form.platform === 'grok') {
     await grokOAuth.generateAuthUrl(form.proxy_id)
+  } else if (form.platform === 'cursor') {
+    await handleCursorGenerateUrlAndPoll()
   } else {
     await oauth.generateAuthUrl(addMethod.value, form.proxy_id)
   }
@@ -6415,6 +6520,8 @@ const handleValidateRefreshToken = (rt: string) => {
     handleAntigravityValidateRT(rt)
   } else if (form.platform === 'grok') {
     handleGrokValidateRT(rt)
+  } else if (form.platform === 'cursor') {
+    handleCursorValidateRT(rt)
   }
 }
 
@@ -6499,6 +6606,11 @@ const createAccountAndFinish = async (
       delete credentials.model_mapping
     }
   }
+  if (platform === 'cursor') {
+    const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+    if (modelMapping) credentials.model_mapping = modelMapping
+    else delete credentials.model_mapping
+  }
   await doCreateAccount({
     name: form.name,
     notes: form.notes,
@@ -6518,6 +6630,181 @@ const createAccountAndFinish = async (
       : {}),
     auto_pause_on_expired: autoPauseOnExpired.value
   })
+}
+
+const buildCursorCreateCredentials = (tokenInfo: Record<string, unknown>) => {
+  const credentials = cursorOAuth.buildCredentials(tokenInfo)
+  if (cursorOAuthCustomBaseUrlEnabled.value) {
+    const baseUrl = cursorOAuthBaseUrl.value.trim()
+    if (isCustomCursorBaseUrl(baseUrl)) credentials.base_url = baseUrl
+  }
+  return credentials
+}
+
+const validateCursorBaseUrl = (): boolean => {
+  if (!cursorOAuthCustomBaseUrlEnabled.value) return true
+  const baseUrl = cursorOAuthBaseUrl.value.trim()
+  if (!baseUrl) {
+    appStore.showError(t('admin.accounts.cursorCustomBaseUrl.required'))
+    return false
+  }
+  if (baseUrl === 'https://api2.cursor.sh' || isCustomCursorBaseUrl(baseUrl)) return true
+  appStore.showError(t('admin.accounts.cursorCustomBaseUrl.invalid'))
+  return false
+}
+
+const handleCursorGenerateUrlAndPoll = async () => {
+  if (!validateCursorBaseUrl()) return
+  const ok = await cursorOAuth.generateAuthUrl(form.proxy_id)
+  if (!ok) return
+  const tokenInfo = await cursorOAuth.pollForToken({
+    sessionId: cursorOAuth.sessionId.value,
+    state: cursorOAuth.state.value,
+    proxyId: form.proxy_id
+  })
+  if (!tokenInfo || form.platform !== 'cursor') return
+  await createAccountAndFinish('cursor', 'oauth', buildCursorCreateCredentials(tokenInfo), cursorOAuth.buildExtraInfo(tokenInfo))
+}
+
+const handleCursorValidateRT = async (refreshTokenInput: string) => {
+  if (cursorRefreshBatchRunning) return
+  if (!validateCursorBaseUrl()) return
+  const tokens = refreshTokenInput.split('\n').map((token) => token.trim()).filter(Boolean)
+  if (!tokens.length) return
+
+  const settings = {
+    name: form.name,
+    notes: form.notes,
+    proxy_id: form.proxy_id,
+    concurrency: form.concurrency,
+    load_factor: form.load_factor ?? undefined,
+    priority: form.priority,
+    rate_multiplier: form.rate_multiplier,
+    group_ids: [...form.group_ids],
+    expires_at: form.expires_at,
+    auto_pause_on_expired: autoPauseOnExpired.value,
+  }
+  const credentialSettings: Record<string, unknown> = {}
+  if (cursorOAuthCustomBaseUrlEnabled.value && isCustomCursorBaseUrl(cursorOAuthBaseUrl.value)) {
+    credentialSettings.base_url = cursorOAuthBaseUrl.value.trim()
+  }
+  const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+  if (modelMapping) credentialSettings.model_mapping = modelMapping
+  if (!applyTempUnschedConfig(credentialSettings)) return
+
+  cursorRefreshBatchRunning = true
+  cursorOAuth.loading.value = true
+  cursorOAuth.error.value = ''
+  let successCount = 0
+  const errors: string[] = []
+  try {
+    for (let index = 0; index < tokens.length; index += 1) {
+      try {
+        const tokenInfo = await cursorOAuth.validateRefreshToken(tokens[index], settings.proxy_id)
+        cursorOAuth.loading.value = true
+        if (!tokenInfo) {
+          errors.push(`#${index + 1}: ${cursorOAuth.error.value || 'Validation failed'}`)
+          cursorOAuth.error.value = ''
+          continue
+        }
+        const credentials = {
+          ...cursorOAuth.buildCredentials(tokenInfo),
+          ...credentialSettings,
+        }
+        const tokenEmail = typeof tokenInfo.email === 'string' ? tokenInfo.email : ''
+        const baseName = settings.name || tokenEmail || 'Cursor OAuth Account'
+        await adminAPI.accounts.create({
+          ...settings,
+          name: tokens.length > 1 ? `${baseName} #${index + 1}` : baseName,
+          platform: 'cursor',
+          type: 'oauth',
+          credentials,
+          extra: cursorOAuth.buildExtraInfo(tokenInfo),
+        })
+        successCount += 1
+      } catch (error: any) {
+        errors.push(`#${index + 1}: ${error.response?.data?.detail || error.message || 'Unknown error'}`)
+      }
+    }
+
+    if (successCount === tokens.length) {
+      appStore.showSuccess(tokens.length > 1 ? t('admin.accounts.oauth.batchSuccess', { count: successCount }) : t('admin.accounts.accountCreated'))
+      emit('created')
+      handleClose()
+    } else if (successCount > 0) {
+      appStore.showWarning(t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: tokens.length - successCount }))
+      cursorOAuth.error.value = errors.join('\n')
+      emit('created')
+    } else {
+      cursorOAuth.error.value = errors.join('\n')
+      appStore.showError(t('admin.accounts.oauth.batchFailed'))
+    }
+  } finally {
+    oauthFlowRef.value?.clearRefreshToken()
+    cursorRefreshBatchRunning = false
+    cursorOAuth.loading.value = false
+  }
+}
+
+const handleCursorImportSSO = async (ssoInput: string) => {
+  if (cursorOAuth.loading.value) return
+  if (!validateCursorBaseUrl()) return
+  const ssoTokens = ssoInput.split('\n').map((token) => token.trim()).filter(Boolean)
+  if (!ssoTokens.length) return
+  const credentials: Record<string, unknown> = {}
+  if (cursorOAuthCustomBaseUrlEnabled.value && cursorOAuthBaseUrl.value.trim() !== 'https://api2.cursor.sh') {
+    const baseUrl = cursorOAuthBaseUrl.value.trim()
+    if (!validateCursorBaseUrl()) {
+      return
+    }
+    credentials.base_url = baseUrl
+  }
+  const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+  if (modelMapping) credentials.model_mapping = modelMapping
+  if (!applyTempUnschedConfig(credentials)) return
+  cursorOAuth.loading.value = true
+  cursorOAuth.error.value = ''
+  try {
+    const result = await adminAPI.cursor.createFromSSO({
+      sso_tokens: ssoTokens,
+      name: form.name || undefined,
+      notes: form.notes || undefined,
+      proxy_id: form.proxy_id,
+      group_ids: form.group_ids,
+      credentials,
+      concurrency: form.concurrency,
+      load_factor: form.load_factor ?? undefined,
+      priority: form.priority,
+      rate_multiplier: form.rate_multiplier,
+      expires_at: form.expires_at,
+      auto_pause_on_expired: autoPauseOnExpired.value
+    })
+    const successCount = result.created?.length || 0
+    const failedCount = result.failed?.length || 0
+    if (successCount > 0 && failedCount === 0) {
+      appStore.showSuccess(ssoTokens.length > 1 ? t('admin.accounts.oauth.batchSuccess', { count: successCount }) : t('admin.accounts.accountCreated'))
+      emit('created')
+      handleClose()
+    } else if (successCount > 0) {
+      appStore.showWarning(t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: failedCount }))
+      cursorOAuth.error.value = (result.failed || []).map((item) => `#${item.index}: ${item.error || 'Unknown error'}`).join('\n')
+      emit('created')
+    } else {
+      cursorOAuth.error.value = (result.failed || []).map((item) => `#${item.index}: ${item.error || 'Unknown error'}`).join('\n') || t('admin.accounts.oauth.cursor.failedToConvertSSO')
+      appStore.showError(t('admin.accounts.oauth.batchFailed'))
+    }
+  } catch (error: any) {
+    cursorOAuth.error.value = error.response?.data?.detail || error.message || t('admin.accounts.oauth.cursor.failedToConvertSSO')
+    appStore.showError(cursorOAuth.error.value)
+  } finally {
+    oauthFlowRef.value?.clearSSOInput()
+    cursorOAuth.loading.value = false
+  }
+}
+
+const handleImportSSO = (input: string) => {
+  if (form.platform === 'cursor') return handleCursorImportSSO(input)
+  return handleGrokImportSSO(input)
 }
 
 // Grok 手动 RT 批量验证和创建
@@ -7435,6 +7722,20 @@ const handleGrokExchange = async (authCode: string) => {
   }
 }
 
+const handleCursorExchange = async (authCode: string) => {
+  if (!authCode.trim() || !cursorOAuth.sessionId.value) return
+  if (!validateCursorBaseUrl()) return
+  cursorOAuth.cancelPolling()
+  const tokenInfo = await cursorOAuth.exchangeAuthCode({
+    code: authCode,
+    sessionId: cursorOAuth.sessionId.value,
+    state: oauthFlowRef.value?.oauthState || cursorOAuth.state.value,
+    proxyId: form.proxy_id
+  })
+  if (!tokenInfo) return
+  await createAccountAndFinish('cursor', 'oauth', buildCursorCreateCredentials(tokenInfo), cursorOAuth.buildExtraInfo(tokenInfo))
+}
+
 // Anthropic OAuth 授权码兑换
 const handleAnthropicExchange = async (authCode: string) => {
   if (!authCode.trim() || !oauth.sessionId.value) return
@@ -7530,6 +7831,8 @@ const handleExchangeCode = async () => {
       return handleKiroExchange(authCode)
     case 'grok':
       return handleGrokExchange(authCode)
+    case 'cursor':
+      return handleCursorExchange(authCode)
     default:
       return handleAnthropicExchange(authCode)
   }

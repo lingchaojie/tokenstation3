@@ -58,6 +58,9 @@ func RegisterAdminRoutes(
 		// Grok OAuth
 		registerGrokOAuthRoutes(admin, h)
 
+		// Cursor OAuth
+		registerCursorOAuthRoutes(admin, h)
+
 		// 国产供应商（kimi/zhipu/deepseek）额度与余额
 		registerCNProviderRoutes(admin, h)
 
@@ -497,6 +500,21 @@ func registerGrokOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		grok.GET("/accounts/:id/quota", h.Admin.GrokOAuth.QueryQuota)
 		grok.POST("/accounts/:id/reset-quota", h.Admin.GrokOAuth.ResetQuota)
 		grok.GET("/runtime-sanity", h.Admin.GrokOAuth.RuntimeSanity)
+	}
+}
+
+func registerCursorOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	cursor := admin.Group("/cursor")
+	{
+		cursor.GET("/oauth/capabilities", h.Admin.CursorOAuth.GetCapabilities)
+		cursor.POST("/oauth/auth-url", h.Admin.CursorOAuth.GenerateAuthURL)
+		cursor.POST("/oauth/exchange-code", h.Admin.CursorOAuth.ExchangeCode)
+		cursor.POST("/oauth/poll", h.Admin.CursorOAuth.Poll)
+		cursor.POST("/oauth/refresh-token", h.Admin.CursorOAuth.RefreshToken)
+		cursor.POST("/oauth/sso-token", h.Admin.CursorOAuth.ValidateSSOToken)
+		cursor.POST("/oauth/password", h.Admin.CursorOAuth.AuthorizePassword)
+		cursor.POST("/sso-to-oauth", h.Admin.CursorOAuth.CreateAccountsFromSSO)
+		cursor.POST("/accounts/:id/refresh", h.Admin.CursorOAuth.RefreshAccountToken)
 	}
 }
 

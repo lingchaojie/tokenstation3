@@ -34,6 +34,8 @@ export default {
       gemini: 'Gemini',
       antigravity: 'Antigravity',
       grok: 'Grok',
+      cursor: 'Cursor',
+      cursorDescription: 'Caller-format Chat Completions, Responses, and Messages only; internal Connect/Protobuf frames are never stored.',
       openai: 'OpenAI HTTP text APIs',
       openaiDescription: 'Only /v1/responses, /v1/chat/completions, and /v1/messages; excludes WebSocket, images, video, and embeddings.',
     },

@@ -27,6 +27,7 @@ const (
 	PlatformKimi        = "kimi"
 	PlatformZhipu       = "zhipu"
 	PlatformDeepseek    = "deepseek"
+	PlatformCursor      = "cursor"
 )
 
 // Account mode constants distinguish pay-as-you-go and coding-plan accounts

@@ -24,7 +24,7 @@
                       ? 'from-purple-500 to-purple-600'
                       : isGrok
                         ? 'from-zinc-700 to-zinc-900'
-                        : 'from-orange-500 to-orange-600'
+                        : isCursor ? 'from-indigo-500 to-indigo-600' : 'from-orange-500 to-orange-600'
             ]"
           >
             <Icon name="sparkles" size="md" class="text-white" />
@@ -45,7 +45,7 @@
                         ? t('admin.accounts.antigravityAccount')
                         : isGrok
                           ? t('admin.accounts.grokAccount')
-                          : t('admin.accounts.claudeCodeAccount')
+                          : isCursor ? t('admin.accounts.cursorAccount') : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
           </div>
@@ -318,8 +318,8 @@
         :show-help="isAnthropic"
         :show-proxy-warning="isAnthropic"
         :show-cookie-option="isAnthropic"
-        :show-refresh-token-option="isOpenAI || isAntigravity || isGrok"
-        :show-sso-option="isGrok"
+        :show-refresh-token-option="isOpenAI || isAntigravity || isGrok || isCursor"
+        :show-sso-option="isGrok || isCursor"
         :show-email-password-option="false"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
@@ -333,6 +333,11 @@
         @validate-refresh-token="handleGrokValidateRefreshToken"
         @import-sso="handleGrokImportSSO"
       />
+      <!-- Grok retains :show-sso-option="isGrok" and :show-refresh-token-option="isOpenAI || isAntigravity || isGrok"; Cursor extends both capabilities above. -->
+
+      <div v-if="isCursor && cursorOAuth.polling.value" data-testid="cursor-reauth-polling" class="rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-700">
+        {{ t('admin.accounts.oauth.cursor.waitingForAuthorization') }}
+      </div>
 
     </div>
 
@@ -402,12 +407,14 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { useCursorOAuth } from '@/composables/useCursorOAuth'
 import { useKiroOAuth } from '@/composables/useKiroOAuth'
 import type { Account, AccountPlatform } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
+import { isCustomCursorBaseUrl } from '@/components/account/credentialsBuilder'
 import {
   DEFAULT_KIRO_API_REGION,
   buildKiroAPIRegionOptions,
@@ -447,6 +454,7 @@ const openaiOAuth = useOpenAIOAuth()
 const geminiOAuth = useGeminiOAuth()
 const antigravityOAuth = useAntigravityOAuth()
 const grokOAuth = useGrokOAuth()
+const cursorOAuth = useCursorOAuth()
 const kiroOAuth = useKiroOAuth()
 
 // Refs
@@ -483,6 +491,7 @@ const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
 const isGrok = computed(() => props.account?.platform === 'grok')
+const isCursor = computed(() => props.account?.platform === 'cursor')
 const isKiro = computed(() => props.account?.platform === 'kiro')
 
 const oauthPlatform = computed<AccountPlatform>(() => {
@@ -491,6 +500,7 @@ const oauthPlatform = computed<AccountPlatform>(() => {
   if (isKiro.value) return 'kiro'
   if (isAntigravity.value) return 'antigravity'
   if (isGrok.value) return 'grok'
+  if (isCursor.value) return 'cursor'
   return 'anthropic'
 })
 
@@ -500,12 +510,13 @@ const oauthPlatform = computed<AccountPlatform>(() => {
  * - SSO cookie otherwise
  */
 const grokInitialInputMethod = computed<AuthInputMethod>(() => {
-  if (!isGrok.value) return 'manual'
+  if (!isGrok.value && !isCursor.value) return 'manual'
   const creds = (props.account?.credentials || {}) as Record<string, unknown>
   const hasRT =
     (typeof creds.refresh_token === 'string' && creds.refresh_token.trim() !== '') ||
     (typeof creds.has_refresh_token === 'boolean' && creds.has_refresh_token)
   if (hasRT) return 'refresh_token'
+  if (isCursor.value) return 'manual'
   return 'sso_cookie'
 })
 
@@ -516,6 +527,7 @@ const currentAuthUrl = computed(() => {
   if (isKiro.value) return kiroOAuth.authUrl.value
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
   if (isGrok.value) return grokOAuth.authUrl.value
+  if (isCursor.value) return cursorOAuth.authUrl.value
   return claudeOAuth.authUrl.value
 })
 const currentExternalAuthUrl = computed(() => {
@@ -528,6 +540,7 @@ const currentSessionId = computed(() => {
   if (isKiro.value) return kiroOAuth.sessionId.value
   if (isAntigravity.value) return antigravityOAuth.sessionId.value
   if (isGrok.value) return grokOAuth.sessionId.value
+  if (isCursor.value) return cursorOAuth.sessionId.value
   return claudeOAuth.sessionId.value
 })
 const currentLoading = computed(() => {
@@ -536,6 +549,7 @@ const currentLoading = computed(() => {
   if (isKiro.value) return kiroOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
   if (isGrok.value) return grokOAuth.loading.value
+  if (isCursor.value) return cursorOAuth.loading.value
   return claudeOAuth.loading.value
 })
 const currentError = computed(() => {
@@ -544,6 +558,7 @@ const currentError = computed(() => {
   if (isKiro.value) return kiroOAuth.error.value
   if (isAntigravity.value) return antigravityOAuth.error.value
   if (isGrok.value) return grokOAuth.error.value
+  if (isCursor.value) return cursorOAuth.error.value
   return claudeOAuth.error.value
 })
 
@@ -594,6 +609,7 @@ const isManualInputMethod = computed(() => {
     isKiro.value ||
     isAntigravity.value ||
     isGrok.value ||
+    isCursor.value ||
     method === 'manual'
   )
 })
@@ -665,6 +681,7 @@ const resetState = () => {
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
   grokOAuth.resetState()
+  cursorOAuth.resetState()
   kiroOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
@@ -696,6 +713,7 @@ const kiroProviderClass = (provider: typeof kiroOAuthProvider.value) => [
 ]
 
 const handleClose = () => {
+  resetState()
   emit('close')
 }
 
@@ -736,9 +754,23 @@ const handleGenerateUrl = async () => {
     await antigravityOAuth.generateAuthUrl(props.account.proxy_id)
   } else if (isGrok.value) {
     await grokOAuth.generateAuthUrl(props.account.proxy_id)
+  } else if (isCursor.value) {
+    await handleCursorGenerateUrlAndPoll()
   } else {
     await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
   }
+}
+
+const handleCursorGenerateUrlAndPoll = async () => {
+  if (!props.account) return
+  const ok = await cursorOAuth.generateAuthUrl(props.account.proxy_id)
+  if (!ok) return
+  const tokenInfo = await cursorOAuth.pollForToken({
+    sessionId: cursorOAuth.sessionId.value,
+    state: cursorOAuth.state.value,
+    proxyId: props.account.proxy_id
+  })
+  if (tokenInfo) await applyCursorReauthTokenInfo(tokenInfo)
 }
 
 const handleExchangeCode = async () => {
@@ -940,6 +972,17 @@ const handleExchangeCode = async () => {
       grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(grokOAuth.error.value)
     }
+  } else if (isCursor.value) {
+    const sessionId = cursorOAuth.sessionId.value
+    if (!sessionId) return
+    cursorOAuth.cancelPolling()
+    const tokenInfo = await cursorOAuth.exchangeAuthCode({
+      code: authCode,
+      sessionId,
+      state: oauthFlowRef.value?.oauthState || cursorOAuth.state.value,
+      proxyId: props.account.proxy_id
+    })
+    if (tokenInfo) await applyCursorReauthTokenInfo(tokenInfo)
   } else {
     // Claude OAuth flow
     const sessionId = claudeOAuth.sessionId.value
@@ -1074,6 +1117,42 @@ const handleCookieAuth = async (sessionKey: string) => {
   }
 }
 
+const applyCursorReauthTokenInfo = async (tokenInfo: Record<string, unknown>) => {
+  if (!props.account) return
+  const credentials = cursorOAuth.buildCredentials(tokenInfo)
+  const currentBaseUrl = (props.account.credentials as Record<string, unknown> | undefined)?.base_url
+  if (isCustomCursorBaseUrl(currentBaseUrl)) credentials.base_url = currentBaseUrl
+  try {
+    const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+      type: 'oauth',
+      credentials,
+      extra: cursorOAuth.buildExtraInfo(tokenInfo)
+    })
+    appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+    emit('reauthorized', updatedAccount)
+    handleClose()
+  } catch (error: any) {
+    cursorOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    appStore.showError(cursorOAuth.error.value)
+  }
+}
+
+const handleCursorImportSSO = async (ssoInput: string) => {
+  if (!props.account || !isCursor.value) return
+  const token = ssoInput.split('\n').map((value) => value.trim()).filter(Boolean)[0]
+  if (!token) return
+  const tokenInfo = await cursorOAuth.validateSSOToken(token, props.account.proxy_id)
+  if (tokenInfo) await applyCursorReauthTokenInfo(tokenInfo)
+}
+
+const handleCursorValidateRefreshToken = async (refreshTokenInput: string) => {
+  if (!props.account || !isCursor.value) return
+  const token = refreshTokenInput.split('\n').map((value) => value.trim()).filter(Boolean)[0]
+  if (!token) return
+  const tokenInfo = await cursorOAuth.validateRefreshToken(token, props.account.proxy_id)
+  if (tokenInfo) await applyCursorReauthTokenInfo(tokenInfo)
+}
+
 /** Apply Grok Build OAuth tokens onto the existing account (never store password/SSO). */
 const applyGrokReauthTokenInfo = async (tokenInfo: {
   access_token?: string
@@ -1096,6 +1175,7 @@ const applyGrokReauthTokenInfo = async (tokenInfo: {
 
 /** Re-auth with a single SSO cookie → Build OAuth (not batch create). */
 const handleGrokImportSSO = async (ssoInput: string) => {
+  if (isCursor.value) return handleCursorImportSSO(ssoInput)
   if (!props.account || !isGrok.value) return
   const ssoToken = ssoInput
     .split('\n')
@@ -1122,6 +1202,7 @@ const handleGrokImportSSO = async (ssoInput: string) => {
 
 /** Re-auth with a single refresh token. */
 const handleGrokValidateRefreshToken = async (refreshTokenInput: string) => {
+  if (isCursor.value) return handleCursorValidateRefreshToken(refreshTokenInput)
   if (!props.account || !isGrok.value) return
   const refreshToken = refreshTokenInput
     .split('\n')

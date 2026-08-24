@@ -220,7 +220,14 @@ func (s *adminServiceImpl) findDuplicateByOperationID(ctx context.Context, opera
 // It is used when the idempotency coordinator cannot confirm whether response persistence
 // succeeded, and deliberately never repeats the create side effect.
 func (s *adminServiceImpl) RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error) {
-	return s.findDuplicateByOperationID(ctx, duplicateAccountOperationID(id, actorScope, operationKey))
+	account, err := s.findDuplicateByOperationID(ctx, duplicateAccountOperationID(id, actorScope, operationKey))
+	if err != nil || account == nil {
+		return account, err
+	}
+	if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+		return nil, err
+	}
+	return account, nil
 }
 
 func cloneAccountValuePointer[T any](value *T) *T {
@@ -247,6 +254,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 
 	source, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateCursorAccountType(source.Platform, source.Type); err != nil {
 		return nil, err
 	}
 	if source.IsCredentialShadow() {
@@ -398,7 +408,21 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
+func validateCursorAccountType(platform, accountType string) error {
+	if !isCursorAccountTypeValid(platform, accountType) {
+		return infraerrors.New(http.StatusBadRequest, "CURSOR_ACCOUNT_TYPE_UNSUPPORTED", "cursor accounts must use the oauth account type")
+	}
+	return nil
+}
+
+func isCursorAccountTypeValid(platform, accountType string) bool {
+	return platform != PlatformCursor || accountType == AccountTypeOAuth
+}
+
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := validateCursorAccountType(input.Platform, input.Type); err != nil {
+		return nil, err
+	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingProbeExtraKey)
@@ -560,6 +584,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	effectiveType := account.Type
+	if input.Type != "" {
+		effectiveType = input.Type
+	}
+	if err := validateCursorAccountType(account.Platform, effectiveType); err != nil {
+		return nil, err
+	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -617,6 +648,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// 敏感子键采用"incoming 没提供就保留"的合并语义：前端响应已脱敏，
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		account.Credentials = NormalizeCursorReauthorizedCredentials(account.Platform, input.Credentials, account.Credentials)
 		// 校验并规范化请求头覆写配置（header 名小写化、格式检查）
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
 			return nil, err
@@ -889,15 +921,27 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
+	requiresCursorOAuthActivationValidation :=
+		(input.Schedulable != nil && *input.Schedulable) || input.Status == StatusActive
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || requiresCursorOAuthActivationValidation {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
 		}
 		cachedTargets = loaded
+	}
+	if requiresCursorOAuthActivationValidation {
+		for _, account := range cachedTargets {
+			if account == nil {
+				continue
+			}
+			if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+				return nil, err
+			}
+		}
 	}
 	targetsByID := make(map[int64]*Account, len(cachedTargets))
 	for _, account := range cachedTargets {
@@ -1178,6 +1222,13 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}
@@ -1204,6 +1255,15 @@ func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorM
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
+	if schedulable {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateCursorAccountType(account.Platform, account.Type); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
 	}

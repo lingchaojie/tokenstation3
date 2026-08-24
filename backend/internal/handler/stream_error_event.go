@@ -77,9 +77,12 @@ func writeResponsesFailedSSE(c *gin.Context, errType, message string) bool {
 		return true
 	}
 
-	if _, err := fmt.Fprintf(c.Writer, "event: response.failed\ndata: %s\n\n", payload); err != nil {
-		_ = c.Error(err)
-		return true
+	frame := []byte(fmt.Sprintf("event: response.failed\ndata: %s\n\n", payload))
+	if !writeCursorTypedTerminalBytes(c, frame) {
+		if _, err := fmt.Fprintf(c.Writer, "event: response.failed\ndata: %s\n\n", payload); err != nil {
+			_ = c.Error(err)
+			return true
+		}
 	}
 	flusher.Flush()
 	return true

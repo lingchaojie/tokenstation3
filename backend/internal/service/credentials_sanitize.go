@@ -1,7 +1,13 @@
 package service
 
-// SanitizeStoredCredentials strips secrets that must never be persisted on the
-// account credentials map after conversion to OAuth tokens (Grok Web SSO / password).
+import (
+	"strings"
+
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
+)
+
+// SanitizeStoredCredentials normalizes provider credential sources and strips
+// secrets that must never be persisted after conversion to OAuth tokens.
 // Call from admin create/update/import/apply-oauth paths.
 //
 // Cookie is always stripped: bulk paths may pass an empty platform label, and
@@ -11,7 +17,16 @@ func SanitizeStoredCredentials(platform string, creds map[string]any) map[string
 	if creds == nil {
 		return nil
 	}
-	_ = platform
+	if platform == PlatformCursor {
+		accessToken, _ := creds["access_token"].(string)
+		if cursorpkg.IsUserAPIKey(accessToken) {
+			existingAPIKey, _ := creds["api_key"].(string)
+			if strings.TrimSpace(existingAPIKey) == "" {
+				creds["api_key"] = strings.TrimSpace(accessToken)
+			}
+			delete(creds, "access_token")
+		}
+	}
 	for _, key := range []string{
 		"password", "sso_token", "sso", "sso-rw", "clearTextPassword", "cookie",
 	} {

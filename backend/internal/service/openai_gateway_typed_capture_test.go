@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -167,6 +168,35 @@ func (h *openAITypedCaptureTestHarness) requireNoExtraTerminal(t *testing.T) {
 		t.Fatalf("typed attempt published duplicate terminal %q", terminal)
 	default:
 	}
+}
+
+func TestCursorCaptureTypedSinkExtractsStopReasonOnlyFromDeliveredBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	harness := newOpenAITypedCaptureTestHarness(t)
+	body := []byte(`{"model":"auto","messages":[{"role":"user","content":"hello"}]}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	policy := DefaultCaptureRuntimePolicy()
+	policy.Enabled = true
+	require.NoError(t, InstallCaptureRuntimePolicyForUnitTest(c, policy, 9, nil))
+	SetCaptureRequestedModel(c, "auto")
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{
+		Enabled: true, MaxBodyBytes: 1 << 20, MaxHeaderBytes: 1 << 20,
+	}}}, capturePool: harness.pool}
+
+	svc.beginCursorDeliveryCapture(c, cursorGatewayAccount(), body, cursorpkg.AgentDefaultModel, false)
+	recorder.Header().Set("Content-Type", "application/json")
+	delivered := []byte(`{"choices":[{"finish_reason":"stop"}]}`)
+	n, err := writeCursorDeliveryBytes(c, delivered)
+	require.NoError(t, err)
+	require.Equal(t, len(delivered), n)
+	require.True(t, CommitOpenAIForwardCaptureAttempt(c, PlatformCursor, &OpenAIForwardResult{CaptureResponseComplete: true}))
+	require.Equal(t, "commit", harness.requireTerminal(t))
+	record := harness.requireRecord(t)
+	require.Equal(t, "stop", record.StopReason)
+	require.Equal(t, delivered, record.RawResponse)
+	harness.requireNoExtraTerminal(t)
 }
 
 func TestOpenAIConvertedDeliveryFailureDefersTypedCaptureToLateProviderTruth(t *testing.T) {

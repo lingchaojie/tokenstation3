@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
+	"net/http"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +27,7 @@ func TestProvideServiceBuildInfo(t *testing.T) {
 }
 
 func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
-	cleanup := provideCleanupWithMinimalDependenciesForTest(t, nil)
+	cleanup := provideCleanupWithMinimalDependenciesForTest(t, nil, nil)
 	require.NotPanics(t, cleanup)
 }
 
@@ -31,7 +36,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 // supervisor path remains idempotent.
 func TestProvideCleanupStopsCaptureSidecarSupervisor(t *testing.T) {
 	supervisor := &service.CaptureSidecarSupervisor{}
-	cleanup := provideCleanupWithMinimalDependenciesForTest(t, supervisor)
+	cleanup := provideCleanupWithMinimalDependenciesForTest(t, supervisor, nil)
 	require.NotPanics(t, cleanup)
 	require.True(t, reflect.ValueOf(supervisor).Elem().FieldByName("stopping").Bool())
 	require.NotPanics(t, func() {
@@ -40,7 +45,45 @@ func TestProvideCleanupStopsCaptureSidecarSupervisor(t *testing.T) {
 	})
 }
 
-func provideCleanupWithMinimalDependenciesForTest(t *testing.T, captureSidecarSupervisor *service.CaptureSidecarSupervisor) func() {
+func TestApplicationOwnsCursorObservedModelsLifecycle(t *testing.T) {
+	repo := &cursorObservedModelsLifecycleRepo{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	upstream := &cursorObservedModelsNoCallUpstream{}
+	observedModels := service.NewCursorObservedModelsService(repo, nil, upstream, 6*time.Hour)
+	app := &Application{
+		CursorObservedModels: observedModels,
+		Cleanup:              provideCleanupWithMinimalDependenciesForTest(t, nil, observedModels),
+	}
+
+	startReturned := make(chan struct{})
+	go func() {
+		app.Start()
+		close(startReturned)
+	}()
+	requireChannelClosed(t, startReturned, "Application.Start blocked on the initial refresh")
+	requireChannelClosed(t, repo.started, "initial observed-model refresh did not start")
+
+	app.Start()
+	require.Never(t, func() bool { return repo.calls.Load() != 1 }, 25*time.Millisecond, time.Millisecond,
+		"Application.Start launched the initial refresh loop more than once")
+	require.Zero(t, upstream.calls.Load(), "empty fake account results must not make an upstream call")
+
+	cleanupReturned := make(chan struct{})
+	go func() {
+		app.Cleanup()
+		close(cleanupReturned)
+	}()
+	requireChannelClosed(t, repo.canceled, "cleanup did not cancel the observed-model refresh")
+	requireChannelClosed(t, cleanupReturned, "cleanup did not join the observed-model refresh")
+}
+
+func provideCleanupWithMinimalDependenciesForTest(
+	t *testing.T,
+	captureSidecarSupervisor *service.CaptureSidecarSupervisor,
+	cursorObservedModels *service.CursorObservedModelsService,
+) func() {
 	t.Helper()
 	cfg := &config.Config{}
 
@@ -122,7 +165,54 @@ func provideCleanupWithMinimalDependenciesForTest(t *testing.T, captureSidecarSu
 		nil, // upstreamBillingProbe
 		nil, // ollamaCloudUsage
 		nil, // auditLog
+		cursorObservedModels,
 	)
 
 	return cleanup
+}
+
+func requireChannelClosed(t *testing.T, ch <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal(message)
+	}
+}
+
+type cursorObservedModelsLifecycleRepo struct {
+	service.AccountRepository
+
+	calls        atomic.Int64
+	started      chan struct{}
+	canceled     chan struct{}
+	startedOnce  sync.Once
+	canceledOnce sync.Once
+}
+
+func (r *cursorObservedModelsLifecycleRepo) ListSchedulableByPlatform(ctx context.Context, _ string) ([]service.Account, error) {
+	r.calls.Add(1)
+	r.startedOnce.Do(func() { close(r.started) })
+	<-ctx.Done()
+	r.canceledOnce.Do(func() { close(r.canceled) })
+	return nil, ctx.Err()
+}
+
+type cursorObservedModelsNoCallUpstream struct {
+	calls atomic.Int64
+}
+
+func (u *cursorObservedModelsNoCallUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+	u.calls.Add(1)
+	return nil, context.Canceled
+}
+
+func (u *cursorObservedModelsNoCallUpstream) DoWithTLS(
+	req *http.Request,
+	proxyURL string,
+	accountID int64,
+	concurrency int,
+	_ *tlsfingerprint.Profile,
+) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
 }

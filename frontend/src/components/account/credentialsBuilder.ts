@@ -261,6 +261,37 @@ export const GROK_BASE_URL_PRESETS: GrokBaseUrlPreset[] = [
   { label: 'eu-west-1', url: 'https://eu-west-1.api.x.ai/v1' }
 ]
 
+const CURSOR_DEFAULT_GATEWAY_HOST = 'api2.cursor.sh'
+
+export function isCustomCursorBaseUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  try {
+    const parsed = new URL(trimmed)
+    return (
+      (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.search &&
+      !parsed.hash &&
+      parsed.hostname.toLowerCase() !== CURSOR_DEFAULT_GATEWAY_HOST
+    )
+  } catch {
+    return false
+  }
+}
+
+export interface CursorBaseUrlPreset {
+  labelKey?: 'official'
+  label?: string
+  url: string
+}
+
+export const CURSOR_BASE_URL_PRESETS: CursorBaseUrlPreset[] = [
+  { labelKey: 'official', url: 'https://api2.cursor.sh' }
+]
+
 // ========== 国产供应商（Kimi / Zhipu / DeepSeek）base_url 预设 ==========
 // 与后端 service/domain_constants.go 的默认 base url 保持一致。
 // 账号类型（payg 按量付费 / coding 编程套餐）决定额度监控方式；

@@ -859,6 +859,7 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 			q = q.Where(
 				dbaccount.StatusEQ(status),
 				dbaccount.SchedulableEQ(true),
+				cursorOAuthOnlyAccountPredicate(),
 				dbaccount.Or(
 					dbaccount.RateLimitResetAtIsNil(),
 					dbaccount.RateLimitResetAtLTE(time.Now()),
@@ -1141,11 +1142,18 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	// NOT (a AND b) 在 PG 三值逻辑下会把 a 或 b 为 NULL 的行（即绝大多数
 	// 健康账号：temp_unschedulable_until=NULL）也排除，导致后台 token
 	// 刷新工作器漏掉所有正常账号 → access_token 到期后请求开始 401。
+	args := []any{pq.Array(options.Platforms), options.AfterID}
+	placeholder := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+
 	query := `
 		SELECT id
 		FROM accounts
 		WHERE deleted_at IS NULL
 			AND schedulable = TRUE
+			AND ` + cursorOAuthOnlyAccountSQL("") + `
 			AND platform = ANY($1)
 			AND id > $2`
 	if options.ActiveOnly {
@@ -1162,9 +1170,28 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	query += `
 			AND lower(btrim(COALESCE(credentials->>'auth_mode', ''))) <> 'agentidentity'`
 	if options.RequireRefreshToken {
+		refreshable := `(credentials ? 'refresh_token' AND btrim(credentials->>'refresh_token') <> '')`
+		for _, source := range options.AltRefreshCredentialSources {
+			platform := strings.TrimSpace(source.Platform)
+			if platform == "" || len(source.CredentialKeys) == 0 {
+				continue
+			}
+			keyConditions := make([]string, 0, len(source.CredentialKeys))
+			for _, key := range source.CredentialKeys {
+				key = strings.TrimSpace(key)
+				if key == "" {
+					continue
+				}
+				keyConditions = append(keyConditions, "btrim(coalesce(credentials->>"+placeholder(key)+", '')) <> ''")
+			}
+			if len(keyConditions) == 0 {
+				continue
+			}
+			refreshable += `
+				OR (platform = ` + placeholder(platform) + ` AND (` + strings.Join(keyConditions, " OR ") + `))`
+		}
 		query += `
-			AND credentials ? 'refresh_token'
-			AND btrim(credentials->>'refresh_token') <> ''`
+			AND (` + refreshable + `)`
 	}
 	if options.ExcludeRetryCooldown {
 		query += `
@@ -1175,9 +1202,9 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	}
 	query += `
 		ORDER BY id ASC
-		LIMIT $3`
+		LIMIT ` + placeholder(options.Limit)
 
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(options.Platforms), options.AfterID, options.Limit)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1841,6 +1868,7 @@ func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.Accou
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			cursorOAuthOnlyAccountPredicate(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -1905,6 +1933,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND a.deleted_at IS NULL
 			AND a.status = $2
 			AND a.schedulable = TRUE
+			AND `+cursorOAuthOnlyAccountSQL("a.")+`
 			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
@@ -1964,6 +1993,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			cursorOAuthOnlyAccountPredicate(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -1998,6 +2028,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			cursorOAuthOnlyAccountPredicate(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -2018,6 +2049,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			cursorOAuthOnlyAccountPredicate(),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2042,6 +2074,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			cursorOAuthOnlyAccountPredicate(),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2093,6 +2126,7 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 	preds := []dbpredicate.Account{
 		dbaccount.StatusEQ(service.StatusActive),
 		dbaccount.SchedulableEQ(true),
+		cursorOAuthOnlyAccountPredicate(),
 		dbaccount.PlatformIn(platforms...),
 	}
 	if !includeGrouped {
@@ -2997,7 +3031,10 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		preds = append(preds, dbaccount.PlatformIn(opts.platforms...))
 	}
 	if opts.schedulable {
-		preds = append(preds, dbaccount.SchedulableEQ(true))
+		preds = append(preds,
+			dbaccount.SchedulableEQ(true),
+			cursorOAuthOnlyAccountPredicate(),
+		)
 		if !opts.ignoreTransientState {
 			now := time.Now()
 			preds = append(preds,

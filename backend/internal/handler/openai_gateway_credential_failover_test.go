@@ -100,6 +100,28 @@ func TestCredentialFailoverExhaustionReturnsFixedSafe503(t *testing.T) {
 	require.NotContains(t, recorder.Body.String(), "must-not-leak")
 }
 
+func TestCredentialFailoverClientResponseTrustsOnlyCursorClientVersionReason(t *testing.T) {
+	status, message := credentialFailoverClientResponse(&service.UpstreamFailoverError{
+		Platform:         service.PlatformCursor,
+		Reason:           service.CursorCredentialReasonClientVersion,
+		ClientStatusCode: http.StatusTeapot,
+		ClientMessage:    "cursor-secret=must-not-leak",
+	})
+	require.Equal(t, http.StatusBadGateway, status)
+	require.Equal(t, service.CursorClientVersionRejectedClientMessage, message)
+	require.NotContains(t, message, "must-not-leak")
+
+	for _, failure := range []*service.UpstreamFailoverError{
+		{Platform: service.PlatformGrok, Reason: service.CursorCredentialReasonClientVersion, ClientMessage: "must-not-leak"},
+		{Platform: service.PlatformCursor, Reason: service.GrokCredentialReasonRevoked, ClientMessage: "must-not-leak"},
+	} {
+		status, message = credentialFailoverClientResponse(failure)
+		require.Equal(t, http.StatusServiceUnavailable, status)
+		require.Equal(t, service.GrokCredentialUnavailableClientMessage, message)
+		require.NotContains(t, message, "must-not-leak")
+	}
+}
+
 func TestInferenceFailoverExhaustionRestoresRetryAfter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

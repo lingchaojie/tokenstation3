@@ -763,7 +763,8 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = GROUP_PLATFORM_VALUES
+// Copy the catalog: channel editing may consume its order, but must not mutate the shared account-platform catalog.
+const platformOrder: GroupPlatform[] = [...GROUP_PLATFORM_VALUES]
 
 // ── Helpers ──
 function formatDate(value: string): string {

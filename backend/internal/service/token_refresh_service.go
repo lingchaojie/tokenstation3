@@ -146,6 +146,24 @@ func NewTokenRefreshService(
 	return s
 }
 
+func (s *TokenRefreshService) RegisterCursorRefresher(cursorOAuthService CursorOAuthTokenService) {
+	if s == nil {
+		return
+	}
+	refresher := NewCursorTokenRefresher(cursorOAuthService)
+	s.registrations = append(s.registrations, tokenRefreshRegistration{
+		platform:  PlatformCursor,
+		refresher: refresher,
+		executor:  refresher,
+	})
+}
+
+func altRefreshCredentialSources() []AltRefreshCredentialSource {
+	return []AltRefreshCredentialSource{
+		{Platform: PlatformCursor, CredentialKeys: []string{"api_key", "web_session_token"}},
+	}
+}
+
 func (s *TokenRefreshService) eligiblePlatforms() []string {
 	platforms := make([]string, 0, len(s.registrations))
 	for _, registration := range s.registrations {
@@ -530,13 +548,14 @@ func (s *TokenRefreshService) processRefreshContext(parent context.Context) {
 			break
 		}
 		page, err := pager.ListOAuthRefreshCandidatePage(ctx, OAuthRefreshPageOptions{
-			Platforms:            platforms,
-			AfterID:              afterID,
-			Limit:                pageSize,
-			ActiveOnly:           true,
-			IncludeSetupToken:    true,
-			RequireRefreshToken:  true,
-			ExcludeRetryCooldown: true,
+			Platforms:                   platforms,
+			AfterID:                     afterID,
+			Limit:                       pageSize,
+			ActiveOnly:                  true,
+			IncludeSetupToken:           true,
+			RequireRefreshToken:         true,
+			ExcludeRetryCooldown:        true,
+			AltRefreshCredentialSources: altRefreshCredentialSources(),
 		})
 		if err != nil {
 			slog.Error("token_refresh.list_accounts_failed", "error", err, "after_id", afterID)

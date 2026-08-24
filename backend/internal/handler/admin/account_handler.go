@@ -55,6 +55,7 @@ type AccountHandler struct {
 	antigravityOAuthService *service.AntigravityOAuthService
 	kiroOAuthService        *service.KiroOAuthService
 	grokOAuthService        service.GrokOAuthTokenService
+	cursorOAuthService      service.CursorOAuthTokenService
 	rateLimitService        *service.RateLimitService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
@@ -76,6 +77,14 @@ func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamB
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
 	h.ollamaCloudUsage = usage
+}
+
+// SetCursorOAuthService attaches Cursor manual/bulk refresh support without
+// widening the long-lived account-handler constructor.
+func (h *AccountHandler) SetCursorOAuthService(cursorOAuthService service.CursorOAuthTokenService) {
+	if h != nil {
+		h.cursorOAuthService = cursorOAuthService
+	}
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -1316,6 +1325,18 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 
 		newCredentials = service.MergeCredentials(account.Credentials, h.grokOAuthService.BuildAccountCredentials(tokenInfo))
+		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
+			newCredentials["base_url"] = baseURL
+		}
+	} else if account.Platform == service.PlatformCursor {
+		if h.cursorOAuthService == nil {
+			return nil, "", fmt.Errorf("cursor oauth service is not configured")
+		}
+		tokenInfo, err := h.cursorOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to refresh Cursor credentials: %w", err)
+		}
+		newCredentials = service.MergeCredentials(account.Credentials, h.cursorOAuthService.BuildAccountCredentials(tokenInfo))
 		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
 			newCredentials["base_url"] = baseURL
 		}
@@ -2781,6 +2802,21 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 				Object:      "model",
 				OwnedBy:     "xai",
 				DisplayName: requestedModel,
+			})
+		}
+		response.Success(c, models)
+		return
+	}
+
+	// Cursor observations are account-scoped and authoritative. Until the
+	// first successful AvailableModels discovery, use the fork fallback
+	// catalogue supplied by the account's implicit model mapping.
+	if account.Platform == service.PlatformCursor {
+		ids := service.CursorAvailableModelIDs(account)
+		models := make([]claude.Model, 0, len(ids))
+		for _, id := range ids {
+			models = append(models, claude.Model{
+				ID: id, Type: "model", DisplayName: id,
 			})
 		}
 		response.Success(c, models)

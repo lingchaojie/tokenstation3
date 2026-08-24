@@ -164,9 +164,16 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 	}
 }
 
-func openAICompatibleRequestPlatform(_ context.Context, apiKey *service.APIKey) string {
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformGrok {
-		return service.PlatformGrok
+func openAICompatibleRequestPlatform(ctx context.Context, apiKey *service.APIKey) string {
+	if ctx != nil {
+		for _, key := range []any{ctxkey.ForcePlatform, ctxkey.Platform} {
+			if platform, ok := ctx.Value(key).(string); ok && service.IsOpenAICompatiblePlatform(platform) {
+				return service.NormalizeOpenAICompatiblePlatform(platform)
+			}
+		}
+	}
+	if apiKey != nil && apiKey.Group != nil && service.IsOpenAICompatiblePlatform(apiKey.Group.Platform) {
+		return service.NormalizeOpenAICompatiblePlatform(apiKey.Group.Platform)
 	}
 	return service.PlatformOpenAI
 }
@@ -192,14 +199,18 @@ func allowOpenAICompatibleMessagesDispatch(c *gin.Context, apiKey *service.APIKe
 	if apiKey == nil || apiKey.Group == nil {
 		return true
 	}
-	if apiKey.Group.Platform == service.PlatformGrok {
+	platform := apiKey.Group.Platform
+	if c != nil && c.Request != nil {
+		platform = openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+	}
+	if platform == service.PlatformGrok || platform == service.PlatformCursor {
 		return true
 	}
 	// 国产供应商分组与 grok 同语义:/v1/messages 就是其主要服务形态(anthropic
 	// 协议账号原生直通 Claude Code),无需 allow_messages_dispatch 开关授权——
 	// 该开关对非 openai 平台恒被 sanitizeGroupMessagesDispatchFields 置 false,
 	// 若不豁免,CN 分组将永远 403。
-	if service.IsCNProvider(apiKey.Group.Platform) {
+	if service.IsCNProvider(platform) {
 		return true
 	}
 	return apiKey.Group.AllowMessagesDispatch
@@ -1556,13 +1567,17 @@ func resolveOpenAIMessagesMetadataSession(sessionHash, promptCacheKey, reqModel 
 
 // anthropicErrorResponse writes an error in Anthropic Messages API format.
 func (h *OpenAIGatewayHandler) anthropicErrorResponse(c *gin.Context, status int, errType, message string) {
-	c.JSON(status, gin.H{
+	payload := gin.H{
 		"type": "error",
 		"error": gin.H{
 			"type":    errType,
 			"message": message,
 		},
-	})
+	}
+	if writeCursorTypedTerminalJSON(c, status, payload) {
+		return
+	}
+	c.JSON(status, payload)
 }
 
 // anthropicStreamingAwareError handles errors that may occur during streaming,
@@ -1578,7 +1593,10 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 					"message": message,
 				},
 			})
-			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errPayload) //nolint:errcheck
+			frame := []byte(fmt.Sprintf("event: error\ndata: %s\n\n", errPayload))
+			if !writeCursorTypedTerminalBytes(c, frame) {
+				_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errPayload)
+			}
 			flusher.Flush()
 		}
 		return
@@ -1588,7 +1606,12 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 
 // handleAnthropicFailoverExhausted maps upstream failover errors to Anthropic format.
 func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
-	h.submitOpenAITerminalCapture(c, failoverErr)
+	if failoverErr != nil && strings.EqualFold(strings.TrimSpace(failoverErr.Platform), service.PlatformCursor) &&
+		service.CursorDeliveryCaptureActive(c) {
+		defer h.submitOpenAITerminalCapture(c, failoverErr)
+	} else {
+		h.submitOpenAITerminalCapture(c, failoverErr)
+	}
 	if failoverErr != nil {
 		copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
 	}
@@ -2807,7 +2830,11 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		h.handleFailoverExhaustedSimple(c, http.StatusBadGateway, streamStarted)
 		return
 	}
-	h.submitOpenAITerminalCapture(c, failoverErr)
+	if strings.EqualFold(strings.TrimSpace(failoverErr.Platform), service.PlatformCursor) && service.CursorDeliveryCaptureActive(c) {
+		defer h.submitOpenAITerminalCapture(c, failoverErr)
+	} else {
+		h.submitOpenAITerminalCapture(c, failoverErr)
+	}
 	if failoverErr.IsOpenAIRequestBodyTooLarge() {
 		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
 		h.handleStreamingAwareError(
@@ -2888,6 +2915,10 @@ func (h *OpenAIGatewayHandler) submitOpenAITerminalCapture(c *gin.Context, failu
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
+	if failoverErr != nil && failoverErr.Platform == service.PlatformCursor &&
+		failoverErr.Reason == service.CursorCredentialReasonClientVersion {
+		return http.StatusBadGateway, service.CursorClientVersionRejectedClientMessage
+	}
 	if failoverErr != nil && failoverErr.Reason == service.AntigravityCredentialRejectedReason {
 		return http.StatusBadGateway, service.AntigravityCredentialRejectedClientMessage
 	}
@@ -2995,8 +3026,10 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 				payload = []byte(`{"error":{"type":"upstream_error","message":"Upstream request failed"}}`)
 			}
 			errorEvent := "event: error\ndata: " + string(payload) + "\n\n"
-			if _, err := fmt.Fprint(c.Writer, errorEvent); err != nil {
-				_ = c.Error(err)
+			if !writeCursorTypedTerminalBytes(c, []byte(errorEvent)) {
+				if _, err := fmt.Fprint(c.Writer, errorEvent); err != nil {
+					_ = c.Error(err)
+				}
 			}
 			flusher.Flush()
 		}
@@ -3008,9 +3041,13 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 		h.errorResponse(c, status, errType, message)
 		return
 	}
-	c.JSON(status, gin.H{"error": gin.H{
+	payload := gin.H{"error": gin.H{
 		"type": errType, "code": code, "message": message,
-	}})
+	}}
+	if writeCursorTypedTerminalJSON(c, status, payload) {
+		return
+	}
+	c.JSON(status, payload)
 }
 
 func (h *OpenAIGatewayHandler) ensureOpenAIStreamReadErrorResponse(c *gin.Context, err error, streamStarted bool) bool {
@@ -3150,12 +3187,40 @@ func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType
 			return
 		}
 	}
-	c.JSON(status, gin.H{
+	payload := gin.H{
 		"error": gin.H{
 			"type":    errType,
 			"message": message,
 		},
-	})
+	}
+	if writeCursorTypedTerminalJSON(c, status, payload) {
+		return
+	}
+	c.JSON(status, payload)
+}
+
+func writeCursorTypedTerminalJSON(c *gin.Context, status int, value any) bool {
+	if !service.CursorDeliveryCaptureActive(c) {
+		return false
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		_ = c.Error(err)
+		return true
+	}
+	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	c.Writer.WriteHeader(status)
+	return writeCursorTypedTerminalBytes(c, payload)
+}
+
+func writeCursorTypedTerminalBytes(c *gin.Context, payload []byte) bool {
+	if !service.CursorDeliveryCaptureActive(c) {
+		return false
+	}
+	if _, err := service.WriteCursorTerminalDeliveryBytes(c, payload); err != nil {
+		_ = c.Error(err)
+	}
+	return true
 }
 
 // openAICompactKeepaliveInterval 复用流式 keepalive 配置作为 compact 下游

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -92,6 +93,154 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	require.Equal(t, "list", got.Object)
 	require.Contains(t, modelIDsForTest(got.Data), "gemini-2.5-flash")
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
+}
+
+func TestGatewayModels_CursorUsesAuthoritativeObservedSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(6101)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID: 1, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
+						Status: service.StatusActive, Schedulable: true,
+						Extra: map[string]any{"cursor_observed_models": map[string]any{
+							"models": []any{"auto", "observed-cursor-only"},
+						}},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformCursor},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, []string{"auto", "observed-cursor-only"}, modelIDsForTest(got.Data))
+	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
+}
+
+func TestGatewayModels_CursorWithoutSnapshotUsesCursorFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(6102)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID: 1, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
+						Status: service.StatusActive, Schedulable: true,
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformCursor},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.ElementsMatch(t, cursorpkg.DefaultModelIDs(), modelIDsForTest(got.Data))
+}
+
+func TestGatewayModels_CursorDisabledOnlySnapshotReturnsNoModels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(6103)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID: 1, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
+						Status: service.StatusDisabled, Schedulable: false,
+						Extra: map[string]any{"cursor_observed_models": map[string]any{
+							"models": []any{"disabled-only-model"},
+						}},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformCursor},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Empty(t, modelIDsForTest(got.Data))
+}
+
+func TestGatewayModels_CursorCachedSnapshotIsRemovedWhenAccountBecomesDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(6104)
+	repo := &gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {
+				{
+					ID: 1, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
+					Status: service.StatusActive, Schedulable: true,
+					Extra: map[string]any{"cursor_observed_models": map[string]any{
+						"models": []any{"cached-cursor-model"},
+					}},
+				},
+			},
+		},
+	}
+	h := newGatewayModelsHandlerForTest(repo)
+
+	requestModels := func() []string {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+			Group: &service.Group{ID: groupID, Platform: service.PlatformCursor},
+		})
+		h.Models(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var got gatewayModelsResponseForTest
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+		return modelIDsForTest(got.Data)
+	}
+
+	require.Equal(t, []string{"cached-cursor-model"}, requestModels())
+	repo.byGroup[groupID] = []service.Account{{
+		ID: 1, Platform: service.PlatformCursor, Type: service.AccountTypeOAuth,
+		Status: service.StatusDisabled, Schedulable: false,
+		Extra: map[string]any{"cursor_observed_models": map[string]any{
+			"models": []any{"cached-cursor-model"},
+		}},
+	}}
+
+	require.Empty(t, requestModels())
 }
 
 func TestGatewayModels_KiroGroupFallsBackToKiroModels(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/capture/model"
 	"github.com/Wei-Shaw/sub2api/internal/capture/protocol"
+	cursorpkg "github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -227,4 +228,21 @@ func (s *OpenAIGatewayService) InstallOpenAIAccountSchedulerForUnitTest(schedule
 		s.openaiSchedulerOnce.Do(func() {})
 	}
 	return resetOpenAIAdvancedSchedulerSettingCacheForTest
+}
+
+// InstallCursorAgentStreamOpenerForUnitTest injects an in-memory Cursor Run
+// stream into a constructed gateway service for cross-package handler tests.
+func (s *OpenAIGatewayService) InstallCursorAgentStreamOpenerForUnitTest(opener func(
+	context.Context,
+	cursorpkg.AgentRunParams,
+	cursorpkg.AgentStreamOptions,
+) (*cursorpkg.AgentStream, error)) func() {
+	if s == nil {
+		return func() {}
+	}
+	previous := s.cursorAgentStreamOpener
+	s.cursorAgentStreamOpener = cursorAgentStreamOpener(opener)
+	return func() {
+		s.cursorAgentStreamOpener = previous
+	}
 }

@@ -278,6 +278,8 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 	require.Contains(t, normalized, "deleted_at IS NULL")
 	require.Contains(t, normalized, "schedulable = TRUE",
 		"permanently unschedulable accounts must not remain OAuth refresh candidates")
+	require.Contains(t, normalized, "(platform <> 'cursor' OR type = 'oauth')",
+		"legacy non-OAuth Cursor rows must not enter OAuth refresh scheduling")
 	require.Contains(t, normalized, "status = 'active'")
 	// setup-token 的 access_token 同为 8h 短期令牌，必须与 oauth 一起纳入后台刷新候选
 	require.Contains(t, normalized, "type IN ('oauth', 'setup-token')")
@@ -306,6 +308,45 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 	platforms, err := valuer.Value()
 	require.NoError(t, err)
 	require.Contains(t, platforms, service.PlatformGrok)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAccountRepository_ListOAuthRefreshCandidatePage_CursorRefreshCandidatesUseAlternateCredentialSources(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var capturedSQL string
+	var capturedArgs []any
+	mock.ExpectQuery("SELECT id").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	repo := newAccountRepositoryWithSQL(nil, captureQuerySQL{db: db, captured: &capturedSQL, args: &capturedArgs}, nil)
+
+	page, err := repo.ListOAuthRefreshCandidatePage(context.Background(), service.OAuthRefreshPageOptions{
+		Platforms:           []string{service.PlatformAnthropic, service.PlatformCursor},
+		AfterID:             100,
+		Limit:               200,
+		ActiveOnly:          true,
+		RequireRefreshToken: true,
+		AltRefreshCredentialSources: []service.AltRefreshCredentialSource{
+			{Platform: service.PlatformCursor, CredentialKeys: []string{"api_key", "web_session_token"}},
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, page.Accounts)
+
+	normalized := normalizeSQLWhitespace(capturedSQL)
+	require.Contains(t, normalized, "credentials ? 'refresh_token'")
+	require.Contains(t, normalized, "btrim(credentials->>'refresh_token') <> ''")
+	require.Contains(t, normalized, "btrim(coalesce(credentials->>$3, '')) <> ''")
+	require.Contains(t, normalized, "btrim(coalesce(credentials->>$4, '')) <> ''")
+	require.Contains(t, normalized, "platform = $5")
+	require.Contains(t, normalized, "LIMIT $6")
+	require.Len(t, capturedArgs, 6)
+	require.Equal(t, int64(100), capturedArgs[1])
+	require.Equal(t, "api_key", capturedArgs[2])
+	require.Equal(t, "web_session_token", capturedArgs[3])
+	require.Equal(t, service.PlatformCursor, capturedArgs[4])
+	require.Equal(t, 200, capturedArgs[5])
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

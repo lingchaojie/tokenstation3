@@ -62,6 +62,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		result, err = finalizeOpenAIForwardResultWithUsage(c, result, err, body)
 	}()
 	beginUpstreamResponseModelObservation(c)
+	if account != nil && account.Platform == PlatformCursor {
+		return s.forwardCursorChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
 
 	restrictionResult := s.detectCodexClientRestriction(c, account, body)
 	logCodexCLIOnlyDetection(ctx, c, account, getAPIKeyIDFromContext(c), restrictionResult, body)

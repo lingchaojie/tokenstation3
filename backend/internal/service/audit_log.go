@@ -132,6 +132,9 @@ var auditBodySensitiveExactKeys = func() map[string]struct{} {
 		// custom_key 为用户自设的平台 API Key 明文，
 		// session 为 Ollama Cloud 用量的浏览器会话 Cookie 明文。
 		"proxy_key", "custom_key", "session",
+		// OAuth deep-link and browser-session material uses short keys that do
+		// not contain the generic token/secret substrings.
+		"state", "verifier", "code_verifier", "challenge", "rt", "session_id",
 	}
 	set := make(map[string]struct{}, len(builtin)+len(SensitiveCredentialKeys)+16)
 	for _, k := range builtin {
@@ -258,5 +261,8 @@ func RedactAuditQuery(rawQuery string) string {
 	if rawQuery == "" {
 		return ""
 	}
-	return logredact.RedactText(rawQuery, "api_key", "apikey", "token", "secret", "key")
+	return logredact.RedactText(rawQuery,
+		"api_key", "apikey", "token", "secret", "key",
+		"state", "verifier", "challenge", "session_id", "session_token", "sso", "sso_token", "password",
+	)
 }

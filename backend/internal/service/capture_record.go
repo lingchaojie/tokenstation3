@@ -1976,6 +1976,7 @@ func extractResponseColumns(resp []byte, stream bool) responseColumns {
 
 func extractResponseColumnsForPlatform(resp []byte, stream bool, platform string) responseColumns {
 	var cols responseColumns
+	normalizedPlatform := strings.ToLower(strings.TrimSpace(platform))
 	setStringValue := func(value string) {
 		if value = strings.TrimSpace(value); value != "" {
 			cols.StopReason = value
@@ -2023,6 +2024,11 @@ func extractResponseColumnsForPlatform(resp []byte, stream bool, platform string
 		finishReason, finishReasonCamel := captureResponseStopReasons(js)
 		setStringValue(finishReason)
 		setString(gjson.GetBytes(js, "response.status"))
+		rootObject := gjson.GetBytes(js, "object")
+		if !stream && (normalizedPlatform == PlatformOpenAI || normalizedPlatform == PlatformCursor) &&
+			rootObject.Type == gjson.String && rootObject.String() == "response" {
+			setString(gjson.GetBytes(js, "status"))
+		}
 		setStringValue(finishReasonCamel)
 
 		setInt(gjson.GetBytes(js, "usage.input_tokens"), &cols.InputTokens, &cols.inputTokensPresent)

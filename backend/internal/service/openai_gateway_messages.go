@@ -37,6 +37,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		result, err = finalizeOpenAIForwardResultWithUsage(c, result, err, body)
 	}()
 	beginUpstreamResponseModelObservation(c)
+	if account != nil && account.Platform == PlatformCursor {
+		return s.forwardCursorAnthropic(ctx, c, account, body, defaultMappedModel)
+	}
 
 	// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点时，
 	// /v1/messages 请求零转换直通（仅模型名映射 + 少量 body 清洗），完整保留

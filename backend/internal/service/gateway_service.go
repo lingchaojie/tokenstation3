@@ -1648,7 +1648,13 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 
 func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
 	cacheKey := modelsListCacheKey(groupID, platform)
-	if s.modelsListCache != nil {
+	// Cursor catalogues are derived from mutable upstream observations and
+	// account eligibility. No production mutation path currently invalidates
+	// every affected group and aggregate key, so do not cache Cursor-scoped or
+	// cross-platform aggregate results. Other provider-scoped catalogues retain
+	// the existing cache.
+	useModelsListCache := s.modelsListCache != nil && platform != PlatformCursor && strings.TrimSpace(platform) != ""
+	if useModelsListCache {
 		if cached, found := s.modelsListCache.Get(cacheKey); found {
 			if models, ok := cached.([]string); ok {
 				modelsListCacheHitTotal.Add(1)
@@ -1686,12 +1692,55 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	modelSet := make(map[string]struct{})
 	hasAnyMapping := false
 
-	for _, acc := range accounts {
+	for i := range accounts {
+		acc := &accounts[i]
+		if acc.Platform == PlatformCursor {
+			// Repository methods normally return only schedulable rows, but keep
+			// this boundary defensive so a stale cache or loose implementation
+			// cannot publish a disabled account's observed catalogue.
+			if !cursorObservedModelsAccountEligible(acc) {
+				continue
+			}
+
+			mapping := acc.GetModelMapping()
+			if observedIDs := CursorObservedModelIDs(acc.Extra); len(observedIDs) > 0 {
+				hasAnyMapping = true
+				for _, model := range observedIDs {
+					modelSet[model] = struct{}{}
+				}
+				// An observed snapshot is authoritative. Operator aliases may be
+				// exposed only when their upstream target was actually observed;
+				// the platform's implicit default mapping is deliberately ignored.
+				if acc.HasExplicitModelMapping() {
+					observed := CursorObservedModelSet(acc.Extra)
+					for requested, target := range mapping {
+						if CursorModelObserved(observed, target) {
+							modelSet[requested] = struct{}{}
+						}
+					}
+				}
+				continue
+			}
+
+			// Until discovery has produced a usable snapshot, preserve the
+			// fork fallback catalogue (or an explicit operator mapping). This
+			// fallback is per-account so one observed account does not suppress
+			// an undiscovered account's known-safe defaults in the same pool.
+			hasAnyMapping = true
+			for model := range mapping {
+				model = strings.TrimSpace(model)
+				if model != "" {
+					modelSet[model] = struct{}{}
+				}
+			}
+			continue
+		}
+
 		// Passthrough routing accepts models independently of model_mapping. A stale
 		// mapping on any eligible passthrough account therefore cannot define the
 		// public whitelist; return nil so the handler uses its default model set.
 		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() {
-			if s.modelsListCache != nil {
+			if useModelsListCache {
 				s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
 				modelsListCacheStoreTotal.Add(1)
 			}
@@ -1709,7 +1758,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 
 	// If no account has model_mapping, return nil (use default)
 	if !hasAnyMapping {
-		if s.modelsListCache != nil {
+		if useModelsListCache {
 			s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
 			modelsListCacheStoreTotal.Add(1)
 		}
@@ -1723,7 +1772,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	}
 	sort.Strings(models)
 
-	if s.modelsListCache != nil {
+	if useModelsListCache {
 		s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
 		modelsListCacheStoreTotal.Add(1)
 	}
@@ -1749,7 +1798,11 @@ func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *i
 		return platforms
 	}
 
-	for _, acc := range accounts {
+	for i := range accounts {
+		acc := &accounts[i]
+		if acc.Platform == PlatformCursor && !cursorObservedModelsAccountEligible(acc) {
+			continue
+		}
 		platform := strings.TrimSpace(acc.Platform)
 		if platform != "" {
 			platforms[platform] = struct{}{}

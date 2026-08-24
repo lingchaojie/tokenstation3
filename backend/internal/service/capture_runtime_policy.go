@@ -29,6 +29,7 @@ type CapturePlatformPolicy struct {
 	Gemini      bool `json:"gemini"`
 	Antigravity bool `json:"antigravity"`
 	Grok        bool `json:"grok"`
+	Cursor      bool `json:"cursor"`
 }
 
 type CaptureOutcomePolicy struct {
@@ -71,6 +72,7 @@ func DefaultCaptureRuntimePolicy() CaptureRuntimePolicy {
 			Gemini:      true,
 			Antigravity: true,
 			Grok:        true,
+			Cursor:      true,
 		},
 		Outcomes: CaptureOutcomePolicy{
 			Success:       true,
@@ -266,6 +268,10 @@ func (p CompiledCapturePolicy) decide(platform string, outcome CaptureOutcome, u
 		}
 	case "grok":
 		if !p.platforms.Grok {
+			return CaptureContentPolicy{}, false
+		}
+	case "cursor":
+		if !p.platforms.Cursor {
 			return CaptureContentPolicy{}, false
 		}
 	default:

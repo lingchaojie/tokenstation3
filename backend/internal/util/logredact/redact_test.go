@@ -67,6 +67,31 @@ func TestRedactText_DefaultPathDoesNotUseExtraCache(t *testing.T) {
 	}
 }
 
+func TestCursorDeepLinkCanaryIsRedacted(t *testing.T) {
+	raw := `{"state":"CURSOR_TOKEN_CANARY","verifier":"verifier-canary",` +
+		`"challenge":"challenge-canary","sessionId":"session-canary",` +
+		`"webSessionToken":"web-session-canary","apiKey":"crsr_canary",` +
+		`"password":"password-canary","ssoToken":"sso-canary"}`
+	out := RedactText(raw)
+	for _, secret := range []string{
+		"CURSOR_TOKEN_CANARY", "verifier-canary", "challenge-canary", "session-canary",
+		"web-session-canary", "crsr_canary", "password-canary", "sso-canary",
+	} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("Cursor credential %q leaked from %q", secret, out)
+		}
+	}
+}
+
+func TestCursorCredentialTextSpellingsAreRedacted(t *testing.T) {
+	out := RedactText("state=CURSOR_TOKEN_CANARY session_id=session-canary sso-rw=sso-canary clearTextPassword=password-canary")
+	for _, secret := range []string{"CURSOR_TOKEN_CANARY", "session-canary", "sso-canary", "password-canary"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("Cursor credential %q leaked from %q", secret, out)
+		}
+	}
+}
+
 func clearExtraTextPatternCache() {
 	extraTextPatternCache.Range(func(key, value any) bool {
 		extraTextPatternCache.Delete(key)

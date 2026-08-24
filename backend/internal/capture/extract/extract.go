@@ -388,7 +388,7 @@ func newJSONBody(ctx context.Context, mode parserMode) *jsonBody {
 		body.mu.Unlock()
 	})
 	go func() {
-		result := parseJSONDocument(body.reader, mode)
+		result := parseJSONDocument(body.reader, mode, mode == responseMode)
 		if result.err != nil {
 			_ = body.reader.CloseWithError(sanitizeError(result.err))
 		} else {
@@ -455,12 +455,15 @@ func (b *jsonBody) abort() {
 // The JSON walker skips uninteresting scalar content without retaining it.
 // Interesting strings are capped at maxMetadataBytes before decoding.
 type jsonWalker struct {
-	reader   *bufio.Reader
-	mode     parserMode
-	request  requestState
-	response responseState
-	firstErr error
-	gemini   [2]geminiUsage
+	reader               *bufio.Reader
+	mode                 parserMode
+	request              requestState
+	response             responseState
+	responsesRootObject  string
+	responsesRootStatus  string
+	responsesRootEnabled bool
+	firstErr             error
+	gemini               [2]geminiUsage
 }
 
 type geminiUsage struct {
@@ -472,8 +475,11 @@ type geminiUsage struct {
 	thoughts       uint32
 }
 
-func parseJSONDocument(reader io.Reader, mode parserMode) parseResult {
-	walker := &jsonWalker{reader: bufio.NewReaderSize(reader, readerBufferSize), mode: mode}
+func parseJSONDocument(reader io.Reader, mode parserMode, responsesRootEnabled bool) parseResult {
+	walker := &jsonWalker{
+		reader: bufio.NewReaderSize(reader, readerBufferSize), mode: mode,
+		responsesRootEnabled: responsesRootEnabled,
+	}
 	first, err := walker.readNonSpace()
 	if errors.Is(err, io.EOF) {
 		return parseResult{}
@@ -502,11 +508,12 @@ func parseJSONDocument(reader io.Reader, mode parserMode) parseResult {
 	}
 	walker.finishGemini()
 	walker.finishRequest()
+	walker.finishResponsesRoot()
 	return parseResult{request: walker.request, response: walker.response, err: walker.firstErr}
 }
 
 func parseJSONBytes(payload []byte, mode parserMode) parseResult {
-	return parseJSONDocument(bytes.NewReader(payload), mode)
+	return parseJSONDocument(bytes.NewReader(payload), mode, false)
 }
 
 func (w *jsonWalker) scanValue(path []string, depth int) error {
@@ -788,6 +795,9 @@ func (w *jsonWalker) pathInteresting(path []string) bool {
 	if len(path) > 0 && (path[len(path)-1] == "signature" || path[len(path)-1] == "thoughtSignature") {
 		return true
 	}
+	if w.responsesRootEnabled && (pathEqual(path, "object") || pathEqual(path, "status")) {
+		return true
+	}
 	return responseStringRank(path) != 0 || responseNumberRank(path) != 0 || geminiPath(path) >= 0
 }
 
@@ -801,6 +811,12 @@ func (w *jsonWalker) handleString(path []string, value string) {
 			w.response.value.SignaturePresent = true
 			w.response.signaturePresent = true
 		}
+	}
+	switch {
+	case pathEqual(path, "object"):
+		w.responsesRootObject = value
+	case pathEqual(path, "status"):
+		w.responsesRootStatus = strings.TrimSpace(value)
 	}
 	if rank := responseStringRank(path); rank != 0 && strings.TrimSpace(value) != "" {
 		w.response.setStop(value, rank)
@@ -847,6 +863,12 @@ func (w *jsonWalker) handleLiteral(path []string, literal string) {
 func (w *jsonWalker) handleWrongType(path []string) {
 	if w.mode != responseMode {
 		return
+	}
+	switch {
+	case pathEqual(path, "object"):
+		w.responsesRootObject = ""
+	case pathEqual(path, "status"):
+		w.responsesRootStatus = ""
 	}
 	if scope := geminiPath(path); scope >= 0 {
 		usage := &w.gemini[scope/2]
@@ -913,6 +935,12 @@ func (w *jsonWalker) finishGemini() {
 			continue
 		}
 		w.response.setOutput(uint32(total), 50+scope*10)
+	}
+}
+
+func (w *jsonWalker) finishResponsesRoot() {
+	if w.responsesRootEnabled && w.responsesRootObject == "response" && w.responsesRootStatus != "" {
+		w.response.setStop(w.responsesRootStatus, 40)
 	}
 }
 

@@ -21,6 +21,7 @@ export default {
         relayPriorityHint: '建议保持较低优先级（数字更大），仅作兜底；原生 Kiro 账号全部异常时才启用',
       },
       kiroAccount: 'Kiro 账号',
+      cursorAccount: 'Cursor 账号',
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       createAccount: '添加账号',
@@ -368,6 +369,7 @@ export default {
         codeAssist: 'Code Assist',
         antigravityOauth: 'Antigravity OAuth',
         grokOauth: 'Grok OAuth',
+        cursorOauth: 'Cursor OAuth',
         antigravityApikey: '通过 Base URL + API Key 连接',
         upstream: '对接上游',
         upstreamDesc: '通过 Base URL + API Key 连接上游'
@@ -872,6 +874,17 @@ export default {
           official: '官方 API'
         }
       },
+      cursor: {
+        oauthOnlyHint: 'Cursor 仅支持 OAuth 账号。可在授权步骤一次性粘贴 crsr_ API Key 或会话 Cookie 进行转换，源密钥不会被存储。'
+      },
+      cursorCustomBaseUrl: {
+        title: '自定义 Cursor 端点',
+        hint: '可选的转发端点；授权与令牌刷新仍通过 Cursor 完成。',
+        placeholder: 'https://relay.example.com/cursor',
+        required: '请输入 Cursor 端点',
+        invalid: '请输入不含凭据、查询参数或片段的安全 HTTP/HTTPS 端点',
+        presets: { official: '官方' }
+      },
       grokClientToolCache: {
         title: '客户端工具缓存（可能改变自动工具选择）',
         hint: '仅对已识别为 Free 的 Grok OAuth 账号生效，默认会为 Codex、Trae 等客户端函数工具请求启用上游提示缓存；如不接受自动工具选择行为，可关闭此开关退出。'
@@ -1034,6 +1047,43 @@ export default {
       },
       // OAuth flow
       oauth: {
+        cursor: {
+          title: 'Cursor 授权',
+          followSteps: '打开深链并在 Cursor 中确认授权。',
+          step1GenerateUrl: '生成 Cursor 授权深链',
+          generateAuthUrl: '生成 Cursor 授权链接',
+          step2OpenUrl: '打开链接并确认授权',
+          openUrlDesc: '在浏览器中完成授权，本页面会自动轮询结果。',
+          step3EnterCode: '手动回调备用方式',
+          authCodeDesc: '若自动完成失败，请粘贴回调 URL 或授权码。',
+          authCode: '回调 URL 或授权码',
+          authCodePlaceholder: '粘贴回调 URL 或授权码',
+          authCodeHint: '回调授权码与 state 仅用于本次授权。',
+          importantNotice: 'Cookie 与 crsr_ API Key 仅作为一次性输入，绝不会存储。',
+          waitingForAuthorization: '正在等待 Cursor 授权…',
+          refreshTokenAuth: 'Refresh Token',
+          refreshTokenDesc: '每行粘贴一个 Cursor Refresh Token，每个 Token 创建一个 OAuth 账号。',
+          refreshTokenPlaceholder: '粘贴 Cursor Refresh Token，每行一个',
+          ssoCookieAuth: '会话 Cookie 或 crsr_ API Key',
+          ssoCookieDesc: '粘贴 Cursor 会话 Cookie 或 crsr_ API Key 进行一次性转换。',
+          ssoCookieLabel: '一次性 Cursor 凭据',
+          ssoCookiePlaceholder: '每行粘贴一个会话 Cookie 或 crsr_ API Key',
+          ssoCookieHint: '输入仅发送到转换接口，并会在响应完成后清除。',
+          validating: '验证中…',
+          convertingSSO: '转换中…',
+          validateAndCreate: '验证并保存',
+          convertSSOAndCreate: '转换并保存',
+          pleaseEnterRefreshToken: '请输入 Cursor Refresh Token',
+          failedToGenerateUrl: '生成 Cursor 授权链接失败',
+          missingExchangeParams: '缺少 Cursor 授权数据',
+          failedToExchangeCode: '兑换 Cursor 授权码失败',
+          failedToPoll: '轮询 Cursor 授权失败',
+          pollTimeout: 'Cursor 授权超时',
+          failedToValidateRT: '验证 Cursor Refresh Token 失败',
+          failedToValidateSSO: '转换 Cursor 凭据失败',
+          failedToConvertSSO: '导入 Cursor 凭据失败',
+          errors: {}
+        },
         kiro: {
           title: 'Kiro 授权',
           followSteps: '按照以下步骤授权您的 Kiro 账号：',

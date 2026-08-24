@@ -17,14 +17,142 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	serverroutes "github.com/Wei-Shaw/sub2api/internal/server/routes"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCursorDispatchResponsesRoutesSelectCompatibleGateway(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	var selectedPlatform string
+	groupPlatform := service.PlatformCursor
+	apiKeyAuth := middleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{Platform: groupPlatform},
+		})
+		c.Next()
+		selectedPlatform, _ = c.Request.Context().Value(ctxkey.ForcePlatform).(string)
+	})
+	serverroutes.RegisterGatewayRoutes(
+		router,
+		&handler.Handlers{
+			Gateway:       &handler.GatewayHandler{},
+			OpenAIGateway: &handler.OpenAIGatewayHandler{},
+			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+		},
+		apiKeyAuth, nil, nil, nil, nil,
+		&config.Config{Gateway: config.GatewayConfig{MaxBodySize: 1 << 20, TextMaxBodySize: 1 << 20}},
+	)
+
+	for _, path := range []string{"/v1/responses", "/responses", "/backend-api/codex/responses"} {
+		selectedPlatform = ""
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"model":"auto","input":"hello"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, service.PlatformCursor, selectedPlatform, "path=%s status=%d body=%s", path, w.Code, w.Body.String())
+	}
+	for _, platformCase := range []struct {
+		platform string
+		want     string
+	}{
+		{platform: service.PlatformCursor, want: service.PlatformCursor},
+		{platform: service.PlatformKiro},
+		{platform: service.PlatformKimi, want: service.PlatformKimi},
+	} {
+		for _, path := range []string{"/v1/chat/completions", "/chat/completions"} {
+			groupPlatform = platformCase.platform
+			selectedPlatform = ""
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"model":"auto","messages":[{"role":"user","content":"hello"}]}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, platformCase.want, selectedPlatform, "platform=%s path=%s status=%d body=%s", platformCase.platform, path, w.Code, w.Body.String())
+		}
+	}
+
+	groupPlatform = service.PlatformCursor
+	for _, path := range []string{"/v1/responses/input_tokens", "/v1/responses/compact", "/responses/compact", "/backend-api/codex/responses/compact"} {
+		selectedPlatform = ""
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"model":"auto","input":"hello"}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+		require.Empty(t, selectedPlatform, "Cursor must not inherit OpenAI-only Responses subpath routing: %s", path)
+	}
+}
+
+func TestCursorOAuthRoutesAreRegistered(t *testing.T) {
+	// Catches an admin route registration mutation that leaves the handler unreachable.
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{
+		Dashboard:              &adminhandler.DashboardHandler{},
+		User:                   &adminhandler.UserHandler{},
+		Group:                  &adminhandler.GroupHandler{},
+		Account:                &adminhandler.AccountHandler{},
+		Announcement:           &adminhandler.AnnouncementHandler{},
+		DataManagement:         &adminhandler.DataManagementHandler{},
+		Backup:                 &adminhandler.BackupHandler{},
+		OAuth:                  &adminhandler.OAuthHandler{},
+		OpenAIOAuth:            &adminhandler.OpenAIOAuthHandler{},
+		GeminiOAuth:            &adminhandler.GeminiOAuthHandler{},
+		AntigravityOAuth:       &adminhandler.AntigravityOAuthHandler{},
+		KiroOAuth:              &adminhandler.KiroOAuthHandler{},
+		GrokOAuth:              &adminhandler.GrokOAuthHandler{},
+		CursorOAuth:            adminhandler.NewCursorOAuthHandler(nil, nil),
+		CNProvider:             &adminhandler.CNProviderHandler{},
+		Proxy:                  &adminhandler.ProxyHandler{},
+		Redeem:                 &adminhandler.RedeemHandler{},
+		Promo:                  &adminhandler.PromoHandler{},
+		Setting:                &adminhandler.SettingHandler{},
+		Capture:                &adminhandler.CaptureHandler{},
+		Ops:                    &adminhandler.OpsHandler{},
+		System:                 &adminhandler.SystemHandler{},
+		Subscription:           &adminhandler.SubscriptionHandler{},
+		Usage:                  &adminhandler.UsageHandler{},
+		UserAttribute:          &adminhandler.UserAttributeHandler{},
+		ErrorPassthrough:       &adminhandler.ErrorPassthroughHandler{},
+		TLSFingerprintProfile:  &adminhandler.TLSFingerprintProfileHandler{},
+		APIKey:                 &adminhandler.AdminAPIKeyHandler{},
+		ScheduledTest:          &adminhandler.ScheduledTestHandler{},
+		Channel:                &adminhandler.ChannelHandler{},
+		ChannelMonitor:         &adminhandler.ChannelMonitorHandler{},
+		ChannelMonitorTemplate: &adminhandler.ChannelMonitorRequestTemplateHandler{},
+		ContentModeration:      &adminhandler.ContentModerationHandler{},
+		Payment:                &adminhandler.PaymentHandler{},
+		Affiliate:              &adminhandler.AffiliateHandler{},
+		CheckIn:                &adminhandler.CheckInHandler{},
+		Compliance:             &adminhandler.ComplianceHandler{},
+		AuditLog:               &adminhandler.AuditLogHandler{},
+	}}
+	serverroutes.RegisterAdminRoutes(router.Group("/api/v1"), handlers,
+		func(c *gin.Context) { c.Next() }, func(c *gin.Context) { c.Next() }, func(c *gin.Context) { c.Next() }, nil)
+	routes := make(map[string]struct{}, len(router.Routes()))
+	for _, route := range router.Routes() {
+		routes[route.Method+" "+route.Path] = struct{}{}
+	}
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/admin/cursor/oauth/auth-url"},
+		{http.MethodPost, "/api/v1/admin/cursor/oauth/poll"},
+		{http.MethodPost, "/api/v1/admin/cursor/oauth/sso-token"},
+		{http.MethodPost, "/api/v1/admin/cursor/sso-to-oauth"},
+	} {
+		_, ok := routes[route.method+" "+route.path]
+		require.Truef(t, ok, "%s %s", route.method, route.path)
+	}
+}
 
 func TestAPIContracts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -963,7 +1091,7 @@ func TestAPIContracts(t *testing.T) {
 					"default_balance": 1.25,
 					"default_anthropic_group_id": null,
 					"default_openai_group_id": null,
-					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null}},
+					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null},"cursor":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
 					"auth_source_default_google_platform_quotas": null,
@@ -1266,7 +1394,7 @@ func TestAPIContracts(t *testing.T) {
 					"purchase_subscription_url": "",
 					"table_default_page_size": 20,
 					"table_page_size_options": [10, 20, 50],
-					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null}},
+					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null},"cursor":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
 					"auth_source_default_google_platform_quotas": null,

@@ -12,6 +12,7 @@ export interface CaptureRuntimePolicy {
     gemini: boolean
     antigravity: boolean
     grok: boolean
+    cursor: boolean
   }
   outcomes: {
     success: boolean
