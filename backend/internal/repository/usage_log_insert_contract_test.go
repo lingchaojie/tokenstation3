@@ -29,9 +29,9 @@ func TestUsageLogInsertColumnContractIncludesLocalAndUpstreamFields(t *testing.T
 		"stream", "openai_ws_mode", "duration_ms", "first_token_ms", "user_agent", "ip_address",
 		"image_count", "image_size", "image_input_size", "image_output_size", "image_size_source",
 		"image_size_breakdown", "video_count", "video_resolution", "video_duration_seconds",
-		"service_tier", "reasoning_effort", "inbound_endpoint", "upstream_endpoint",
+		"service_tier", "reasoning_effort", "requested_reasoning_effort", "inbound_endpoint", "upstream_endpoint",
 		"cache_ttl_overridden", "long_context_billing_applied", "channel_id", "model_mapping_chain",
-		"billing_tier", "billing_mode", "account_stats_cost", "kiro_credits", "session_id", "created_at",
+		"billing_tier", "billing_mode", "account_stats_cost", "kiro_credits", "session_id", "native_compaction_v2", "created_at",
 	}
 	wantTypes := []string{
 		"bigint", "bigint", "bigint", "text", "text", "text", "text", "text", "boolean",
@@ -39,12 +39,12 @@ func TestUsageLogInsertColumnContractIncludesLocalAndUpstreamFields(t *testing.T
 		"integer", "numeric", "integer", "numeric", "numeric", "numeric", "numeric", "numeric",
 		"numeric", "numeric", "numeric", "numeric", "smallint", "smallint", "boolean", "boolean",
 		"integer", "integer", "text", "text", "integer", "text", "text", "text", "text", "jsonb",
-		"integer", "text", "integer", "text", "text", "text", "text", "boolean", "boolean",
-		"bigint", "text", "text", "text", "numeric", "numeric", "text", "timestamptz",
+		"integer", "text", "integer", "text", "text", "text", "text", "text", "boolean", "boolean",
+		"bigint", "text", "text", "text", "numeric", "numeric", "text", "boolean", "timestamptz",
 	}
 
 	gotSelectColumns := splitUsageContractCSV(usageLogSelectColumns)
-	require.Len(t, gotSelectColumns, 61)
+	require.Len(t, gotSelectColumns, 63)
 	require.Equal(t, "id", gotSelectColumns[0])
 	require.Equal(t, wantColumns, gotSelectColumns[1:])
 	require.Equal(t, wantTypes, usageLogInsertArgTypes[:])
@@ -61,12 +61,15 @@ func TestUsageLogInsertColumnContractIncludesLocalAndUpstreamFields(t *testing.T
 	kiroField.Set(reflect.ValueOf(&kiroCredits))
 	prepared := prepareUsageLogInsert(log)
 	require.Len(t, prepared.args, len(wantColumns))
-	preparedKiroCredits, ok := prepared.args[57].(*float64)
+	preparedKiroCredits, ok := prepared.args[58].(*float64)
 	require.True(t, ok)
 	require.NotNil(t, preparedKiroCredits)
 	require.Equal(t, kiroCredits, *preparedKiroCredits)
-	require.Equal(t, sql.NullString{String: sessionID, Valid: true}, prepared.args[58])
-	require.Equal(t, createdAt, prepared.args[59])
+	require.Equal(t, sql.NullString{String: sessionID, Valid: true}, prepared.args[59])
+	upstreamModelMismatch, ok := prepared.args[60].(bool)
+	require.True(t, ok)
+	require.False(t, upstreamModelMismatch)
+	require.Equal(t, createdAt, prepared.args[61])
 
 	t.Run("single", func(t *testing.T) {
 		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(

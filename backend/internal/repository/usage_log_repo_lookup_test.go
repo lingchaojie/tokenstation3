@@ -71,6 +71,7 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 			sql.NullInt64{},
 			sql.NullString{},
 			sql.NullString{},
+			sql.NullString{},
 			sql.NullString{String: "/api/v1/chat/conversations/7/messages", Valid: true},
 			sql.NullString{},
 			false,
@@ -82,6 +83,7 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 			sql.NullFloat64{},
 			sql.NullFloat64{},
 			sql.NullString{},
+			false,
 			createdAt,
 		)
 

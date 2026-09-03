@@ -95,6 +95,52 @@ func TestAdminUsageListInvalidStream(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestAdminUsageListNativeCompactionFilter(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage?request_type=stream&native_compaction_v2=true", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, repo.listFilters.RequestType)
+	require.Equal(t, int16(service.RequestTypeStream), *repo.listFilters.RequestType)
+	require.NotNil(t, repo.listFilters.NativeCompactionV2)
+	require.True(t, *repo.listFilters.NativeCompactionV2)
+}
+
+func TestAdminUsageListObservabilityFilters(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage?account_id=31&channel_id=41&service_tier=priority&reasoning_effort=xhigh&requested_reasoning_effort=max&inbound_endpoint=%2Fv1%2Fresponses&upstream_endpoint=%2Fv1%2Fchat%2Fcompletions&native_compaction_v2=false", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, int64(31), repo.listFilters.AccountID)
+	require.Equal(t, int64(41), repo.listFilters.ChannelID)
+	require.Equal(t, "priority", repo.listFilters.ServiceTier)
+	require.Equal(t, "xhigh", repo.listFilters.ReasoningEffort)
+	require.Equal(t, "max", repo.listFilters.RequestedReasoningEffort)
+	require.Equal(t, "/v1/responses", repo.listFilters.InboundEndpoint)
+	require.Equal(t, "/v1/chat/completions", repo.listFilters.UpstreamEndpoint)
+	require.NotNil(t, repo.listFilters.NativeCompactionV2)
+	require.False(t, *repo.listFilters.NativeCompactionV2)
+}
+
+func TestAdminUsageListInvalidNativeCompactionFilter(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage?native_compaction_v2=oops", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestAdminUsageListExactTotalTrue(t *testing.T) {
 	repo := &adminUsageRepoCapture{}
 	router := newAdminUsageRequestTypeTestRouter(repo)
@@ -142,6 +188,19 @@ func TestAdminUsageStatsRequestTypePriority(t *testing.T) {
 	require.NotNil(t, repo.statsFilters.RequestType)
 	require.Equal(t, int16(service.RequestTypeStream), *repo.statsFilters.RequestType)
 	require.Nil(t, repo.statsFilters.Stream)
+}
+
+func TestAdminUsageStatsNativeCompactionFilter(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/stats?native_compaction_v2=true", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, repo.statsFilters.NativeCompactionV2)
+	require.True(t, *repo.statsFilters.NativeCompactionV2)
 }
 
 func TestAdminUsageStatsUsesRequestedModelForDisplayModelFilter(t *testing.T) {

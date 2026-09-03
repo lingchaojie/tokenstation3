@@ -79,7 +79,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 	}
 
 	// Parse filters
-	var userID, apiKeyID, accountID, groupID int64
+	var userID, apiKeyID, accountID, channelID, groupID int64
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
 		id, err := strconv.ParseInt(userIDStr, 10, 64)
 		if err != nil {
@@ -105,6 +105,14 @@ func (h *UsageHandler) List(c *gin.Context) {
 			return
 		}
 		accountID = id
+	}
+	if channelIDStr := c.Query("channel_id"); channelIDStr != "" {
+		id, err := strconv.ParseInt(channelIDStr, 10, 64)
+		if err != nil || id <= 0 {
+			response.BadRequest(c, "Invalid channel_id")
+			return
+		}
+		channelID = id
 	}
 
 	if groupIDStr := c.Query("group_id"); groupIDStr != "" {
@@ -137,6 +145,12 @@ func (h *UsageHandler) List(c *gin.Context) {
 			return
 		}
 		stream = &val
+	}
+
+	nativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
 	}
 
 	var billingType *int8
@@ -190,22 +204,29 @@ func (h *UsageHandler) List(c *gin.Context) {
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
 	}
 	filters := usagestats.UsageLogFilters{
-		UserID:                userID,
-		APIKeyID:              apiKeyID,
-		AccountID:             accountID,
-		GroupID:               groupID,
-		RequestID:             requestID,
-		Model:                 model,
-		ModelFilterSource:     usagestats.ModelSourceRequested,
-		RequestType:           requestType,
-		Stream:                stream,
-		BillingType:           billingType,
-		BillingMode:           billingMode,
-		UpstreamModelMismatch: upstreamModelMismatch,
-		StartTime:             startTime,
-		EndTime:               endTime,
-		ExactTotal:            exactTotal,
-		ExcludedUserIDs:       excludedUserIDs,
+		UserID:                   userID,
+		APIKeyID:                 apiKeyID,
+		AccountID:                accountID,
+		ChannelID:                channelID,
+		GroupID:                  groupID,
+		RequestID:                requestID,
+		Model:                    model,
+		ModelFilterSource:        usagestats.ModelSourceRequested,
+		ServiceTier:              strings.TrimSpace(c.Query("service_tier")),
+		ReasoningEffort:          strings.TrimSpace(c.Query("reasoning_effort")),
+		RequestedReasoningEffort: strings.TrimSpace(c.Query("requested_reasoning_effort")),
+		InboundEndpoint:          strings.TrimSpace(c.Query("inbound_endpoint")),
+		UpstreamEndpoint:         strings.TrimSpace(c.Query("upstream_endpoint")),
+		RequestType:              requestType,
+		Stream:                   stream,
+		NativeCompactionV2:       nativeCompactionV2,
+		BillingType:              billingType,
+		BillingMode:              billingMode,
+		UpstreamModelMismatch:    upstreamModelMismatch,
+		StartTime:                startTime,
+		EndTime:                  endTime,
+		ExactTotal:               exactTotal,
+		ExcludedUserIDs:          excludedUserIDs,
 	}
 
 	records, result, err := h.usageService.ListWithFilters(c.Request.Context(), params, filters)
@@ -231,7 +252,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	}
 
 	// Parse filters - same as List endpoint
-	var userID, apiKeyID, accountID, groupID int64
+	var userID, apiKeyID, accountID, channelID, groupID int64
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
 		id, err := strconv.ParseInt(userIDStr, 10, 64)
 		if err != nil {
@@ -257,6 +278,14 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 			return
 		}
 		accountID = id
+	}
+	if channelIDStr := c.Query("channel_id"); channelIDStr != "" {
+		id, err := strconv.ParseInt(channelIDStr, 10, 64)
+		if err != nil || id <= 0 {
+			response.BadRequest(c, "Invalid channel_id")
+			return
+		}
+		channelID = id
 	}
 
 	if groupIDStr := c.Query("group_id"); groupIDStr != "" {
@@ -288,6 +317,12 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 			return
 		}
 		stream = &val
+	}
+
+	nativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
 	}
 
 	var billingType *int8
@@ -350,20 +385,27 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Build filters and call GetStatsWithFilters
 	filters := usagestats.UsageLogFilters{
-		UserID:                userID,
-		APIKeyID:              apiKeyID,
-		AccountID:             accountID,
-		GroupID:               groupID,
-		Model:                 model,
-		ModelFilterSource:     usagestats.ModelSourceRequested,
-		RequestType:           requestType,
-		Stream:                stream,
-		BillingType:           billingType,
-		BillingMode:           billingMode,
-		UpstreamModelMismatch: upstreamModelMismatch,
-		StartTime:             &startTime,
-		EndTime:               &endTime,
-		ExcludedUserIDs:       excludedUserIDs,
+		UserID:                   userID,
+		APIKeyID:                 apiKeyID,
+		AccountID:                accountID,
+		ChannelID:                channelID,
+		GroupID:                  groupID,
+		Model:                    model,
+		ModelFilterSource:        usagestats.ModelSourceRequested,
+		ServiceTier:              strings.TrimSpace(c.Query("service_tier")),
+		ReasoningEffort:          strings.TrimSpace(c.Query("reasoning_effort")),
+		RequestedReasoningEffort: strings.TrimSpace(c.Query("requested_reasoning_effort")),
+		InboundEndpoint:          strings.TrimSpace(c.Query("inbound_endpoint")),
+		UpstreamEndpoint:         strings.TrimSpace(c.Query("upstream_endpoint")),
+		RequestType:              requestType,
+		Stream:                   stream,
+		NativeCompactionV2:       nativeCompactionV2,
+		BillingType:              billingType,
+		BillingMode:              billingMode,
+		UpstreamModelMismatch:    upstreamModelMismatch,
+		StartTime:                &startTime,
+		EndTime:                  &endTime,
+		ExcludedUserIDs:          excludedUserIDs,
 	}
 
 	var stats *usagestats.UsageStats

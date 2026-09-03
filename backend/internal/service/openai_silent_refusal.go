@@ -296,6 +296,40 @@ func newOpenAISilentRefusalFailoverError(c *gin.Context, account *Account, upstr
 	}
 }
 
+// newOpenAIResponsesEmptyCompletedFailoverError marks an empty terminal
+// Responses event as a retryable upstream anomaly rather than a 0/0 success.
+func newOpenAIResponsesEmptyCompletedFailoverError(c *gin.Context, account *Account, upstreamRequestID string) *UpstreamFailoverError {
+	accountID := int64(0)
+	accountName := ""
+	platform := PlatformOpenAI
+	if account != nil {
+		accountID = account.ID
+		accountName = account.Name
+		platform = account.Platform
+	}
+
+	setOpsUpstreamError(c, http.StatusBadGateway, openAIResponsesEmptyCompletedMessage, "")
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           platform,
+		AccountID:          accountID,
+		AccountName:        accountName,
+		UpstreamStatusCode: http.StatusBadGateway,
+		UpstreamRequestID:  upstreamRequestID,
+		Kind:               "failover",
+		Message:            openAIResponsesEmptyCompletedMessage,
+	})
+
+	headers := http.Header{}
+	if strings.TrimSpace(upstreamRequestID) != "" {
+		headers.Set("x-request-id", strings.TrimSpace(upstreamRequestID))
+	}
+	return &UpstreamFailoverError{
+		StatusCode:      http.StatusBadGateway,
+		ResponseBody:    openAISilentRefusalErrorBody(),
+		ResponseHeaders: headers,
+	}
+}
+
 func openAISilentRefusalErrorBody() []byte {
 	body, err := json.Marshal(map[string]any{
 		"error": map[string]any{

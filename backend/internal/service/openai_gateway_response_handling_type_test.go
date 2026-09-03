@@ -42,7 +42,7 @@ func TestNormalizeOpenAIResponsesFunctionCallArgumentsDenseEightMiBStaysBounded(
 
 	require.True(t, changed)
 	require.Equal(t, itemCount, strings.Count(string(got), `"arguments":"{\"x\":1}"`))
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20)*testRaceAllocationFactor)
 }
 
 func TestOpenAIStreamEventIsTerminalWithTypeMatchesExistingSemantics(t *testing.T) {
@@ -65,7 +65,7 @@ func TestOpenAIStreamEventIsTerminalWithTypeMatchesExistingSemantics(t *testing.
 		{name: "invalid JSON", data: `{"type":`, want: false},
 		{name: "terminal with trailing garbage", data: `{"type":"response.completed"} trailing`, want: true},
 		{name: "nonterminal with trailing garbage", data: `{"type":"response.output_text.delta"} trailing`, want: false},
-		{name: "type whitespace remains nonterminal", data: `{"type":" response.completed "}`, want: false},
+		{name: "type whitespace is normalized", data: `{"type":" response.completed "}`, want: true},
 	}
 
 	for _, tt := range tests {

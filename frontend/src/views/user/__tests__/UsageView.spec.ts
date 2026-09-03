@@ -4,10 +4,24 @@ import { nextTick } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { query, getStatsByDateRange, list, showError, showWarning, showSuccess, showInfo } = vi.hoisted(() => ({
+const {
+  query,
+  getStats,
+  getDashboardModels,
+  getDashboardSnapshotV2,
+  list,
+  getAvailable,
+  showError,
+  showWarning,
+  showSuccess,
+  showInfo,
+} = vi.hoisted(() => ({
   query: vi.fn(),
-  getStatsByDateRange: vi.fn(),
+  getStats: vi.fn(),
+  getDashboardModels: vi.fn(),
+  getDashboardSnapshotV2: vi.fn(),
   list: vi.fn(),
+  getAvailable: vi.fn(),
   showError: vi.fn(),
   showWarning: vi.fn(),
   showSuccess: vi.fn(),
@@ -78,15 +92,35 @@ const messages: Record<string, string> = {
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
   'admin.usage.billingModeImage': 'Image',
+  'usage.ws': 'WS',
+  'usage.stream': 'Stream',
+  'usage.sync': 'Sync',
+  'usage.compactionFilter': 'Request Kind',
+  'usage.allCompactionTypes': 'All Requests',
+  'usage.compactionOnly': 'Compaction Only',
+  'usage.exporting': 'Exporting',
+  'usage.exportCsv': 'Export CSV',
+  'usage.failedToLoad': 'Failed to load',
+  'usage.noDataToExport': 'No data',
+  'usage.preparingExport': 'Preparing export',
+  'usage.exportSuccess': 'Export success',
+  'usage.exportFailed': 'Export failed',
+  'common.refresh': 'Refresh',
+  'common.reset': 'Reset',
 }
 
 vi.mock('@/api', () => ({
   usageAPI: {
     query,
-    getStatsByDateRange,
+    getStats,
+    getDashboardModels,
+    getDashboardSnapshotV2,
   },
   keysAPI: {
     list,
+  },
+  userGroupsAPI: {
+    getAvailable,
   },
 }))
 
@@ -122,16 +156,41 @@ const DataTableStub = {
     </div>
   `,
 }
+const chartStub = { template: '<div />' }
+const viewStubs = {
+  AppLayout: AppLayoutStub,
+  TablePageLayout: TablePageLayoutStub,
+  Pagination: true,
+  EmptyState: true,
+  Select: true,
+  DateRangePicker: true,
+  DataTable: DataTableStub,
+  Icon: true,
+  Teleport: true,
+  ModelDistributionChart: chartStub,
+  GroupDistributionChart: chartStub,
+  EndpointDistributionChart: chartStub,
+  TokenUsageTrend: chartStub,
+}
+
+const mountUsageView = () => mount(UsageView, { global: { stubs: viewStubs } })
 
 describe('user UsageView tooltip', () => {
   beforeEach(() => {
     query.mockReset()
-    getStatsByDateRange.mockReset()
+    getStats.mockReset()
+    getDashboardModels.mockReset()
+    getDashboardSnapshotV2.mockReset()
     list.mockReset()
+    getAvailable.mockReset()
     showError.mockReset()
     showWarning.mockReset()
     showSuccess.mockReset()
     showInfo.mockReset()
+
+    getDashboardModels.mockResolvedValue({ models: [] })
+    getDashboardSnapshotV2.mockResolvedValue({ trend: [], groups: [] })
+    getAvailable.mockResolvedValue([])
 
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0,
@@ -180,7 +239,7 @@ describe('user UsageView tooltip', () => {
       total: 1,
       pages: 1,
     })
-    getStatsByDateRange.mockResolvedValue({
+    getStats.mockResolvedValue({
       total_requests: 1,
       total_tokens: 100,
       total_cost: 0.1,
@@ -247,7 +306,7 @@ describe('user UsageView tooltip', () => {
       total: 0,
       pages: 0,
     })
-    getStatsByDateRange.mockResolvedValue({
+    getStats.mockResolvedValue({
       total_requests: 0,
       total_tokens: 0,
       total_cost: 0,
@@ -277,6 +336,52 @@ describe('user UsageView tooltip', () => {
     const columns = wrapper.get('[data-test="usage-columns"]').text().split(',')
     expect(columns).toContain('billing_type')
     expect(columns.indexOf('billing_type')).toBeLessThan(columns.indexOf('billing_mode'))
+  })
+
+  it('loads privacy-safe charts and propagates and resets native compaction', async () => {
+    query.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockResolvedValue({ total_requests: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0, endpoints: [] })
+    list.mockResolvedValue({ items: [] })
+
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    expect(getAvailable).toHaveBeenCalled()
+    expect(getDashboardSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
+      include_trend: true,
+      include_model_stats: false,
+      include_group_stats: true,
+    }))
+    expect((wrapper.vm as any).compactionOptions).toEqual([
+      { value: null, label: 'All Requests' },
+      { value: true, label: 'Compaction Only' },
+    ])
+
+    query.mockClear()
+    getStats.mockClear()
+    getDashboardModels.mockClear()
+    getDashboardSnapshotV2.mockClear()
+
+    ;(wrapper.vm as any).filters.native_compaction_v2 = true
+    ;(wrapper.vm as any).applyFilters()
+    await flushPromises()
+
+    for (const apiMock of [query, getStats, getDashboardModels, getDashboardSnapshotV2]) {
+      const params = apiMock.mock.calls.at(-1)?.[0]
+      expect(params).toEqual(expect.objectContaining({ native_compaction_v2: true }))
+      expect(params).not.toHaveProperty('account_id')
+      expect(params).not.toHaveProperty('channel_id')
+      expect(params).not.toHaveProperty('upstream_endpoint')
+      expect(params).not.toHaveProperty('mapped_reasoning_effort')
+    }
+
+    (wrapper.vm as any).resetFilters()
+    await flushPromises()
+
+    expect((wrapper.vm as any).filters.native_compaction_v2).toBeNull()
+    for (const apiMock of [query, getStats, getDashboardModels, getDashboardSnapshotV2]) {
+      expect(apiMock.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ native_compaction_v2: null }))
+    }
   })
 
   it('exports csv without user-hidden rate or standard cost columns', async () => {
@@ -313,7 +418,7 @@ describe('user UsageView tooltip', () => {
       total: 1,
       pages: 1,
     })
-    getStatsByDateRange.mockResolvedValue({
+    getStats.mockResolvedValue({
       total_requests: 1,
       total_tokens: 100,
       total_cost: 0.1,
@@ -356,6 +461,7 @@ describe('user UsageView tooltip', () => {
     await flushPromises()
 
     const setupState = (wrapper.vm as any).$?.setupState
+    setupState.filters.native_compaction_v2 = true
     await setupState.exportToCSV()
 
     expect(exportedBlob).not.toBeNull()
@@ -366,6 +472,7 @@ describe('user UsageView tooltip', () => {
         params?.page_size === 100 &&
         params?.sort_by === 'created_at' &&
         params?.sort_order === 'desc' &&
+        params?.native_compaction_v2 === true &&
         config === undefined
       )
     })
@@ -422,7 +529,7 @@ describe('user UsageView tooltip', () => {
       total: 1,
       pages: 1,
     })
-    getStatsByDateRange.mockResolvedValue({
+    getStats.mockResolvedValue({
       total_requests: 1,
       total_tokens: 0,
       total_cost: 0.2,
@@ -512,7 +619,7 @@ describe('user UsageView tooltip', () => {
       total: 1,
       pages: 1,
     })
-    getStatsByDateRange.mockResolvedValue({
+    getStats.mockResolvedValue({
       total_requests: 1,
       total_tokens: 0,
       total_cost: 0.2,
@@ -551,7 +658,7 @@ describe('user UsageView tooltip', () => {
       total: 0,
       pages: 0,
     })
-    getStatsByDateRange.mockResolvedValue({
+    getStats.mockResolvedValue({
       total_requests: 0,
       total_tokens: 0,
       total_cost: 0,

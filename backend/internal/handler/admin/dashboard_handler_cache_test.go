@@ -176,6 +176,47 @@ func TestDashboardHandler_SnapshotModelAndGroupCachesIncludeModelFilter(t *testi
 	require.Equal(t, int32(2), repo.groupCalls.Load())
 }
 
+func TestDashboardHandler_SnapshotCachesDistinguishBillingMode(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
+
+	for _, mode := range []string{"", "token", "image"} {
+		path := "/admin/dashboard/snapshot-v2?include_stats=false&include_trend=true&include_model_stats=true&include_group_stats=true&model=gpt-5.6-sol"
+		if mode != "" {
+			path += "&billing_mode=" + mode
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, mode)
+		require.Equal(t, "miss", rec.Header().Get("X-Snapshot-Cache"), mode)
+	}
+	for _, tc := range []struct {
+		source string
+		want   string
+	}{
+		{source: "upstream", want: "miss"},
+		{source: "requested", want: "hit"},
+	} {
+		path := "/admin/dashboard/snapshot-v2?include_stats=false&include_trend=true&include_model_stats=true&include_group_stats=true&model=gpt-5.6-sol&model_source=" + tc.source
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, tc.source)
+		require.Equal(t, tc.want, rec.Header().Get("X-Snapshot-Cache"), tc.source)
+	}
+
+	require.Equal(t, int32(4), repo.trendCalls.Load())
+	require.Equal(t, int32(4), repo.modelCalls.Load())
+	require.Equal(t, int32(4), repo.groupCalls.Load())
+}
+
 func TestDashboardHandler_CacheKeysPreserveRawModelFilterSource(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
@@ -223,5 +264,72 @@ func TestDashboardHandler_CacheKeysPreserveRawModelFilterSource(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, normalizedHit)
 		require.Equal(t, int32(2), repo.groupCalls.Load())
+	})
+}
+
+func TestDashboardHandler_RegularCachesDistinguishModelAndBillingMode(t *testing.T) {
+	start := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	base := usagestats.UsageLogFilters{
+		Model:             "gpt-5.6-sol",
+		ModelFilterSource: usagestats.ModelSourceRequested,
+	}
+	cases := []usagestats.UsageLogFilters{
+		base,
+		func() usagestats.UsageLogFilters { f := base; f.BillingMode = "image"; return f }(),
+		func() usagestats.UsageLogFilters { f := base; f.Model = "gpt-5.4"; return f }(),
+		func() usagestats.UsageLogFilters {
+			f := base
+			f.ModelFilterSource = usagestats.ModelSourceUpstream
+			return f
+		}(),
+	}
+
+	t.Run("trend", func(t *testing.T) {
+		t.Cleanup(resetDashboardReadCachesForTest)
+		resetDashboardReadCachesForTest()
+		repo := &dashboardUsageRepoCacheProbe{}
+		handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+		for _, filters := range cases {
+			_, hit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", filters)
+			require.NoError(t, err)
+			require.False(t, hit)
+		}
+		_, hit, err := handler.getUsageTrendCached(context.Background(), start, end, "day", cases[0])
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.Equal(t, int32(len(cases)), repo.trendCalls.Load())
+	})
+
+	t.Run("model", func(t *testing.T) {
+		t.Cleanup(resetDashboardReadCachesForTest)
+		resetDashboardReadCachesForTest()
+		repo := &dashboardUsageRepoCacheProbe{}
+		handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+		for _, filters := range cases {
+			_, hit, err := handler.getModelStatsCached(context.Background(), start, end, filters, filters.ModelFilterSource)
+			require.NoError(t, err)
+			require.False(t, hit)
+		}
+		_, hit, err := handler.getModelStatsCached(context.Background(), start, end, cases[0], cases[0].ModelFilterSource)
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.Equal(t, int32(len(cases)), repo.modelCalls.Load())
+	})
+
+	t.Run("group", func(t *testing.T) {
+		t.Cleanup(resetDashboardReadCachesForTest)
+		resetDashboardReadCachesForTest()
+		repo := &dashboardUsageRepoCacheProbe{}
+		handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil), nil)
+		for _, filters := range cases {
+			_, hit, err := handler.getGroupStatsCached(context.Background(), start, end, filters)
+			require.NoError(t, err)
+			require.False(t, hit)
+		}
+		_, hit, err := handler.getGroupStatsCached(context.Background(), start, end, cases[0])
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.Equal(t, int32(len(cases)), repo.groupCalls.Load())
 	})
 }

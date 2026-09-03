@@ -81,12 +81,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 	clientStream := gjson.GetBytes(body, "stream").Bool()
 
-	// 1b. Extract service tier from the raw body before any transformation.
-	serviceTier := extractOpenAIServiceTierFromBody(body)
-
 	// 2. Resolve model mapping (same as ForwardAsChatCompletions)
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	SetOpsUpstreamModel(c, upstreamModel)
 	grokCacheIdentity := ""
 	if account.Platform == PlatformGrok {
 		// Resolve before image bridging or other body rewrites so the fallback is
@@ -117,6 +115,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, policyErr
 	}
 	upstreamBody = updatedBody
+	// Keep the final outbound tier separate from the observed response tier so
+	// usage recording can apply the selected credential's response contract.
+	serviceTier := extractOpenAIServiceTierFromBody(upstreamBody)
 	if account.Platform == PlatformGrok {
 		strippedBody, stripErr := stripRedundantGrokChatViewImageTool(upstreamBody)
 		if stripErr != nil {
@@ -168,6 +169,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 			return nil, fmt.Errorf("normalize Grok chat reasoning effort: %w", err)
 		}
 	}
+	upstreamBody = applyOllamaCloudRawChatCompletionsRequest(account, upstreamBody)
 
 	logger.L().Debug("openai chat_completions raw: forwarding without protocol conversion",
 		zap.Int64("account_id", account.ID),
@@ -185,7 +187,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	SetActualOpenAIUpstreamEndpoint(c, grokChatRawEndpoint)
 	customUA := account.GetOpenAIUserAgent()
 	if customUA == "" && account.IsGrokOAuth() {
-		customUA = "sub2api-grok/1.0"
+		customUA = defaultGrokUpstreamUserAgent()
 	}
 	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, upstreamBody, clientStream, token, customUA, grokCacheIdentity)
 	if err != nil {
@@ -213,17 +215,14 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 			})
 			s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.StatusCode, resp.Header, respBody)
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
-				return nil, &UpstreamFailoverError{
-					StatusCode:                resp.StatusCode,
-					ResponseBody:              respBody,
-					RequestHeaders:            captureRequestHeadersFromResponse(resp),
-					ResponseHeaders:           resp.Header.Clone(),
-					UpstreamEndpoint:          captureEndpointFromResponse(resp),
-					HasUpstreamHTTPResponse:   true,
-					Platform:                  string(account.Platform),
-					RetryableOnSameAccount:    account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-					CaptureResponseIncomplete: !openAIUpstreamErrorResponseComplete(resp, respBody, openAIUpstreamErrorBodyReadLimitForConfig(s.cfg)),
-				}
+				retryable, retryDelay, retryDeadline, retryMax := grokSameAccountRetryMetadata(account, resp.StatusCode, respBody)
+				failure := newOpenAIUpstreamFailoverError(resp.StatusCode, resp.Header, respBody, upstreamMsg, retryable, resp, string(account.Platform))
+				failure.RequestScopedTransient = retryable && resp.StatusCode == http.StatusTooManyRequests
+				failure.SameAccountRetryDelay = retryDelay
+				failure.SameAccountRetryDeadline = retryDeadline
+				failure.SameAccountRetryMax = retryMax
+				failure.CaptureResponseIncomplete = !openAIUpstreamErrorResponseComplete(resp, respBody, openAIUpstreamErrorBodyReadLimitForConfig(s.cfg))
+				return nil, failure
 			}
 			return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 		}
@@ -318,6 +317,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	var stagedErr error
 	defer func() { _ = staged.close() }()
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
+	var terminal openAIRawStreamTerminalState
 
 	writeLine := func(line string) {
 		if clientDisconnected {
@@ -349,8 +349,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			UpstreamModel:                 upstreamModel,
 			UpstreamResponseModel:         observedUpstreamResponseModel(c),
 			UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+			UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
 			ReasoningEffort:               reasoningEffort,
-			ServiceTier:                   serviceTier,
+			ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:                        true,
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
@@ -442,6 +443,7 @@ scanLoop:
 		}
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
+			terminal.ObserveDataLine(trimmedPayload)
 			if trimmedPayload == "[DONE]" {
 				providerDoneObserved = true
 				if refusalDetector.IsSilentRefusal() {
@@ -463,6 +465,8 @@ scanLoop:
 		} else {
 			refusalDetector.ObserveSSELine(line)
 		}
+		line = applyOllamaCloudRawChatCompletionsSSELine(account, line)
+		line = stripEmptyChatToolCallIdentityFromSSELine(line)
 
 		writeLine(line)
 		if stagedErr != nil {
@@ -489,10 +493,37 @@ scanLoop:
 				zap.String("request_id", requestID),
 			)
 		}
-		if staged.committed || clientDisconnected {
-			return result(), fmt.Errorf("openai chat_completions stream read error: %w", scanErr)
+		if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) || clientDisconnected {
+			return result(), nil
+		}
+		if staged.committed || semanticOutput {
+			recordOpenAIRawStreamTruncation(c, account, requestID, scanErr, "http_error")
+			return result(), newOpenAIUpstreamStreamReadError(scanErr)
 		}
 		return nil, newOpenAIIncompleteChatStreamFailover(resp, "OpenAI chat_completions stream read failed before semantic output")
+	}
+
+	// 上游在任何终止信号之前结束：连接被 reset（scanErr != nil）或干净 EOF。
+	// 两者都不能再记成功——此前统一返回 nil error，把上游截断伪装成
+	// `HTTP 200 + usage 0/0`，客户端收到半截回答且 Ops 侧完全无感。
+	if !clientDisconnected && terminal.IsTruncated(clientOutputStarted) {
+		cause := ErrOpenAIUpstreamStreamTruncated
+		logger.L().Warn("openai chat_completions raw: upstream stream truncated before terminal chunk",
+			zap.Error(cause),
+			zap.String("request_id", requestID),
+			zap.Int64("account_id", account.ID),
+			zap.String("upstream_model", upstreamModel),
+			zap.Bool("saw_sse_data", terminal.sawDataLine),
+			zap.Bool("client_output_started", clientOutputStarted),
+		)
+		if !clientOutputStarted {
+			// 响应头尚未提交：可以透明换号重试，客户端不会看到半截流。
+			return nil, newOpenAIRawStreamTruncatedFailoverError(c, account, requestID, cause)
+		}
+		// 已写出语义字节：无法再 failover，改为带类型的上游错误。handler 会据此
+		// 补发 SSE error 帧并把本次请求计入 SLA 失败。
+		recordOpenAIRawStreamTruncation(c, account, requestID, cause, "http_error")
+		return result(), newOpenAIUpstreamStreamReadError(cause)
 	}
 
 	if !clientOutputStarted && !clientDisconnected {
@@ -926,6 +957,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		upstreamRequestID := firstNonEmpty(requestID, resp.Header.Get("xai-request-id"))
 		return nil, newGrokMissingUsageFailoverError(c, account, upstreamRequestID)
 	}
+	respBody = applyOllamaCloudRawChatCompletionsResponse(account, respBody)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -946,8 +978,9 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		UpstreamModel:                 upstreamModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
 		ReasoningEffort:               reasoningEffort,
-		ServiceTier:                   serviceTier,
+		ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                        false,
 		Duration:                      time.Since(startTime),
 		CaptureResponseComplete:       true,

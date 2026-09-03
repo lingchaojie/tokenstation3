@@ -608,7 +608,7 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		proxyURL = account.Proxy.URL()
 	}
 	s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, responsesBody)
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
@@ -621,8 +621,28 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		if upstreamMsg == "" {
 			upstreamMsg = fmt.Sprintf("xAI upstream returned status %d", resp.StatusCode)
 		}
-		if failoverErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); failoverErr != nil {
-			return nil, failoverErr
+		kind := "http_error"
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+			kind = "failover"
+		}
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+			Kind:               kind,
+			Message:            upstreamMsg,
+		})
+		s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.StatusCode, resp.Header, respBody)
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+			retryable, retryDelay, retryDeadline, retryMax := grokSameAccountRetryMetadata(account, resp.StatusCode, respBody)
+			failure := newOpenAIUpstreamFailoverError(resp.StatusCode, resp.Header, respBody, upstreamMsg, retryable, resp, string(account.Platform))
+			failure.RequestScopedTransient = retryable && resp.StatusCode == http.StatusTooManyRequests
+			failure.SameAccountRetryDelay = retryDelay
+			failure.SameAccountRetryDeadline = retryDeadline
+			failure.SameAccountRetryMax = retryMax
+			return nil, failure
 		}
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}

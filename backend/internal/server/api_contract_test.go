@@ -704,10 +704,10 @@ func TestAPIContracts(t *testing.T) {
 							"id": 1,
 							"user_id": 1,
 							"api_key_id": 100,
-							"account_id": 200,
 								"request_id": "req_123",
 								"model": "claude-3",
 								"request_type": "stream",
+								"native_compaction_v2": false,
 								"openai_ws_mode": false,
 								"group_id": null,
 								"subscription_id": null,
@@ -993,7 +993,7 @@ func TestAPIContracts(t *testing.T) {
 						"invitation_code_enabled": false,
 						"home_content": "",
 					"hide_ccs_import_button": false,
-					"grok_default_text_model": "grok-4.5",
+					"grok_default_text_model": "grok-4.6",
 					"grok_default_base_url_mode": "cli",
 					"grok_cross_client_model_map_enabled": false,
 					"purchase_subscription_enabled": false,
@@ -1028,6 +1028,7 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_wxpay_enabled": false,
 					"openai_low_upstream_rate_priority_enabled": true,
 					"openai_oauth_scheduling_rate_multiplier": 0.05,
+					"openai_ttft_mode": "semantic",
 					"openai_advanced_scheduler_enabled": true,
 					"openai_advanced_scheduler_sticky_weighted_enabled": false,
 					"openai_advanced_scheduler_subscription_priority_enabled": false,
@@ -1259,7 +1260,7 @@ func TestAPIContracts(t *testing.T) {
 					"doc_url": "",
 					"home_content": "",
 					"hide_ccs_import_button": false,
-					"grok_default_text_model": "grok-4.5",
+					"grok_default_text_model": "grok-4.6",
 					"grok_default_base_url_mode": "cli",
 					"grok_cross_client_model_map_enabled": false,
 					"purchase_subscription_enabled": false,
@@ -1333,6 +1334,7 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_wxpay_enabled": false,
 					"openai_low_upstream_rate_priority_enabled": false,
 					"openai_oauth_scheduling_rate_multiplier": 1,
+					"openai_ttft_mode": "semantic",
 					"openai_advanced_scheduler_enabled": false,
 					"openai_advanced_scheduler_sticky_weighted_enabled": false,
 					"openai_advanced_scheduler_subscription_priority_enabled": false,
@@ -2136,7 +2138,7 @@ func (s *stubAccountRepo) IncrementQuotaUsed(ctx context.Context, id int64, amou
 	return errors.New("not implemented")
 }
 
-func (s *stubAccountRepo) ResetQuotaUsed(ctx context.Context, id int64) error {
+func (s *stubAccountRepo) ResetQuotaUsedAndClearRateLimitCooldown(ctx context.Context, id int64) error {
 	return errors.New("not implemented")
 }
 

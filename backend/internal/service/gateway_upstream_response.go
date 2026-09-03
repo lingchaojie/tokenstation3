@@ -796,6 +796,7 @@ func partialStreamUsageResult(ctx context.Context, c *gin.Context, resp *http.Re
 		UpstreamModel:                 upstreamModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
 		Stream:                        true,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  streamResult.firstTokenMs,
@@ -1611,8 +1612,13 @@ func extractSSEUsagePatchFromGJSON(event gjson.Result) *sseUsagePatch {
 	default:
 		return nil
 	}
-	setInt("cache_creation.ephemeral_5m_input_tokens", &patch.cacheCreation5mTokens, &patch.hasCacheCreation5m, eventType == "message_start" || finalUsage)
-	setInt("cache_creation.ephemeral_1h_input_tokens", &patch.cacheCreation1hTokens, &patch.hasCacheCreation1h, eventType == "message_start" || finalUsage)
+	// A present cache-creation breakdown is authoritative on both start and
+	// delta usage objects, including explicit zeroes. Missing fields still leave
+	// the previously observed breakdown untouched (important for KIRO's final
+	// usage event, which may report only aggregate cache counters).
+	allowBreakdownZero := eventType == "message_start" || eventType == "message_delta" || finalUsage
+	setInt("cache_creation.ephemeral_5m_input_tokens", &patch.cacheCreation5mTokens, &patch.hasCacheCreation5m, allowBreakdownZero)
+	setInt("cache_creation.ephemeral_1h_input_tokens", &patch.cacheCreation1hTokens, &patch.hasCacheCreation1h, allowBreakdownZero)
 	if credits := usage.Get("_sub2api_kiro_credits"); credits.Exists() && credits.Float() > 0 {
 		patch.kiroCredits = credits.Float()
 		patch.hasKiroCredits = true

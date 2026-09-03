@@ -75,7 +75,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	anthropicReq.Model = upstreamModel
 
-	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body)
+	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 
 	// 5. Force upstream streaming（客户端原始终决定响应格式；
@@ -122,7 +122,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}
@@ -453,7 +453,7 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 				return onIdle()
 			}
 			logReadErr(rerr)
-			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+			if !errors.Is(rerr, io.EOF) && (!clientDisconnected || !errors.Is(rerr, context.Canceled)) {
 				providerErr = rerr
 			}
 			break
@@ -469,7 +469,7 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 				return onIdle()
 			}
 			logReadErr(rerr)
-			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+			if !errors.Is(rerr, io.EOF) && (!clientDisconnected || !errors.Is(rerr, context.Canceled)) {
 				providerErr = rerr
 			}
 			break

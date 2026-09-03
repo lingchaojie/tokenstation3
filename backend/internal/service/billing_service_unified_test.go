@@ -63,11 +63,18 @@ func TestCalculateCostUnified_TokenMode(t *testing.T) {
 func TestCalculateCostUnified_TokenModeAppliesRateMultiplierToImageTokens(t *testing.T) {
 	bs := newTestBillingService()
 	resolver := NewModelPricingResolver(nil, bs)
+	imageOutputPrice := 15e-6
+	group := &Group{ModelPricing: []ChannelModelPricing{{
+		Models:           []string{"claude-sonnet-4"},
+		BillingMode:      BillingModeToken,
+		ImageOutputPrice: &imageOutputPrice,
+	}}}
 
 	tokens := UsageTokens{InputTokens: 1000, OutputTokens: 600, ImageOutputTokens: 100}
 	cost, err := bs.CalculateCostUnified(CostInput{
 		Ctx:            context.Background(),
 		Model:          "claude-sonnet-4",
+		Group:          group,
 		Tokens:         tokens,
 		RateMultiplier: 3.0,
 		Resolver:       resolver,
@@ -277,7 +284,7 @@ func TestCalculateCostUnified_ZeroImageInputOverrideWithoutTextInputPriceFailsCl
 		Ctx:            context.Background(),
 		Model:          "customer-image-alias",
 		Group:          group,
-		Tokens:         UsageTokens{InputTokens: 100, ImageInputTokens: 100},
+		Tokens:         UsageTokens{InputTokens: 200, ImageInputTokens: 100},
 		RateMultiplier: 1,
 		Resolver:       resolver,
 	})

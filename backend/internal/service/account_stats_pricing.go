@@ -62,7 +62,7 @@ func resolveAccountStatsCostWithUsage(
 	// 优先级 3：渠道开启"应用模型定价到账号统计"时，直接使用客户计费（倍率前）
 	if channel.ApplyPricingToAccountStats {
 		cost := totalCost
-		if cost <= 0 {
+		if cost < 0 {
 			return nil
 		}
 		return &cost
@@ -82,22 +82,25 @@ func tryLongContextModelFilePricing(billingService *BillingService, model string
 		return nil
 	}
 	breakdown, err := billingService.CalculateCostWithServiceTier(model, tokens, 1, normalizeBillingServiceTier(serviceTier))
-	if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
+	if err != nil || breakdown == nil || breakdown.TotalCost < 0 {
 		return nil
 	}
 	return &breakdown.TotalCost
 }
 
 // tryModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的价格计算费用。
+// 与用户计费共用同一条定价管线，避免这里维护第二份"单价 × token 数"实现后，
+// 每加一个定价特性都要手工镜像一次。channelPricing 为 nil，保持优先级 3 的
+// 语义：只取模型定价文件，不引入渠道自定义定价。
 func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string) *float64 {
-	pricing, err := billingService.GetModelPricing(model)
-	if err != nil || pricing == nil {
+	if tokens.InputTokens == 0 && tokens.OutputTokens == 0 && tokens.CacheCreationTokens == 0 && tokens.CacheReadTokens == 0 &&
+		tokens.ImageInputTokens == 0 && tokens.ImageOutputTokens == 0 {
 		return nil
 	}
-	normalizedTier := normalizeBillingServiceTier(serviceTier)
-	pricing = billingService.applyModelSpecificPricingPolicy(model, pricing)
-	breakdown := billingService.computeTokenBreakdown(pricing, tokens, 1, normalizedTier, true)
-	if breakdown == nil || breakdown.TotalCost <= 0 {
+	breakdown, err := billingService.CalculateCostWithServiceTier(
+		model, tokens, 1, normalizeBillingServiceTier(serviceTier),
+	)
+	if err != nil || breakdown == nil || breakdown.TotalCost < 0 {
 		return nil
 	}
 	return &breakdown.TotalCost
@@ -205,21 +208,25 @@ func calculatePerRequestStatsCostWithUsage(
 	usage accountStatsCostUsage,
 ) *float64 {
 	unitPrice := 0.0
+	priceFound := false
 	if usage.sizeTier != "" {
 		if tier := pricing.GetTierByLabel(usage.sizeTier); tier != nil && tier.PerRequestPrice != nil {
 			unitPrice = *tier.PerRequestPrice
+			priceFound = true
 		}
 	}
-	if unitPrice <= 0 {
+	if !priceFound {
 		totalContext := tokens.InputTokens + tokens.CacheCreationTokens + tokens.CacheReadTokens
 		if iv := FindMatchingInterval(pricing.Intervals, totalContext); iv != nil && iv.PerRequestPrice != nil {
 			unitPrice = *iv.PerRequestPrice
+			priceFound = true
 		}
 	}
-	if unitPrice <= 0 && pricing.PerRequestPrice != nil {
+	if !priceFound && pricing.PerRequestPrice != nil {
 		unitPrice = *pricing.PerRequestPrice
+		priceFound = true
 	}
-	if unitPrice <= 0 {
+	if !priceFound {
 		return nil
 	}
 	units := usage.usageUnits
@@ -257,17 +264,6 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 			}
 		}
 	}
-	deref := func(ptr *float64) float64 {
-		if ptr == nil {
-			return 0
-		}
-		return *ptr
-	}
-	inputPrice := deref(p.InputPrice)
-	imageInputPrice := inputPrice
-	if p.ImageInputPrice != nil && *p.ImageInputPrice > 0 {
-		imageInputPrice = *p.ImageInputPrice
-	}
 	textInputTokens := tokens.InputTokens
 	imageInputTokens := 0
 	if tokens.ImageInputTokens > 0 {
@@ -276,11 +272,6 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 			imageInputTokens = tokens.InputTokens
 		}
 		textInputTokens -= imageInputTokens
-	}
-	outputPrice := deref(p.OutputPrice)
-	imageOutputPrice := outputPrice
-	if p.ImageOutputPrice != nil {
-		imageOutputPrice = *p.ImageOutputPrice
 	}
 	textOutputTokens := tokens.OutputTokens
 	imageOutputTokens := 0
@@ -291,15 +282,33 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 		}
 		textOutputTokens -= imageOutputTokens
 	}
-	cost := float64(textInputTokens)*inputPrice +
-		float64(imageInputTokens)*imageInputPrice +
-		float64(textOutputTokens)*outputPrice +
-		float64(imageOutputTokens)*imageOutputPrice +
-		float64(tokens.CacheCreationTokens)*deref(p.CacheWritePrice) +
-		float64(tokens.CacheReadTokens)*deref(p.CacheReadPrice)
-	if cost <= 0 {
+	// Presence is checked independently for every used bucket. Pointer presence
+	// makes an explicit numeric zero a valid free price; nil falls through to the
+	// next pricing source instead of silently accounting the bucket at $0.
+	if textInputTokens > 0 && p.InputPrice == nil ||
+		imageInputTokens > 0 && p.ImageInputPrice == nil ||
+		textOutputTokens > 0 && p.OutputPrice == nil ||
+		imageOutputTokens > 0 && p.ImageOutputPrice == nil ||
+		tokens.CacheCreationTokens > 0 && p.CacheWritePrice == nil ||
+		tokens.CacheReadTokens > 0 && p.CacheReadPrice == nil {
 		return nil
 	}
+	if textInputTokens == 0 && imageInputTokens == 0 && textOutputTokens == 0 && imageOutputTokens == 0 &&
+		tokens.CacheCreationTokens == 0 && tokens.CacheReadTokens == 0 {
+		return nil
+	}
+	deref := func(ptr *float64) float64 {
+		if ptr == nil {
+			return 0
+		}
+		return *ptr
+	}
+	cost := float64(textInputTokens)*deref(p.InputPrice) +
+		float64(imageInputTokens)*deref(p.ImageInputPrice) +
+		float64(textOutputTokens)*deref(p.OutputPrice) +
+		float64(imageOutputTokens)*deref(p.ImageOutputPrice) +
+		float64(tokens.CacheCreationTokens)*deref(p.CacheWritePrice) +
+		float64(tokens.CacheReadTokens)*deref(p.CacheReadPrice)
 	return &cost
 }
 

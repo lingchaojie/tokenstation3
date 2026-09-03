@@ -5,8 +5,11 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -288,6 +291,48 @@ func TestResolve_WithChannelOverride_TokenPartialOverride(t *testing.T) {
 	require.InDelta(t, 20e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
 	// OutputPrice kept from base (fallback: 15e-6)
 	require.InDelta(t, 15e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+	require.Equal(t, PricingSourceChannel, resolved.Provenance.Input)
+	require.Equal(t, PricingSourceFallback, resolved.Provenance.Output)
+}
+
+func TestResolve_ChannelExplicitZeroAndAbsentHaveIndependentProvenance(t *testing.T) {
+	zero := 0.0
+	for _, tc := range []struct {
+		name      string
+		input     *float64
+		wantInput float64
+		wantSrc   string
+	}{
+		{name: "explicit_zero", input: &zero, wantInput: 0, wantSrc: PricingSourceChannel},
+		{name: "absent", input: nil, wantInput: 3e-6, wantSrc: PricingSourceFallback},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newResolverWithChannel(t, []ChannelModelPricing{{
+				Platform: "anthropic", Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+				InputPrice: tc.input,
+			}})
+			resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr()})
+			require.InDelta(t, tc.wantInput, resolved.BasePricing.InputPricePerToken, 1e-12)
+			require.Equal(t, tc.wantSrc, resolved.Provenance.Input)
+			require.Equal(t, PricingSourceFallback, resolved.Provenance.Output)
+		})
+	}
+}
+
+func TestResolve_OverrideFileProvenanceIsPerBucket(t *testing.T) {
+	overridePath := filepath.Join(t.TempDir(), "pricing-override.json")
+	require.NoError(t, os.WriteFile(overridePath, []byte(`{"provider/model":{"input_cost_per_token":0}}`), 0o600))
+	ps := NewPricingService(&config.Config{Pricing: config.PricingConfig{OverrideFile: overridePath}}, nil)
+	data, err := ps.parsePricingData([]byte(`{"provider/model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}`))
+	require.NoError(t, err)
+	ps.pricingData = data
+	bs := &BillingService{pricingService: ps, fallbackPrices: map[string]*ModelPricing{}}
+	resolved := NewModelPricingResolver(nil, bs).Resolve(context.Background(), PricingInput{Model: "provider/model"})
+
+	require.Zero(t, resolved.BasePricing.InputPricePerToken)
+	require.InDelta(t, 2e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+	require.Equal(t, PricingSourceOverrideFile, resolved.Provenance.Input)
+	require.Equal(t, PricingSourceLiteLLM, resolved.Provenance.Output)
 }
 
 func TestResolve_WithChannelOverride_TokenWithIntervals(t *testing.T) {
@@ -722,7 +767,7 @@ func TestFilterValidIntervals(t *testing.T) {
 // 9. ImageOutputPriceExplicit tests
 // ===========================================================================
 
-func TestApplyTokenOverrides_FlatSetsImageOutputPriceExplicit(t *testing.T) {
+func TestApplyTokenOverrides_FlatMissingImageOutputPreservesBaseProvenance(t *testing.T) {
 	r := newResolverWithChannel(t, []ChannelModelPricing{{
 		Platform:    "anthropic",
 		Models:      []string{"claude-sonnet-4"},
@@ -737,8 +782,9 @@ func TestApplyTokenOverrides_FlatSetsImageOutputPriceExplicit(t *testing.T) {
 	})
 
 	require.Equal(t, PricingSourceChannel, resolved.Source)
-	require.True(t, resolved.BasePricing.ImageOutputPriceExplicit)
+	require.False(t, resolved.BasePricing.ImageOutputPriceExplicit)
 	require.Equal(t, 0.0, resolved.BasePricing.ImageOutputPricePerToken)
+	require.Empty(t, resolved.Provenance.ImageOutput)
 }
 
 func TestApplyTokenOverrides_FlatWithImageOutputPriceSetsExplicit(t *testing.T) {
@@ -759,7 +805,7 @@ func TestApplyTokenOverrides_FlatWithImageOutputPriceSetsExplicit(t *testing.T) 
 	require.InDelta(t, 50e-6, resolved.BasePricing.ImageOutputPricePerToken, 1e-12)
 }
 
-func TestApplyTokenOverrides_IntervalSetsImageOutputPriceExplicit(t *testing.T) {
+func TestApplyTokenOverrides_IntervalMissingImageOutputPreservesBaseProvenance(t *testing.T) {
 	r := newResolverWithChannel(t, []ChannelModelPricing{{
 		Platform:    "anthropic",
 		Models:      []string{"claude-sonnet-4"},
@@ -774,13 +820,13 @@ func TestApplyTokenOverrides_IntervalSetsImageOutputPriceExplicit(t *testing.T) 
 		GroupID: groupIDPtr(),
 	})
 
-	// BasePricing should have explicit mark (for interval fallback)
-	require.True(t, resolved.BasePricing.ImageOutputPriceExplicit)
+	// An unrelated interval does not establish image-output provenance.
+	require.False(t, resolved.BasePricing.ImageOutputPriceExplicit)
 	require.Equal(t, 0.0, resolved.BasePricing.ImageOutputPricePerToken)
 
-	// intervalToModelPricing should also have explicit mark
+	// intervalToModelPricing preserves the base bucket state.
 	pricing := r.GetIntervalPricing(resolved, 50000)
-	require.True(t, pricing.ImageOutputPriceExplicit)
+	require.False(t, pricing.ImageOutputPriceExplicit)
 	require.Equal(t, 0.0, pricing.ImageOutputPricePerToken)
 }
 
@@ -835,7 +881,7 @@ func TestApplyTokenOverrides_IntervalDoesNotPolluteFallbackPrices(t *testing.T) 
 	})
 
 	require.NotNil(t, resolved)
-	require.True(t, resolved.BasePricing.ImageOutputPriceExplicit)
+	require.False(t, resolved.BasePricing.ImageOutputPriceExplicit)
 
 	// Global fallbackPrices must NOT be polluted
 	fp := r.billingService.fallbackPrices["claude-sonnet-4"]

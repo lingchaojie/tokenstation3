@@ -44,6 +44,7 @@ const EMAIL_OAUTH_PENDING_PROVIDER_KEY = 'email_oauth_pending_provider'
 const props = withDefaults(defineProps<{
   disabled?: boolean
   affCode?: string
+  promoCode?: string
   githubEnabled?: boolean
   googleEnabled?: boolean
   showDivider?: boolean
@@ -109,6 +110,10 @@ function startLogin(provider: EmailOAuthProvider): void {
   const params = new URLSearchParams({ redirect: redirectTo })
   if (affiliateCode) {
     params.set('aff_code', affiliateCode)
+  }
+  const promoCode = props.promoCode?.trim()
+  if (promoCode) {
+    params.set('promo_code', promoCode)
   }
   const startURL = `${startBase}/auth/oauth/${provider}/start?${params.toString()}`
   storeOAuthAffiliateCode(affiliateCode)

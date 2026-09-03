@@ -155,6 +155,11 @@ func BeginnerGuideCompletedAt(v time.Time) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBeginnerGuideCompletedAt, v))
 }
 
+// RestrictPublicGroups applies equality check predicate on the "restrict_public_groups" field. It's identical to RestrictPublicGroupsEQ.
+func RestrictPublicGroups(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldRestrictPublicGroups, v))
+}
+
 // BalanceNotifyEnabled applies equality check predicate on the "balance_notify_enabled" field. It's identical to BalanceNotifyEnabledEQ.
 func BalanceNotifyEnabled(v bool) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBalanceNotifyEnabled, v))
@@ -1253,6 +1258,16 @@ func BeginnerGuideCompletedAtIsNil() predicate.User {
 // BeginnerGuideCompletedAtNotNil applies the NotNil predicate on the "beginner_guide_completed_at" field.
 func BeginnerGuideCompletedAtNotNil() predicate.User {
 	return predicate.User(sql.FieldNotNull(FieldBeginnerGuideCompletedAt))
+}
+
+// RestrictPublicGroupsEQ applies the EQ predicate on the "restrict_public_groups" field.
+func RestrictPublicGroupsEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldRestrictPublicGroups, v))
+}
+
+// RestrictPublicGroupsNEQ applies the NEQ predicate on the "restrict_public_groups" field.
+func RestrictPublicGroupsNEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldRestrictPublicGroups, v))
 }
 
 // BalanceNotifyEnabledEQ applies the EQ predicate on the "balance_notify_enabled" field.

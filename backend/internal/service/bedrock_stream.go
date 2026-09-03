@@ -18,6 +18,15 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
+type bedrockStreamingResult struct {
+	usage               *ClaudeUsage
+	firstTokenMs        *int
+	clientDisconnect    bool
+	clientVisibleOutput bool
+	semanticOutput      bool
+	responseComplete    bool
+}
+
 // handleBedrockStreamingResponse 处理 Bedrock InvokeModelWithResponseStream 的 EventStream 响应
 // Bedrock 返回 AWS EventStream 二进制格式，每个事件的 payload 中 chunk.bytes 是 base64 编码的
 // Claude SSE 事件 JSON。本方法解码后转换为标准 SSE 格式写入客户端。
@@ -28,7 +37,7 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	account *Account,
 	startTime time.Time,
 	model string,
-) (*streamingResult, error) {
+) (*bedrockStreamingResult, error) {
 	w := c.Writer
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -46,12 +55,13 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 	clientDisconnected := false
+	clientVisibleOutput := false
 	terminalObserved := false
 	semanticOutput := false
-	streamResult := func() *streamingResult {
-		return &streamingResult{
+	streamResult := func() *bedrockStreamingResult {
+		return &bedrockStreamingResult{
 			usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected,
-			semanticOutput: semanticOutput, responseComplete: terminalObserved,
+			clientVisibleOutput: clientVisibleOutput, semanticOutput: semanticOutput, responseComplete: terminalObserved,
 		}
 	}
 
@@ -153,9 +163,7 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 解析 SSE 事件数据提取 usage
 			parseSSEUsagePassthrough(string(sseData), usage)
-			if anthropicSSEEventHasSemanticOutput(string(sseData)) {
-				semanticOutput = true
-			}
+			eventHasSemanticOutput := anthropicSSEEventHasSemanticOutput(string(sseData))
 
 			// 确定 SSE event type
 			eventType := gjson.GetBytes(sseData, "type").String()
@@ -165,11 +173,18 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 写入标准 SSE 格式
 			if !clientDisconnected {
+				var written int
 				var writeErr error
 				if eventType != "" {
-					_, writeErr = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, sseData)
+					written, writeErr = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, sseData)
 				} else {
-					_, writeErr = fmt.Fprintf(w, "data: %s\n\n", sseData)
+					written, writeErr = fmt.Fprintf(w, "data: %s\n\n", sseData)
+				}
+				if written > 0 {
+					clientVisibleOutput = true
+					if eventHasSemanticOutput {
+						semanticOutput = true
+					}
 				}
 				if writeErr != nil {
 					clientDisconnected = true
