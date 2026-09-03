@@ -66,12 +66,25 @@ func TestPublicModelCatalog_IncludesClaude5ModelsInReleaseOrder(t *testing.T) {
 		releasedAt       string
 		input            float64
 		cacheRead        float64
+		cacheWrite5m     float64
+		cacheWrite1h     float64
 		output           float64
 		sourceURL        string
 		contextSourceURL string
 	}
 
 	expected := map[string]expectation{
+		"claude-fable-5-1": {
+			displayName:      "Claude Fable 5.1",
+			releasedAt:       "2026-09-01",
+			input:            10,
+			cacheRead:        0.25,
+			cacheWrite5m:     12.5,
+			cacheWrite1h:     20,
+			output:           50,
+			sourceURL:        "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+			contextSourceURL: "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+		},
 		"claude-opus-5": {
 			displayName:      "Claude Opus 5",
 			releasedAt:       "2026-07-24",
@@ -86,6 +99,8 @@ func TestPublicModelCatalog_IncludesClaude5ModelsInReleaseOrder(t *testing.T) {
 			releasedAt:       "2026-06-09",
 			input:            10,
 			cacheRead:        1,
+			cacheWrite5m:     12.5,
+			cacheWrite1h:     20,
 			output:           50,
 			sourceURL:        "https://www.anthropic.com/news/claude-fable-5-mythos-5",
 			contextSourceURL: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html",
@@ -113,7 +128,7 @@ func TestPublicModelCatalog_IncludesClaude5ModelsInReleaseOrder(t *testing.T) {
 		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
 		require.Equal(t, want.releasedAt, model.ReleasedAt)
 		require.Equal(t, "confirmed", model.ReleaseStatus)
-		require.Equal(t, "2026-08-20", model.UpdatedAt)
+		require.Equal(t, "2026-09-03", model.UpdatedAt)
 		require.Equal(t, 1_000_000, model.ContextWindow)
 		require.Equal(t, want.sourceURL, model.SourceURL)
 		require.Equal(t, want.contextSourceURL, model.ContextSourceURL)
@@ -124,11 +139,19 @@ func TestPublicModelCatalog_IncludesClaude5ModelsInReleaseOrder(t *testing.T) {
 		require.Equal(t, want.input, *model.Pricing.InputPerMillion)
 		require.Equal(t, want.cacheRead, *model.Pricing.CacheReadPerMillion)
 		require.Equal(t, want.output, *model.Pricing.OutputPerMillion)
+		if want.cacheWrite5m > 0 || want.cacheWrite1h > 0 {
+			priceLines := make(map[string]PublicModelCatalogPriceLine, len(model.Pricing.PriceLines))
+			for _, line := range model.Pricing.PriceLines {
+				priceLines[line.Label] = line
+			}
+			require.Equal(t, PublicModelCatalogPriceLine{Label: "5m cache write", Amount: want.cacheWrite5m, Unit: "1M tokens"}, priceLines["5m cache write"])
+			require.Equal(t, PublicModelCatalogPriceLine{Label: "1h cache write", Amount: want.cacheWrite1h, Unit: "1M tokens"}, priceLines["1h cache write"])
+		}
 	}
 
 	require.Len(t, found, len(expected))
-	require.GreaterOrEqual(t, len(anthropicModelNames), 4)
-	require.Equal(t, []string{"claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-fable-5"}, anthropicModelNames[:4])
+	require.GreaterOrEqual(t, len(anthropicModelNames), 5)
+	require.Equal(t, []string{"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-fable-5"}, anthropicModelNames[:5])
 }
 
 func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
@@ -166,7 +189,7 @@ func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
 		require.Equal(t, "2026-07-09", model.ReleasedAt)
 		require.Equal(t, "confirmed", model.ReleaseStatus)
-		require.Equal(t, "2026-08-20", model.UpdatedAt)
+		require.Equal(t, "2026-09-03", model.UpdatedAt)
 		require.Equal(t, 1_050_000, model.ContextWindow)
 		require.Equal(t, sourceOpenAI, model.SourceURL)
 		require.Equal(t, contextSourceOpenAI, model.ContextSourceURL)
