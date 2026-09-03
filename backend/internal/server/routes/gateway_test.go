@@ -25,13 +25,24 @@ func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 }
 
 func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-
 	groupPlatform := service.PlatformOpenAI
 	if len(platform) > 0 && platform[0] != "" {
 		groupPlatform = platform[0]
 	}
+
+	return newGatewayRoutesTestRouterWithAuth(cfg, servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{Platform: groupPlatform},
+		})
+		c.Next()
+	}))
+}
+
+func newGatewayRoutesTestRouterWithAuth(cfg *config.Config, apiKeyAuth servermiddleware.APIKeyAuthMiddleware) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
 	RegisterGatewayRoutes(
 		router,
 		&handler.Handlers{
@@ -39,14 +50,7 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 			OpenAIGateway: &handler.OpenAIGatewayHandler{},
 			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
 		},
-		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
-			groupID := int64(1)
-			c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
-				GroupID: &groupID,
-				Group:   &service.Group{Platform: groupPlatform},
-			})
-			c.Next()
-		}),
+		apiKeyAuth,
 		nil,
 		nil,
 		nil,
@@ -55,6 +59,58 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 	)
 
 	return router
+}
+
+func registeredRouteHandlers(router *gin.Engine) map[string]string {
+	handlers := make(map[string]string)
+	for _, route := range router.Routes() {
+		handlers[route.Method+" "+route.Path] = route.Handler
+	}
+	return handlers
+}
+
+func TestGatewayRoutesBareMessagesAliasesAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter()
+	routes := registeredRouteHandlers(router)
+
+	require.NotEmpty(t, routes["POST /messages"])
+	require.Equal(t, routes["POST /v1/messages"], routes["POST /messages"])
+	require.NotEmpty(t, routes["POST /antigravity/messages"])
+	require.Equal(t, routes["POST /antigravity/v1/messages"], routes["POST /antigravity/messages"])
+	require.NotEmpty(t, routes["POST /antigravity/messages/count_tokens"])
+	require.Equal(t, routes["POST /antigravity/v1/messages/count_tokens"], routes["POST /antigravity/messages/count_tokens"])
+
+	forcePlatforms := make(map[string]string)
+	forceRouter := newGatewayRoutesTestRouterWithAuth(&config.Config{
+		Gateway: config.GatewayConfig{
+			MaxBodySize:     1024 * 1024,
+			TextMaxBodySize: 1024 * 1024,
+		},
+	}, servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		platform, _ := servermiddleware.GetForcePlatformFromContext(c)
+		forcePlatforms[c.FullPath()] = platform
+		c.AbortWithStatus(http.StatusNoContent)
+	}))
+
+	for _, path := range []string{
+		"/v1/messages",
+		"/messages",
+		"/antigravity/v1/messages",
+		"/antigravity/messages",
+		"/antigravity/v1/messages/count_tokens",
+		"/antigravity/messages/count_tokens",
+	} {
+		w := httptest.NewRecorder()
+		forceRouter.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+		require.Equal(t, http.StatusNoContent, w.Code, "path=%s should reach API key auth", path)
+	}
+
+	require.Empty(t, forcePlatforms["/v1/messages"])
+	require.Empty(t, forcePlatforms["/messages"])
+	require.Equal(t, service.PlatformAntigravity, forcePlatforms["/antigravity/v1/messages"])
+	require.Equal(t, service.PlatformAntigravity, forcePlatforms["/antigravity/messages"])
+	require.Equal(t, service.PlatformAntigravity, forcePlatforms["/antigravity/v1/messages/count_tokens"])
+	require.Equal(t, service.PlatformAntigravity, forcePlatforms["/antigravity/messages/count_tokens"])
 }
 
 func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {
