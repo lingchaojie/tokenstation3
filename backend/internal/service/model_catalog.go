@@ -43,10 +43,14 @@ func (s *GatewayService) loadConfiguredModelCatalog(ctx context.Context, group *
 		}
 	}
 
+	candidatePlatforms := []string{platform}
+	if platform == PlatformAnthropic || platform == PlatformGemini {
+		candidatePlatforms = mixedSchedulingPlatforms(platform)
+	}
 	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(
 		ctx,
 		&group.ID,
-		mixedSchedulingPlatforms(platform),
+		candidatePlatforms,
 		false,
 	)
 	if err != nil {

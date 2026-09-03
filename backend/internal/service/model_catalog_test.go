@@ -16,6 +16,32 @@ type modelCatalogAccountRepoStub struct {
 	calls    int
 }
 
+type modelCatalogFilteringAccountRepoStub struct {
+	AccountRepository
+	accounts       []Account
+	queryPlatforms []string
+}
+
+func (s *modelCatalogFilteringAccountRepoStub) ListModelAvailabilityCandidates(
+	_ context.Context,
+	_ *int64,
+	platforms []string,
+	_ bool,
+) ([]Account, error) {
+	s.queryPlatforms = append([]string(nil), platforms...)
+	allowed := make(map[string]struct{}, len(platforms))
+	for _, platform := range platforms {
+		allowed[platform] = struct{}{}
+	}
+	filtered := make([]Account, 0, len(s.accounts))
+	for _, account := range s.accounts {
+		if _, ok := allowed[account.Platform]; ok {
+			filtered = append(filtered, account)
+		}
+	}
+	return filtered, nil
+}
+
 func (s *modelCatalogAccountRepoStub) ListModelAvailabilityCandidates(
 	_ context.Context,
 	_ *int64,
@@ -98,6 +124,31 @@ func TestGatewayService_GetConfiguredModelCatalog_OpenAIPassthroughContributesNo
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-public"}, models)
 	require.NotContains(t, models, "stale-public")
+}
+
+func TestGatewayService_GetConfiguredModelCatalog_OpenAIExcludesMixedAntigravity(t *testing.T) {
+	repo := &modelCatalogFilteringAccountRepoStub{accounts: []Account{
+		{
+			Platform: PlatformOpenAI,
+			Credentials: map[string]any{"model_mapping": map[string]any{
+				"gpt-public": "gpt-upstream",
+			}},
+		},
+		{
+			Platform: PlatformAntigravity,
+			Extra:    map[string]any{"mixed_scheduling": true},
+			Credentials: map[string]any{"model_mapping": map[string]any{
+				"antigravity-public": "antigravity-upstream",
+			}},
+		},
+	}}
+	svc := &GatewayService{accountRepo: repo}
+
+	models, err := svc.GetConfiguredModelCatalog(context.Background(), &Group{ID: 6, Platform: PlatformOpenAI})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-public"}, models)
+	require.Equal(t, []string{PlatformOpenAI}, repo.queryPlatforms)
 }
 
 func TestGatewayService_GetConfiguredModelCatalog_EmptyCatalogIsValid(t *testing.T) {
