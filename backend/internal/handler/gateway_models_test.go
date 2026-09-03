@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +17,18 @@ import (
 type gatewayModelsAccountRepoStub struct {
 	service.AccountRepository
 
-	byGroup map[int64][]service.Account
+	byGroup           map[int64][]service.Account
+	catalogByGroup    map[int64][]service.Account
+	catalogErrByGroup map[int64]error
+}
+
+type modelCatalogGroupResolverStub struct {
+	groups []*service.Group
+	err    error
+}
+
+func (s modelCatalogGroupResolverStub) ResolveModelCatalogGroups(context.Context, *service.APIKey) ([]*service.Group, error) {
+	return s.groups, s.err
 }
 
 type gatewayModelsResponseForTest struct {
@@ -51,6 +63,22 @@ func (s *gatewayModelsAccountRepoStub) ListSchedulableByGroupID(ctx context.Cont
 	return out, nil
 }
 
+func (s *gatewayModelsAccountRepoStub) ListModelAvailabilityCandidates(
+	_ context.Context,
+	groupID *int64,
+	_ []string,
+	_ bool,
+) ([]service.Account, error) {
+	if groupID == nil {
+		return nil, nil
+	}
+	if err := s.catalogErrByGroup[*groupID]; err != nil {
+		return nil, err
+	}
+	accounts := s.catalogByGroup[*groupID]
+	return append([]service.Account(nil), accounts...), nil
+}
+
 func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHandler {
 	return &GatewayHandler{
 		gatewayService: service.NewGatewayService(
@@ -59,6 +87,186 @@ func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHand
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			nil,
 		),
+	}
+}
+
+func newUnifiedGatewayModelsHandlerForTest(
+	repo service.AccountRepository,
+	resolver modelCatalogGroupResolver,
+) *GatewayHandler {
+	h := newGatewayModelsHandlerForTest(repo)
+	h.modelCatalogGroupResolver = resolver
+	return h
+}
+
+func setUnifiedAPIKeyForGatewayModelsTest(c *gin.Context) {
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		UserID:           42,
+		User:             &service.User{ID: 42, Status: service.StatusActive},
+		GroupBindingMode: service.APIKeyGroupBindingModeAuto,
+	})
+}
+
+func TestGatewayModels_UnifiedKeyMergesEffectiveGroups(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groups := []*service.Group{
+		{ID: 3, Platform: service.PlatformAnthropic},
+		{ID: 6, Platform: service.PlatformOpenAI},
+	}
+	h := newUnifiedGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{catalogByGroup: map[int64][]service.Account{
+			3: {
+				{ID: 31, Platform: service.PlatformAnthropic, Credentials: map[string]any{
+					"model_mapping": map[string]any{
+						"shared-model":      "anthropic-shared-upstream",
+						"claude-public-4-6": "claude-upstream-4-6",
+					},
+				}},
+			},
+			6: {
+				{ID: 61, Platform: service.PlatformOpenAI, Credentials: map[string]any{
+					"model_mapping": map[string]any{
+						"gpt-public-5-5": "gpt-upstream-5-5",
+						"shared-model":   "openai-shared-upstream",
+					},
+				}},
+			},
+		}},
+		modelCatalogGroupResolverStub{groups: groups},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	setUnifiedAPIKeyForGatewayModelsTest(c)
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "list", got.Object)
+	require.Equal(t, []string{"claude-public-4-6", "gpt-public-5-5", "shared-model"}, modelIDsForTest(got.Data))
+	for _, model := range got.Data {
+		require.Equal(t, "model", model.Object)
+	}
+}
+
+func TestGatewayModels_UnifiedKeyReturnsConfiguredEmptyListWithoutFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	group := &service.Group{ID: 3, Platform: service.PlatformAnthropic}
+	h := newUnifiedGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{catalogByGroup: map[int64][]service.Account{3: {}}},
+		modelCatalogGroupResolverStub{groups: []*service.Group{group}},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/models", nil)
+	setUnifiedAPIKeyForGatewayModelsTest(c)
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "list", got.Object)
+	require.Empty(t, got.Data)
+}
+
+func TestGatewayModels_UnifiedCodexManifestUsesSameCatalog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groups := []*service.Group{
+		{ID: 3, Platform: service.PlatformAnthropic},
+		{ID: 6, Platform: service.PlatformOpenAI},
+	}
+	h := newUnifiedGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{catalogByGroup: map[int64][]service.Account{
+			3: {{ID: 31, Platform: service.PlatformAnthropic, Credentials: map[string]any{
+				"model_mapping": map[string]any{"shared-model": "claude-upstream", "claude-public-4-6": "claude-upstream-4-6"},
+			}}},
+			6: {{ID: 61, Platform: service.PlatformOpenAI, Credentials: map[string]any{
+				"model_mapping": map[string]any{"shared-model": "gpt-upstream", "gpt-public-5-5": "gpt-upstream-5-5"},
+			}}},
+		}},
+		modelCatalogGroupResolverStub{groups: groups},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/models?client_version=0.144.0", nil)
+	setUnifiedAPIKeyForGatewayModelsTest(c)
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{
+		"models": [
+			{"slug": "claude-public-4-6"},
+			{"slug": "gpt-public-5-5"},
+			{"slug": "shared-model"}
+		]
+	}`, rec.Body.String())
+}
+
+func TestGatewayModels_UnifiedCatalogFailureReturnsInternalError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name string
+		h    *GatewayHandler
+	}{
+		{
+			name: "resolver failure",
+			h: newUnifiedGatewayModelsHandlerForTest(
+				&gatewayModelsAccountRepoStub{},
+				modelCatalogGroupResolverStub{err: errors.New("sensitive resolver details")},
+			),
+		},
+		{
+			name: "catalog failure",
+			h: newUnifiedGatewayModelsHandlerForTest(
+				&gatewayModelsAccountRepoStub{catalogErrByGroup: map[int64]error{3: errors.New("sensitive repository details")}},
+				modelCatalogGroupResolverStub{groups: []*service.Group{{ID: 3, Platform: service.PlatformAnthropic}}},
+			),
+		},
+		{
+			name: "missing resolver dependency",
+			h:    newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{}),
+		},
+		{
+			name: "missing gateway dependency",
+			h: &GatewayHandler{
+				modelCatalogGroupResolver: modelCatalogGroupResolverStub{groups: []*service.Group{{ID: 3, Platform: service.PlatformAnthropic}}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodGet, "/models", nil)
+			setUnifiedAPIKeyForGatewayModelsTest(c)
+
+			tt.h.Models(c)
+
+			require.Equal(t, http.StatusInternalServerError, rec.Code)
+			var got struct {
+				Type  string `json:"type"`
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+			require.Equal(t, "error", got.Type)
+			require.Equal(t, "internal_error", got.Error.Type)
+			require.NotContains(t, got.Error.Message, "sensitive")
+		})
 	}
 }
 

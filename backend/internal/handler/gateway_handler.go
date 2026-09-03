@@ -72,6 +72,7 @@ type GatewayHandler struct {
 	billingCacheService       *service.BillingCacheService
 	usageService              *service.UsageService
 	apiKeyService             *service.APIKeyService
+	modelCatalogGroupResolver modelCatalogGroupResolver
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
 	capturePool               *service.ConversationCapturePool
 	errorPassthroughService   *service.ErrorPassthroughService
@@ -122,6 +123,10 @@ func NewGatewayHandler(
 	if userMsgQueueService != nil && cfg != nil {
 		umqHelper = NewUserMsgQueueHelper(userMsgQueueService, SSEPingFormatClaude, pingInterval)
 	}
+	var catalogGroupResolver modelCatalogGroupResolver
+	if apiKeyService != nil {
+		catalogGroupResolver = apiKeyService
+	}
 
 	return &GatewayHandler{
 		gatewayService:            gatewayService,
@@ -132,6 +137,7 @@ func NewGatewayHandler(
 		billingCacheService:       billingCacheService,
 		usageService:              usageService,
 		apiKeyService:             apiKeyService,
+		modelCatalogGroupResolver: catalogGroupResolver,
 		usageRecordWorkerPool:     usageRecordWorkerPool,
 		capturePool:               capturePool,
 		errorPassthroughService:   errorPassthroughService,
@@ -1206,6 +1212,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 // Falls back to default models if no whitelist is configured
 func (h *GatewayHandler) Models(c *gin.Context) {
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	if apiKey != nil && apiKey.GroupBindingMode == service.APIKeyGroupBindingModeAuto {
+		h.writeUnifiedModelCatalog(c, apiKey)
+		return
+	}
 
 	var groupID *int64
 	var platform string
