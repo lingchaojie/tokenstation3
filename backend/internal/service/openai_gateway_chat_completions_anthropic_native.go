@@ -458,7 +458,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 				return onIdle()
 			}
 			logReadErr(rerr)
-			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+			if !errors.Is(rerr, io.EOF) && (!clientDisconnected || !errors.Is(rerr, context.Canceled)) {
 				providerErr = rerr
 			}
 			break
@@ -475,7 +475,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			}
 			// EOF / 读错误：事件行后流终止，进入 finalize。
 			logReadErr(rerr)
-			if !errors.Is(rerr, io.EOF) && !(clientDisconnected && errors.Is(rerr, context.Canceled)) {
+			if !errors.Is(rerr, io.EOF) && (!clientDisconnected || !errors.Is(rerr, context.Canceled)) {
 				providerErr = rerr
 			}
 			break
