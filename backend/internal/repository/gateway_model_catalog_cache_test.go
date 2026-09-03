@@ -63,7 +63,7 @@ func TestGatewayModelCatalogCache_UsesVersionedGroupPlatformKeyAndTTL(t *testing
 func TestGatewayModelCatalogCache_ReportsMalformedJSON(t *testing.T) {
 	mr, cache := newGatewayModelCatalogCacheTest(t)
 	key := buildModelCatalogKey(3, service.PlatformAnthropic)
-	mr.Set(key, `{not-json`)
+	require.NoError(t, mr.Set(key, `{not-json`))
 
 	models, err := cache.GetModelCatalog(context.Background(), 3, service.PlatformAnthropic)
 
