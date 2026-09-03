@@ -532,20 +532,9 @@ const currentFiles = computed((): FileConfig[] => {
   const baseUrl = props.baseUrl || window.location.origin
   const apiKey = props.apiKey
   const baseRoot = baseUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '')
-  const ensureV1 = (value: string) => {
-    const trimmed = value.replace(/\/+$/, '')
-    return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`
-  }
-  const ensureChatCompletions = (value: string) => {
-    const trimmed = value.replace(/\/+$/, '')
-    if (trimmed.endsWith('/chat/completions')) {
-      return trimmed
-    }
-    return `${ensureV1(trimmed)}/chat/completions`
-  }
-  const apiBase = ensureV1(baseRoot)
-  const chatCompletionsUrl = ensureChatCompletions(apiBase)
-  const antigravityBase = ensureV1(`${baseRoot}/antigravity`)
+  const apiBase = baseRoot
+  const chatCompletionsUrl = `${baseRoot}/chat/completions`
+  const antigravityBase = `${baseRoot}/antigravity`
   const antigravityGeminiBase = (() => {
     const trimmed = `${baseRoot}/antigravity`.replace(/\/+$/, '')
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
@@ -909,8 +898,8 @@ export XAI_API_KEY="${apiKey}"`
 # Docs: ~/.grok/docs/user-guide/05-configuration.md + 11-custom-models.md
 # Verify after save: grok inspect
 #
-# IMPORTANT: api_backend must be "responses" for Sub2API Grok (POST /v1/responses).
-# If omitted, Grok Build defaults to chat_completions (/v1/chat/completions).
+# IMPORTANT: api_backend must be "responses" for Sub2API Grok (POST /responses).
+# If omitted, Grok Build defaults to chat_completions (/chat/completions).
 # Keep api_backend = "responses" on every model entry.
 #
 # Prefer env_key over hardcoding api_key (never commit secrets).

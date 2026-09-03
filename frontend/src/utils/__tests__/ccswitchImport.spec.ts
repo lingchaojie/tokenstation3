@@ -48,19 +48,19 @@ describe('ccswitchImport utils', () => {
     'https://api.example.com/',
     'https://api.example.com/v1',
     'https://api.example.com/v1/'
-  ])('imports Grok Build with one /v1 suffix for base URL %s', (baseUrl) => {
-    const params = paramsFromDeeplink(
-      buildCcSwitchImportDeeplink({
-        ...baseInput,
-        baseUrl,
-        platform: 'grok',
-        clientType: 'claude'
-      })
-    )
+  ])('imports Grok Build with the bare gateway root for base URL %s', (baseUrl) => {
+    const deeplink = buildCcSwitchImportDeeplink({
+      ...baseInput,
+      baseUrl,
+      platform: 'grok',
+      clientType: 'claude'
+    })
+    const params = paramsFromDeeplink(deeplink)
 
     expect(params.get('app')).toBe('grokbuild')
-    expect(params.get('endpoint')).toBe('https://api.example.com/v1')
+    expect(params.get('endpoint')).toBe('https://api.example.com')
     expect(params.get('model')).toBe(GROK_CC_SWITCH_MODEL)
+    expect(deeplink.startsWith('ccswitch://v1/import?')).toBe(true)
   })
 
   it.each([

@@ -20,9 +20,8 @@ export interface CcSwitchImportDeeplinkInput {
   usageScript: string
 }
 
-function withV1Endpoint(baseUrl: string): string {
-  const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
-  return normalizedBaseUrl.endsWith('/v1') ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`
+function gatewayRoot(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/v1\/?$/, '').replace(/\/+$/, '')
 }
 
 export function resolveCcSwitchImportConfig(
@@ -30,33 +29,35 @@ export function resolveCcSwitchImportConfig(
   clientType: CcSwitchClientType,
   baseUrl: string
 ): CcSwitchImportConfig {
+  const root = gatewayRoot(baseUrl)
+
   switch (platform || 'anthropic') {
     case 'antigravity':
       return {
         app: clientType === 'gemini' ? 'gemini' : 'claude',
-        endpoint: `${baseUrl}/antigravity`
+        endpoint: `${root}/antigravity`
       }
     case 'openai':
       return {
         app: 'codex',
-        endpoint: baseUrl,
+        endpoint: root,
         model: OPENAI_CC_SWITCH_CODEX_MODEL
       }
     case 'gemini':
       return {
         app: 'gemini',
-        endpoint: baseUrl
+        endpoint: root
       }
     case 'grok':
       return {
         app: 'grokbuild',
-        endpoint: withV1Endpoint(baseUrl),
+        endpoint: root,
         model: GROK_CC_SWITCH_MODEL
       }
     default:
       return {
         app: 'claude',
-        endpoint: baseUrl
+        endpoint: root
       }
   }
 }

@@ -223,10 +223,10 @@ describe('UseKeyModal', () => {
     expect(allCode).toContain('[model."grok-4.20-multi-agent-0309"]')
     expect(allCode).toContain('[model."grok-4.3"]')
     expect(allCode).toContain('default = "grok-4.5"')
-    expect(allCode).toContain('models_base_url = "https://example.com/v1"')
-    expect(allCode).toContain('models_list_url = "https://example.com/v1/models"')
-    expect(allCode).toContain('xai_api_base_url = "https://example.com/v1"')
-    expect(allCode).toContain('cli_chat_proxy_base_url = "https://example.com/v1"')
+    expect(allCode).toContain('models_base_url = "https://example.com"')
+    expect(allCode).toContain('models_list_url = "https://example.com/models"')
+    expect(allCode).toContain('xai_api_base_url = "https://example.com"')
+    expect(allCode).toContain('cli_chat_proxy_base_url = "https://example.com"')
     expect(allCode).toContain('preferred_method = "api_key"')
     expect(allCode).toContain('image_description = "grok-4.5"')
     expect(allCode).toContain('auto_compact_threshold_percent = 80')
@@ -271,7 +271,7 @@ describe('UseKeyModal', () => {
     expect(parsed.provider.grok.npm).toBe('@ai-sdk/openai-compatible')
     expect(parsed.provider.grok.name).toBe('Grok via Sub2API')
     expect(parsed.provider.grok.options).toEqual({
-      baseURL: 'https://example.com/v1',
+      baseURL: 'https://example.com',
       apiKey: 'sk-grok-test'
     })
     expect(parsed.provider.grok.models['grok-4.5']).toBeDefined()
@@ -557,7 +557,7 @@ describe('UseKeyModal', () => {
     expect(parsed.availableModels).toEqual(['gpt-5.5', 'claude-sonnet-5', 'claude-opus-4-8'])
     expect(parsed.models.map((model: any) => model.id)).toEqual(parsed.availableModels)
     expect(parsed.models.map((model: any) => model.name)).toEqual(parsed.availableModels)
-    expect(parsed.models.every((model: any) => model.url === 'https://example.com/v1/chat/completions')).toBe(true)
+    expect(parsed.models.every((model: any) => model.url === 'https://example.com/chat/completions')).toBe(true)
     expect(parsed.models.every((model: any) => model.apiKey === 'sk-test')).toBe(true)
     expect(parsed.models.every((model: any) => model.vendor === 'Custom')).toBe(true)
     expect(codeBlock.text()).not.toContain('Claude Sonnet 5')
@@ -707,7 +707,7 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('from openai import OpenAI')
     expect(codeBlock.text()).toContain('client = OpenAI(')
     expect(codeBlock.text()).toContain('api_key="sk-test"')
-    expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+    expect(codeBlock.text()).toContain('base_url="https://example.com"')
     expect(codeBlock.text()).toContain('stream = client.responses.create(')
     expect(codeBlock.text()).toContain('model="gpt-5.5"')
     expect(codeBlock.text()).toContain('stream=True')
@@ -750,7 +750,7 @@ describe('UseKeyModal', () => {
       expect(codeBlock.text()).toContain('from pathlib import Path')
       expect(codeBlock.text()).toContain('from openai import OpenAI')
       expect(codeBlock.text()).toContain('api_key="sk-test"')
-      expect(codeBlock.text()).toContain('base_url="https://example.com/v1"')
+      expect(codeBlock.text()).toContain('base_url="https://example.com"')
       expect(codeBlock.text()).toContain('stream = client.images.generate(')
       expect(codeBlock.text()).toContain('model="gpt-image-2"')
       expect(codeBlock.text()).not.toContain('model="imagen-2"')
@@ -779,9 +779,9 @@ describe('UseKeyModal', () => {
   })
 
   it.each([
-    ['openai' as const, 'https://example.com', 'https://example.com/v1'],
-    ['openai' as const, 'https://example.com/v1/', 'https://example.com/v1'],
-    ['unified' as const, 'https://example.com/v1/', 'https://example.com/v1']
+    ['openai' as const, 'https://example.com', 'https://example.com'],
+    ['openai' as const, 'https://example.com/v1/', 'https://example.com'],
+    ['unified' as const, 'https://example.com/v1/', 'https://example.com']
   ])('renders a complete %s Codex config/auth contract for %s', async (platform, baseUrl, expectedBaseUrl) => {
     const wrapper = await mountCodexExample(platform, baseUrl)
 
@@ -890,7 +890,7 @@ describe('UseKeyModal', () => {
     expect(parsed.model).toBe('openai/gpt-5.5')
     expect(parsed.small_model).toBe('openai/gpt-5.3-codex-spark')
     expect(parsed.provider.openai.options).toEqual({
-      baseURL: 'https://example.com/v1',
+      baseURL: 'https://example.com',
       apiKey: 'sk-test'
     })
     expect(Object.keys(parsed.provider.openai.models)).toEqual([
@@ -945,7 +945,7 @@ describe('UseKeyModal', () => {
     expect(parsed.model).toBe('anthropic/claude-fable-5')
     expect(parsed.small_model).toBe('anthropic/claude-haiku-4-5-20251001')
     expect(parsed.provider.anthropic.options).toEqual({
-      baseURL: 'https://example.com/v1',
+      baseURL: 'https://example.com',
       apiKey: 'sk-test'
     })
     expect(Object.keys(parsed.provider.anthropic.models)).toEqual([
@@ -966,6 +966,34 @@ describe('UseKeyModal', () => {
       'claude-3-5-sonnet-20240620',
       'claude-3-5-haiku-20241022'
     ])
+  })
+
+  it.each([
+    ['gemini', 'gemini', 'https://example.com/v1beta'],
+    ['antigravity', 'antigravity-gemini', 'https://example.com/antigravity/v1beta']
+  ] as const)('keeps the required /v1beta OpenCode base for %s', async (platform, provider, expectedBaseURL) => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1/',
+        platform
+      },
+      global: { stubs: modalStubs }
+    })
+
+    const opencodeTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const content = wrapper.findAll('pre code')
+      .map((code) => code.text())
+      .find((value) => value.includes(`"${provider}"`))
+    expect(content).toBeDefined()
+    expect(JSON.parse(content!).provider[provider].options.baseURL).toBe(expectedBaseURL)
   })
 
   it('renders GPT-5.6 alias and max variants in OpenCode config', async () => {
@@ -1039,6 +1067,7 @@ describe('UseKeyModal', () => {
 
     expect(claudeConfig).toBeDefined()
     const parsed = JSON.parse(claudeConfig!)
+    expect(parsed.provider['antigravity-claude'].options.baseURL).toBe('https://example.com/antigravity')
     const models = parsed.provider['antigravity-claude'].models
     const fable = models['claude-fable-5']
     const mythos = models['claude-mythos-5']
