@@ -316,6 +316,10 @@ func InboundEndpointMiddleware() gin.HandlerFunc {
 		if c.Request != nil && c.Request.URL != nil && c.Request.URL.Path != "" {
 			rawPath = c.Request.URL.Path
 		}
+		if c.Request != nil && c.Request.Method == http.MethodGet && (rawPath == "/models" || rawPath == "/v1/models") {
+			ctx := context.WithValue(c.Request.Context(), ctxkey.ModelCatalogRequest, true)
+			c.Request = c.Request.WithContext(ctx)
+		}
 		if provider := InboundProviderFromPath(rawPath); provider != "" {
 			ctx := context.WithValue(c.Request.Context(), ctxkey.IngressProvider, provider)
 			c.Request = c.Request.WithContext(ctx)

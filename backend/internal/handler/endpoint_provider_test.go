@@ -10,6 +10,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInboundProviderFromPath(t *testing.T) {
@@ -41,6 +42,37 @@ func TestInboundProviderFromPath(t *testing.T) {
 		if got := InboundProviderFromPath(c.path); got != c.want {
 			t.Errorf("InboundProviderFromPath(%q) = %q, want %q", c.path, got, c.want)
 		}
+	}
+}
+
+func TestInboundEndpointMiddlewareMarksOnlyModelCatalogGETRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tt := range []struct {
+		name   string
+		method string
+		path   string
+		want   bool
+	}{
+		{name: "bare models", method: http.MethodGet, path: "/models", want: true},
+		{name: "v1 models", method: http.MethodGet, path: "/v1/models", want: true},
+		{name: "post models", method: http.MethodPost, path: "/v1/models", want: false},
+		{name: "other get", method: http.MethodGet, path: "/v1/messages", want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(InboundEndpointMiddleware())
+			var got bool
+			router.Handle(tt.method, tt.path, func(c *gin.Context) {
+				got, _ = c.Request.Context().Value(ctxkey.ModelCatalogRequest).(bool)
+				c.Status(http.StatusNoContent)
+			})
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
+
+			require.Equal(t, http.StatusNoContent, rec.Code)
+			require.Equal(t, tt.want, got)
+		})
 	}
 }
 

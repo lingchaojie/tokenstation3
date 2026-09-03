@@ -544,6 +544,47 @@ func (s *APIKeyService) resolveProviderGroup(ctx context.Context, user *User, ke
 	return groupID, group, nil
 }
 
+// ResolveModelCatalogGroups returns the effective groups whose configured
+// models can be displayed for an API key. It is display-only and must not
+// affect the key's group used for request routing.
+func (s *APIKeyService) ResolveModelCatalogGroups(ctx context.Context, apiKey *APIKey) ([]*Group, error) {
+	if apiKey == nil {
+		return []*Group{}, nil
+	}
+	if apiKey.GroupBindingMode != APIKeyGroupBindingModeAuto {
+		if apiKey.Group == nil {
+			return []*Group{}, nil
+		}
+		return []*Group{apiKey.Group}, nil
+	}
+	if apiKey.User == nil {
+		return nil, errors.New("model catalog requires api key user")
+	}
+
+	groups := make([]*Group, 0, 2)
+	seen := make(map[int64]struct{}, 2)
+	for _, keyType := range []string{APIKeyTypeAnthropic, APIKeyTypeOpenAI} {
+		_, group, err := s.resolveProviderGroup(ctx, apiKey.User, keyType)
+		if err != nil {
+			if errors.Is(err, ErrDefaultAPIKeyGroupMissing) ||
+				errors.Is(err, ErrDefaultAPIKeyGroupInvalid) ||
+				errors.Is(err, ErrGroupNotAllowed) {
+				continue
+			}
+			return nil, err
+		}
+		if group == nil {
+			continue
+		}
+		if _, exists := seen[group.ID]; exists {
+			continue
+		}
+		seen[group.ID] = struct{}{}
+		groups = append(groups, group)
+	}
+	return groups, nil
+}
+
 // ingressProviderFromContext returns the provider (anthropic/openai) detected
 // from the request path by handler.InboundEndpointMiddleware, or "" when none
 // applies (e.g. non-gateway contexts or Gemini endpoints).
@@ -599,6 +640,19 @@ func (s *APIKeyService) applyDefaultFollowGroup(ctx context.Context, apiKey *API
 	if apiKey == nil {
 		return nil
 	}
+	if apiKey.GroupBindingMode == APIKeyGroupBindingModeAuto && isModelCatalogRequest(ctx) {
+		groups, err := s.ResolveModelCatalogGroups(ctx, apiKey)
+		if err != nil {
+			return err
+		}
+		if len(groups) == 0 {
+			return ErrDefaultAPIKeyGroupMissing
+		}
+		id := groups[0].ID
+		apiKey.GroupID = &id
+		apiKey.Group = groups[0]
+		return nil
+	}
 	var keyType string
 	switch apiKey.GroupBindingMode {
 	case APIKeyGroupBindingModeDefaultFollow:
@@ -626,6 +680,14 @@ func (s *APIKeyService) applyDefaultFollowGroup(ctx context.Context, apiKey *API
 	apiKey.Group = group
 	s.setCachedEffectiveGroup(cacheKey, group)
 	return nil
+}
+
+func isModelCatalogRequest(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	marked, _ := ctx.Value(ctxkey.ModelCatalogRequest).(bool)
+	return marked
 }
 
 func apiKeyEffectiveGroupCacheKey(userID int64, keyType string) string {

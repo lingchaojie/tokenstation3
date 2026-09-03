@@ -22,6 +22,11 @@ const (
 	// 在鉴权前尽量提取，用于统一 Key 对明显跨协议模型族请求做路由纠偏。
 	IngressModel Key = "ctx_ingress_model"
 
+	// ModelCatalogRequest marks the two read-only model-list endpoints. Unified
+	// keys use it during authentication to select the first authorized catalog
+	// group without changing normal request routing.
+	ModelCatalogRequest Key = "ctx_model_catalog_request"
+
 	// RequestID 为服务端生成/透传的请求 ID。
 	RequestID Key = "ctx_request_id"
 

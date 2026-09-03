@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 
@@ -43,6 +44,24 @@ type defaultAPIKeyGroupSettingsStub struct {
 	calls int
 }
 
+type modelCatalogGroupRepoStub struct {
+	GroupRepository
+	groups map[int64]*Group
+	errs   map[int64]error
+}
+
+func (s *modelCatalogGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
+	if err := s.errs[id]; err != nil {
+		return nil, err
+	}
+	group := s.groups[id]
+	if group == nil {
+		return nil, ErrGroupNotFound
+	}
+	clone := *group
+	return &clone, nil
+}
+
 func (s *defaultAPIKeyGroupSettingsStub) GetDefaultAPIKeyGroupID(_ context.Context, keyType string) (*int64, error) {
 	s.calls++
 	return s.ids[keyType], nil
@@ -79,6 +98,109 @@ func (s *apiKeyProviderRoutingCreateRepoStub) ExistsByKey(context.Context, strin
 
 func (s *apiKeyRepoStubForGroupUpdate) GetWebChatKeyByUserAndGroup(context.Context, int64, int64) (*APIKey, error) {
 	panic("unexpected")
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_UnifiedUsesAuthorizedProviderRoutes(t *testing.T) {
+	userID := int64(42)
+	anthropicID := int64(3)
+	openAIID := int64(6)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{groups: map[int64]*Group{
+		anthropicID: {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+		openAIID:    {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive},
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
+		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: openAIID},
+	}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &anthropicID}})
+
+	apiKey := &APIKey{
+		UserID:           userID,
+		User:             &User{ID: userID, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	}
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), apiKey)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{anthropicID, openAIID}, []int64{groups[0].ID, groups[1].ID})
+	require.Nil(t, apiKey.GroupID)
+	require.Nil(t, apiKey.Group)
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_UnifiedSkipsMissingProviderDefault(t *testing.T) {
+	userID := int64(42)
+	openAIID := int64(6)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{groups: map[int64]*Group{
+		openAIID: {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive},
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
+		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: openAIID},
+	}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{}})
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		UserID:           userID,
+		User:             &User{ID: userID, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{openAIID}, []int64{groups[0].ID})
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_UnifiedSkipsInvalidOrForbiddenProviderGroup(t *testing.T) {
+	userID := int64(42)
+	invalidAnthropicID := int64(3)
+	forbiddenOpenAIID := int64(6)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{groups: map[int64]*Group{
+		invalidAnthropicID: {ID: invalidAnthropicID, Platform: PlatformAnthropic, Status: StatusDisabled},
+		forbiddenOpenAIID:  {ID: forbiddenOpenAIID, Platform: PlatformOpenAI, Status: StatusActive, IsExclusive: true},
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
+		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: forbiddenOpenAIID},
+	}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &invalidAnthropicID}})
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		UserID:           userID,
+		User:             &User{ID: userID, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, groups)
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_StaticReturnsCurrentGroupOnly(t *testing.T) {
+	settings := &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{}}
+	group := &Group{ID: 9, Platform: PlatformOpenAI, Status: StatusActive}
+	svc := &APIKeyService{}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{}, settings)
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		GroupBindingMode: APIKeyGroupBindingModeStatic,
+		Group:            group,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []*Group{group}, groups)
+	require.Zero(t, settings.calls)
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_PropagatesRepositoryFailure(t *testing.T) {
+	repositoryFailure := errors.New("group repository unavailable")
+	anthropicID := int64(3)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{errs: map[int64]error{
+		anthropicID: repositoryFailure,
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{
+		APIKeyTypeAnthropic: &anthropicID,
+	}})
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		UserID:           42,
+		User:             &User{ID: 42, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	})
+
+	require.Nil(t, groups)
+	require.ErrorIs(t, err, repositoryFailure)
 }
 
 func TestAPIKeyService_ResolveProviderGroup_UsesUserProviderRoute(t *testing.T) {
