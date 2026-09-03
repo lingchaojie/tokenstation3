@@ -908,6 +908,7 @@ type GatewayService struct {
 	userSubRepo           UserSubscriptionRepository
 	userGroupRateRepo     UserGroupRateRepository
 	cache                 GatewayCache
+	modelCatalogCache     ModelCatalogCache
 	digestStore           *DigestSessionStore
 	cfg                   *config.Config
 	schedulerSnapshot     *SchedulerSnapshotService
@@ -1014,6 +1015,9 @@ func NewGatewayService(
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
 		capturePool:           capturePool,
+	}
+	if catalogCache, ok := cache.(ModelCatalogCache); ok {
+		svc.modelCatalogCache = catalogCache
 	}
 	if len(upstreamUARepos) > 0 {
 		svc.upstreamUARepo = upstreamUARepos[0]
