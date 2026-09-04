@@ -1,0 +1,7 @@
+MATRIX ordinal=11
+MATRIX command=/bin/sh deploy/test-caddyfile-cache.sh
+MATRIX start=2026-09-03T18:00:36.480656448Z
+Caddyfile preserves backend cache policy, SSE streaming, and non-SSE compression
+MATRIX end=2026-09-03T18:00:36.507275863Z
+MATRIX exit=0
+MATRIX summary=Caddy cache contract passed

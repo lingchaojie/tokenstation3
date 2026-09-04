@@ -138,7 +138,7 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	enableCaptureForTest(t, c)
 
-	upstreamBody := []byte(`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":2}}}`)
+	upstreamBody := []byte(`{"id":"chatcmpl_json","object":"chat.completion","model":"gpt-5.4","service_tier":"priority","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"input_tokens":12,"completion_tokens":3,"total_tokens":15,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"completion_tokens_details":{"image_tokens":2}}}`)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_msg_chat_json"}},
@@ -172,6 +172,8 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 2, result.Usage.ImageOutputTokens)
+	require.Nil(t, result.ServiceTier)
+	require.Equal(t, "priority", result.UpstreamResponseServiceTier)
 	require.False(t, result.Stream)
 	require.True(t, result.CaptureResponseComplete, "successful full-body JSON read proves non-stream completion")
 	require.Nil(t, result.UpstreamRequest, "typed capture must not republish a legacy whole-body snapshot")

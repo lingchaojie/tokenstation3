@@ -58,7 +58,7 @@ func task6RealOpenAIForward(t *testing.T, responseBody string) (*service.OpenAIF
 	return svc.Forward(context.Background(), c, account, body)
 }
 
-func TestOpenAIRealForwardFeedsExactOnceSideEffectSinkWithoutResultCaptureBuffer(t *testing.T) {
+func TestOpenAIRealForwardFeedsAtMostOnceSideEffectSinkWithoutResultCaptureBuffer(t *testing.T) {
 	tests := []struct {
 		name, response string
 		wantSink       int

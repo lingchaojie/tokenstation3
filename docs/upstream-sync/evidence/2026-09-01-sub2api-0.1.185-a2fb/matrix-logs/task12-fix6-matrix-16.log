@@ -1,0 +1,368 @@
+MATRIX ordinal=16
+MATRIX command=make test-frontend-critical
+MATRIX start=2026-09-03T18:05:41.890888963Z
+
+ RUN  v2.1.9 /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend
+
+Browserslist: browsers data (caniuse-lite) is 9 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+ ✓ src/components/user/dashboard/UserDashboardStats.spec.ts (10 tests) 244ms
+ ✓ src/views/user/__tests__/PaymentResultView.spec.ts (14 tests) 206ms
+ ✓ src/components/layout/__tests__/AppSidebar.spec.ts (28 tests) 482ms
+ ✓ src/components/payment/__tests__/SubscriptionPlanCard.spec.ts (15 tests) 292ms
+ ✓ src/components/account/__tests__/AccountUsageCell.spec.ts (41 tests) 650ms
+ ✓ src/api/__tests__/client.spec.ts (20 tests) 4256ms
+   ✓ API Client > 请求拦截器 > 规范化相对 API base，避免在回调页拼出相对 v1 路径 1496ms
+   ✓ API Client > 请求拦截器 > 无 token 时不附加 Authorization 头 467ms
+   ✓ API Client > 请求拦截器 > 管理页面调用共享 API 时带 Admin UI 标记 465ms
+   ✓ API Client > 401 Token 刷新 > 刷新期间换号时旧请求不会清除新会话 1086ms
+ ✓ src/views/user/SubscriptionsView.spec.ts (5 tests) 170ms
+ ✓ src/views/admin/orders/__tests__/PlanEditDialog.spec.ts (12 tests) 444ms
+ ✓ src/views/user/__tests__/KeysView.spec.ts (9 tests) 474ms
+ ✓ src/components/user/__tests__/RewardBalanceBreakdown.spec.ts (6 tests) 195ms
+ ✓ src/utils/__tests__/analytics51la.spec.ts (10 tests) 83ms
+ ✓ src/views/auth/__tests__/LinuxDoCallbackView.spec.ts (17 tests) 701ms
+ ✓ src/views/auth/__tests__/WechatCallbackView.spec.ts (25 tests) 757ms
+ ✓ src/api/__tests__/tokenRefresh.spec.ts (7 tests) 165ms
+ ✓ src/views/admin/__tests__/UsersView.spec.ts (6 tests) 1226ms
+   ✓ admin UsersView > loads groups before opening the provider route configuration modal from the user action menu 524ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > excludes announcement-page-owned settings from the generic form loader
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits the compact home page toggle
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > does not render legacy visible payment method controls
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/features/channel-monitor-v2/__tests__/monitorFormat.spec.ts (12 tests) 67ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads, edits, validates, and saves forwarded client-IP headers
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/user/__tests__/AffiliateView.spec.ts (3 tests) 237ms
+ ✓ src/router/__tests__/feature-access.spec.ts (7 tests) 460ms
+ ✓ src/components/user/profile/__tests__/ProfileInfoCard.spec.ts (6 tests) 413ms
+ ✓ src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts (7 tests) 19ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > links payment guidance to README sections instead of removed payment docs
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/user/__tests__/PaymentView.spec.ts (29 tests) 1398ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > does not submit legacy visible payment method settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits the admin recharge affiliate rebate setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/auth/__tests__/RegisterViewAffiliate.spec.ts (2 tests) 232ms
+ ✓ src/views/admin/orders/__tests__/AdminPaymentPlansView.spec.ts (4 tests) 252ms
+ ✓ src/views/admin/affiliates/__tests__/AdminAffiliateRebatesView.spec.ts (1 test) 192ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits the admin recharge affiliate rebate setting
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > renders and submits fixed rewards alongside percentage rebate settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/user/__tests__/CheckInView.spec.ts (3 tests) 200ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > renders and submits fixed rewards alongside percentage rebate settings
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+ ✓ src/features/channel-monitor-v2/__tests__/monitorZoom.spec.ts (5 tests) 18ms
+ ✓ src/router/__tests__/admin-my-account-dashboard-route.spec.ts (1 test) 201ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits Anthropic cache TTL injection gateway setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/user/__tests__/ChannelStatusView.mode.spec.ts (2 tests) 59ms
+ ✓ src/api/__tests__/channelMonitorV2.spec.ts (2 tests) 14ms
+ ✓ src/router/__tests__/checkInRoute.spec.ts (2 tests) 9ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits message cache_control rewrite gateway setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/admin/affiliates/__tests__/AdminCheckInConfigView.spec.ts (3 tests) 200ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > blocks settings submission for 'non-positive user ID'
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > blocks settings submission for 'duplicate user ID'
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > blocks settings submission for 'duplicate user ID'
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits validated OpenAI fast policy user IDs
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/layout/__tests__/AppHeaderRewardBalance.spec.ts (1 test) 12ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits validated OpenAI fast policy user IDs
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits global provider default group settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits global provider default group settings
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits Claude OAuth system prompt injection gateway settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits Antigravity user agent version gateway setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > updates provider enablement immediately and reloads providers
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > renders advanced scheduler copy as local experimental gateway policy
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > summarizes target and other-model actions, then switches to all models
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads and saves upstream billing probe settings from the gateway tab
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads and saves configurable Grok cross-client model mapping
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads and saves the OpenAI Responses first-token metric mode
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > places and explains rate controls for both scheduling modes
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > passes translated upload and remove labels to the payment help image uploader
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > exposes IkunPay in global payment types and provider key options
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > allows IkunPay to coexist with official visible-method providers
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > loads and echoes WeChat Connect fields from the backend payload
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > links GitHub OAuth Apps guide to GitHub developer settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > saves WeChat Connect fields using the backend contract and clears the secret after save
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > collapses auth source defaults until the source is enabled
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > preserves optional OIDC compatibility flags instead of forcing them on save
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 9 平台行
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 9 平台）
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 加载后 form.default_platform_quotas 含全 9 平台，从嵌套 JSON 正确读取数值
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 空输入（v-model.number 产出 ""）在提交时清洗为 null 而非空字符串
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/admin/__tests__/SettingsView.spec.ts (37 tests) 9072ms
+   ✓ admin SettingsView payment visible method controls > excludes announcement-page-owned settings from the generic form loader 797ms
+   ✓ admin SettingsView payment visible method controls > submits the compact home page toggle 682ms
+   ✓ admin SettingsView payment visible method controls > does not render legacy visible payment method controls 451ms
+   ✓ admin SettingsView payment visible method controls > loads, edits, validates, and saves forwarded client-IP headers 597ms
+   ✓ admin SettingsView payment visible method controls > links payment guidance to README sections instead of removed payment docs 517ms
+   ✓ admin SettingsView payment visible method controls > does not submit legacy visible payment method settings 394ms
+   ✓ admin SettingsView payment visible method controls > submits the admin recharge affiliate rebate setting 409ms
+   ✓ admin SettingsView payment visible method controls > renders and submits fixed rewards alongside percentage rebate settings 439ms
+   ✓ admin SettingsView payment visible method controls > submits Anthropic cache TTL injection gateway setting 359ms
+
+ Test Files  33 passed (33)
+      Tests  352 passed (352)
+   Start at  02:05:42
+   Duration  17.67s (transform 24.80s, setup 7.81s, collect 58.27s, tests 23.40s, environment 36.01s, prepare 6.22s)
+
+MATRIX end=2026-09-03T18:06:00.829014389Z
+MATRIX exit=0
+MATRIX summary=frontend critical tests passed

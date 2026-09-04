@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOpenAIResponsesEmptyCompletedReportsMissingUsage verifies that an empty
-// completed response is accepted at the forwarding layer but never recorded as
-// a zero-cost success when the provider omitted usage.
-func TestOpenAIResponsesEmptyCompletedReportsMissingUsage(t *testing.T) {
+// TestOpenAIResponsesEmptyCompletedFailsOver verifies that a Responses stream
+// ending with an empty response.completed (no output, no usage, no error) is
+// turned into a failover error instead of a successful empty reply.
+func TestOpenAIResponsesEmptyCompletedFailsOver(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -39,14 +39,13 @@ func TestOpenAIResponsesEmptyCompletedReportsMissingUsage(t *testing.T) {
 		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]
 	}`)
 
-	result, err := svc.Forward(context.Background(), c, account, body)
-	require.ErrorIs(t, err, ErrOpenAIUpstreamUsageMissing)
-	require.NotNil(t, result)
-	require.True(t, result.UpstreamFailed)
-	require.True(t, result.CaptureTerminalError)
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr))
-	require.Contains(t, recorder.Body.String(), "response.completed")
+	require.True(t, errors.As(err, &failoverErr), "empty completed must produce UpstreamFailoverError, got: %v", err)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.ShouldRetryNextAccount())
+	require.Empty(t, recorder.Body.String(), "no empty success stream may reach the client")
 }
 
 // TestOpenAIResponsesEmptyCompletedWithOutputSucceeds ensures streams with real

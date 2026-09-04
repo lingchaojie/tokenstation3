@@ -76,6 +76,22 @@ func parseOptionalBoolDashboardFilter(c *gin.Context, name string) (*bool, error
 	return &value, nil
 }
 
+func parseDashboardModelSource(c *gin.Context) (string, error) {
+	source := strings.TrimSpace(c.DefaultQuery("model_source", usagestats.ModelSourceRequested))
+	if !usagestats.IsValidModelSource(source) {
+		return "", errors.New("invalid model_source, use requested/upstream/mapping")
+	}
+	return usagestats.NormalizeModelSource(source), nil
+}
+
+func parseDashboardBillingMode(c *gin.Context) (string, error) {
+	mode := strings.TrimSpace(c.Query("billing_mode"))
+	if !service.BillingMode(mode).IsValidUsageFilter() {
+		return "", errors.New("invalid billing_mode")
+	}
+	return mode, nil
+}
+
 // GetStats handles getting dashboard statistics
 // GET /api/v1/admin/dashboard/stats
 func (h *DashboardHandler) GetStats(c *gin.Context) {
@@ -243,6 +259,11 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 	if modelStr := c.Query("model"); modelStr != "" {
 		model = modelStr
 	}
+	modelFilterSource, err := parseDashboardModelSource(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	if requestTypeStr := strings.TrimSpace(c.Query("request_type")); requestTypeStr != "" {
 		parsed, err := service.ParseUsageRequestType(requestTypeStr)
 		if err != nil {
@@ -268,21 +289,33 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 			return
 		}
 	}
+	billingMode, err := parseDashboardBillingMode(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	nativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
+	}
 	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
 	if err != nil {
 		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
 		return
 	}
-
 	filters := usagestats.UsageLogFilters{
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
 		GroupID:               groupID,
 		Model:                 model,
+		ModelFilterSource:     modelFilterSource,
 		RequestType:           requestType,
 		Stream:                stream,
+		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
+		BillingMode:           billingMode,
 		ExcludedUserIDs:       excludedUserIDs,
 		UpstreamModelMismatch: upstreamModelMismatch,
 	}
@@ -315,7 +348,7 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 
 	// Parse optional filter params
 	var userID, apiKeyID, accountID, groupID int64
-	modelSource := usagestats.ModelSourceRequested
+	var model string
 	var requestType *int16
 	var stream *bool
 	var billingType *int8
@@ -341,12 +374,11 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 			groupID = id
 		}
 	}
-	if rawModelSource := strings.TrimSpace(c.Query("model_source")); rawModelSource != "" {
-		if !usagestats.IsValidModelSource(rawModelSource) {
-			response.BadRequest(c, "Invalid model_source, use requested/upstream/mapping")
-			return
-		}
-		modelSource = rawModelSource
+	model = strings.TrimSpace(c.Query("model"))
+	modelSource, err := parseDashboardModelSource(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 	if requestTypeStr := strings.TrimSpace(c.Query("request_type")); requestTypeStr != "" {
 		parsed, err := service.ParseUsageRequestType(requestTypeStr)
@@ -373,20 +405,33 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 			return
 		}
 	}
+	billingMode, err := parseDashboardBillingMode(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	nativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
+	}
 	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
 	if err != nil {
 		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
 		return
 	}
-
 	filters := usagestats.UsageLogFilters{
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
 		GroupID:               groupID,
+		Model:                 model,
+		ModelFilterSource:     usagestats.NormalizeModelSource(modelSource),
 		RequestType:           requestType,
 		Stream:                stream,
+		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
+		BillingMode:           billingMode,
 		ExcludedUserIDs:       excludedUserIDs,
 		UpstreamModelMismatch: upstreamModelMismatch,
 	}
@@ -417,6 +462,7 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 	startTime, endTime := parseTimeRange(c)
 
 	var userID, apiKeyID, accountID, groupID int64
+	var model string
 	var requestType *int16
 	var stream *bool
 	var billingType *int8
@@ -441,6 +487,12 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 		if id, err := strconv.ParseInt(groupIDStr, 10, 64); err == nil {
 			groupID = id
 		}
+	}
+	model = strings.TrimSpace(c.Query("model"))
+	modelFilterSource, err := parseDashboardModelSource(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 	if requestTypeStr := strings.TrimSpace(c.Query("request_type")); requestTypeStr != "" {
 		parsed, err := service.ParseUsageRequestType(requestTypeStr)
@@ -467,20 +519,33 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 			return
 		}
 	}
+	billingMode, err := parseDashboardBillingMode(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	nativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
+	}
 	upstreamModelMismatch, err = parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
 	if err != nil {
 		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
 		return
 	}
-
 	filters := usagestats.UsageLogFilters{
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
 		GroupID:               groupID,
+		Model:                 model,
+		ModelFilterSource:     modelFilterSource,
 		RequestType:           requestType,
 		Stream:                stream,
+		NativeCompactionV2:    nativeCompactionV2,
 		BillingType:           billingType,
+		BillingMode:           billingMode,
 		ExcludedUserIDs:       excludedUserIDs,
 		UpstreamModelMismatch: upstreamModelMismatch,
 	}
@@ -758,6 +823,14 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 		if s, err := strconv.ParseBool(v); err == nil {
 			dim.Stream = &s
 		}
+	}
+	if v := strings.TrimSpace(c.Query("native_compaction_v2")); v != "" {
+		value, err := strconv.ParseBool(v)
+		if err != nil {
+			response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+			return
+		}
+		dim.NativeCompactionV2 = &value
 	}
 	if v := c.Query("billing_type"); v != "" {
 		if bt, err := strconv.ParseInt(v, 10, 8); err == nil {

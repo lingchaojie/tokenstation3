@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"sync"
@@ -21993,8 +21993,8 @@ type GroupMutation struct {
 	web_search_price_per_call               *float64
 	addweb_search_price_per_call            *float64
 	long_context_pricing_enabled            *bool
-	model_pricing                           *json.RawMessage
-	appendmodel_pricing                     json.RawMessage
+	model_pricing                           *jsontext.Value
+	appendmodel_pricing                     jsontext.Value
 	claude_code_only                        *bool
 	fallback_group_id                       *int64
 	addfallback_group_id                    *int64
@@ -23985,13 +23985,13 @@ func (m *GroupMutation) ResetLongContextPricingEnabled() {
 }
 
 // SetModelPricing sets the "model_pricing" field.
-func (m *GroupMutation) SetModelPricing(jm json.RawMessage) {
-	m.model_pricing = &jm
+func (m *GroupMutation) SetModelPricing(j jsontext.Value) {
+	m.model_pricing = &j
 	m.appendmodel_pricing = nil
 }
 
 // ModelPricing returns the value of the "model_pricing" field in the mutation.
-func (m *GroupMutation) ModelPricing() (r json.RawMessage, exists bool) {
+func (m *GroupMutation) ModelPricing() (r jsontext.Value, exists bool) {
 	v := m.model_pricing
 	if v == nil {
 		return
@@ -24002,7 +24002,7 @@ func (m *GroupMutation) ModelPricing() (r json.RawMessage, exists bool) {
 // OldModelPricing returns the old "model_pricing" field's value of the Group entity.
 // If the Group object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *GroupMutation) OldModelPricing(ctx context.Context) (v json.RawMessage, err error) {
+func (m *GroupMutation) OldModelPricing(ctx context.Context) (v jsontext.Value, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldModelPricing is only allowed on UpdateOne operations")
 	}
@@ -24016,13 +24016,13 @@ func (m *GroupMutation) OldModelPricing(ctx context.Context) (v json.RawMessage,
 	return oldValue.ModelPricing, nil
 }
 
-// AppendModelPricing adds jm to the "model_pricing" field.
-func (m *GroupMutation) AppendModelPricing(jm json.RawMessage) {
-	m.appendmodel_pricing = append(m.appendmodel_pricing, jm...)
+// AppendModelPricing adds j to the "model_pricing" field.
+func (m *GroupMutation) AppendModelPricing(j jsontext.Value) {
+	m.appendmodel_pricing = append(m.appendmodel_pricing, j...)
 }
 
 // AppendedModelPricing returns the list of values that were appended to the "model_pricing" field in this mutation.
-func (m *GroupMutation) AppendedModelPricing() (json.RawMessage, bool) {
+func (m *GroupMutation) AppendedModelPricing() (jsontext.Value, bool) {
 	if len(m.appendmodel_pricing) == 0 {
 		return nil, false
 	}
@@ -26349,7 +26349,7 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		m.SetLongContextPricingEnabled(v)
 		return nil
 	case group.FieldModelPricing:
-		v, ok := value.(json.RawMessage)
+		v, ok := value.(jsontext.Value)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
@@ -43556,8 +43556,8 @@ type UsageCleanupTaskMutation struct {
 	created_at      *time.Time
 	updated_at      *time.Time
 	status          *string
-	filters         *json.RawMessage
-	appendfilters   json.RawMessage
+	filters         *jsontext.Value
+	appendfilters   jsontext.Value
 	created_by      *int64
 	addcreated_by   *int64
 	deleted_rows    *int64
@@ -43781,13 +43781,13 @@ func (m *UsageCleanupTaskMutation) ResetStatus() {
 }
 
 // SetFilters sets the "filters" field.
-func (m *UsageCleanupTaskMutation) SetFilters(jm json.RawMessage) {
-	m.filters = &jm
+func (m *UsageCleanupTaskMutation) SetFilters(j jsontext.Value) {
+	m.filters = &j
 	m.appendfilters = nil
 }
 
 // Filters returns the value of the "filters" field in the mutation.
-func (m *UsageCleanupTaskMutation) Filters() (r json.RawMessage, exists bool) {
+func (m *UsageCleanupTaskMutation) Filters() (r jsontext.Value, exists bool) {
 	v := m.filters
 	if v == nil {
 		return
@@ -43798,7 +43798,7 @@ func (m *UsageCleanupTaskMutation) Filters() (r json.RawMessage, exists bool) {
 // OldFilters returns the old "filters" field's value of the UsageCleanupTask entity.
 // If the UsageCleanupTask object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *UsageCleanupTaskMutation) OldFilters(ctx context.Context) (v json.RawMessage, err error) {
+func (m *UsageCleanupTaskMutation) OldFilters(ctx context.Context) (v jsontext.Value, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldFilters is only allowed on UpdateOne operations")
 	}
@@ -43812,13 +43812,13 @@ func (m *UsageCleanupTaskMutation) OldFilters(ctx context.Context) (v json.RawMe
 	return oldValue.Filters, nil
 }
 
-// AppendFilters adds jm to the "filters" field.
-func (m *UsageCleanupTaskMutation) AppendFilters(jm json.RawMessage) {
-	m.appendfilters = append(m.appendfilters, jm...)
+// AppendFilters adds j to the "filters" field.
+func (m *UsageCleanupTaskMutation) AppendFilters(j jsontext.Value) {
+	m.appendfilters = append(m.appendfilters, j...)
 }
 
 // AppendedFilters returns the list of values that were appended to the "filters" field in this mutation.
-func (m *UsageCleanupTaskMutation) AppendedFilters() (json.RawMessage, bool) {
+func (m *UsageCleanupTaskMutation) AppendedFilters() (jsontext.Value, bool) {
 	if len(m.appendfilters) == 0 {
 		return nil, false
 	}
@@ -44369,7 +44369,7 @@ func (m *UsageCleanupTaskMutation) SetField(name string, value ent.Value) error 
 		m.SetStatus(v)
 		return nil
 	case usagecleanuptask.FieldFilters:
-		v, ok := value.(json.RawMessage)
+		v, ok := value.(jsontext.Value)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
@@ -44639,6 +44639,7 @@ type UsageLogMutation struct {
 	request_id                   *string
 	model                        *string
 	requested_model              *string
+	requested_reasoning_effort   *string
 	upstream_model               *string
 	upstream_response_model      *string
 	upstream_model_mismatch      *bool
@@ -44683,6 +44684,7 @@ type UsageLogMutation struct {
 	billing_type                 *int8
 	addbilling_type              *int8
 	stream                       *bool
+	native_compaction_v2         *bool
 	duration_ms                  *int
 	addduration_ms               *int
 	first_token_ms               *int
@@ -45047,6 +45049,55 @@ func (m *UsageLogMutation) RequestedModelCleared() bool {
 func (m *UsageLogMutation) ResetRequestedModel() {
 	m.requested_model = nil
 	delete(m.clearedFields, usagelog.FieldRequestedModel)
+}
+
+// SetRequestedReasoningEffort sets the "requested_reasoning_effort" field.
+func (m *UsageLogMutation) SetRequestedReasoningEffort(s string) {
+	m.requested_reasoning_effort = &s
+}
+
+// RequestedReasoningEffort returns the value of the "requested_reasoning_effort" field in the mutation.
+func (m *UsageLogMutation) RequestedReasoningEffort() (r string, exists bool) {
+	v := m.requested_reasoning_effort
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestedReasoningEffort returns the old "requested_reasoning_effort" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldRequestedReasoningEffort(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestedReasoningEffort is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestedReasoningEffort requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestedReasoningEffort: %w", err)
+	}
+	return oldValue.RequestedReasoningEffort, nil
+}
+
+// ClearRequestedReasoningEffort clears the value of the "requested_reasoning_effort" field.
+func (m *UsageLogMutation) ClearRequestedReasoningEffort() {
+	m.requested_reasoning_effort = nil
+	m.clearedFields[usagelog.FieldRequestedReasoningEffort] = struct{}{}
+}
+
+// RequestedReasoningEffortCleared returns if the "requested_reasoning_effort" field was cleared in this mutation.
+func (m *UsageLogMutation) RequestedReasoningEffortCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldRequestedReasoningEffort]
+	return ok
+}
+
+// ResetRequestedReasoningEffort resets all changes to the "requested_reasoning_effort" field.
+func (m *UsageLogMutation) ResetRequestedReasoningEffort() {
+	m.requested_reasoning_effort = nil
+	delete(m.clearedFields, usagelog.FieldRequestedReasoningEffort)
 }
 
 // SetUpstreamModel sets the "upstream_model" field.
@@ -46549,6 +46600,42 @@ func (m *UsageLogMutation) ResetStream() {
 	m.stream = nil
 }
 
+// SetNativeCompactionV2 sets the "native_compaction_v2" field.
+func (m *UsageLogMutation) SetNativeCompactionV2(b bool) {
+	m.native_compaction_v2 = &b
+}
+
+// NativeCompactionV2 returns the value of the "native_compaction_v2" field in the mutation.
+func (m *UsageLogMutation) NativeCompactionV2() (r bool, exists bool) {
+	v := m.native_compaction_v2
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNativeCompactionV2 returns the old "native_compaction_v2" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldNativeCompactionV2(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNativeCompactionV2 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNativeCompactionV2 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNativeCompactionV2: %w", err)
+	}
+	return oldValue.NativeCompactionV2, nil
+}
+
+// ResetNativeCompactionV2 resets all changes to the "native_compaction_v2" field.
+func (m *UsageLogMutation) ResetNativeCompactionV2() {
+	m.native_compaction_v2 = nil
+}
+
 // SetDurationMs sets the "duration_ms" field.
 func (m *UsageLogMutation) SetDurationMs(i int) {
 	m.duration_ms = &i
@@ -47623,7 +47710,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 51)
+	fields := make([]string, 0, 53)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -47641,6 +47728,9 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.requested_model != nil {
 		fields = append(fields, usagelog.FieldRequestedModel)
+	}
+	if m.requested_reasoning_effort != nil {
+		fields = append(fields, usagelog.FieldRequestedReasoningEffort)
 	}
 	if m.upstream_model != nil {
 		fields = append(fields, usagelog.FieldUpstreamModel)
@@ -47726,6 +47816,9 @@ func (m *UsageLogMutation) Fields() []string {
 	if m.stream != nil {
 		fields = append(fields, usagelog.FieldStream)
 	}
+	if m.native_compaction_v2 != nil {
+		fields = append(fields, usagelog.FieldNativeCompactionV2)
+	}
 	if m.duration_ms != nil {
 		fields = append(fields, usagelog.FieldDurationMs)
 	}
@@ -47797,6 +47890,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.Model()
 	case usagelog.FieldRequestedModel:
 		return m.RequestedModel()
+	case usagelog.FieldRequestedReasoningEffort:
+		return m.RequestedReasoningEffort()
 	case usagelog.FieldUpstreamModel:
 		return m.UpstreamModel()
 	case usagelog.FieldUpstreamResponseModel:
@@ -47853,6 +47948,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.BillingType()
 	case usagelog.FieldStream:
 		return m.Stream()
+	case usagelog.FieldNativeCompactionV2:
+		return m.NativeCompactionV2()
 	case usagelog.FieldDurationMs:
 		return m.DurationMs()
 	case usagelog.FieldFirstTokenMs:
@@ -47908,6 +48005,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldModel(ctx)
 	case usagelog.FieldRequestedModel:
 		return m.OldRequestedModel(ctx)
+	case usagelog.FieldRequestedReasoningEffort:
+		return m.OldRequestedReasoningEffort(ctx)
 	case usagelog.FieldUpstreamModel:
 		return m.OldUpstreamModel(ctx)
 	case usagelog.FieldUpstreamResponseModel:
@@ -47964,6 +48063,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldBillingType(ctx)
 	case usagelog.FieldStream:
 		return m.OldStream(ctx)
+	case usagelog.FieldNativeCompactionV2:
+		return m.OldNativeCompactionV2(ctx)
 	case usagelog.FieldDurationMs:
 		return m.OldDurationMs(ctx)
 	case usagelog.FieldFirstTokenMs:
@@ -48048,6 +48149,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRequestedModel(v)
+		return nil
+	case usagelog.FieldRequestedReasoningEffort:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestedReasoningEffort(v)
 		return nil
 	case usagelog.FieldUpstreamModel:
 		v, ok := value.(string)
@@ -48244,6 +48352,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetStream(v)
+		return nil
+	case usagelog.FieldNativeCompactionV2:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNativeCompactionV2(v)
 		return nil
 	case usagelog.FieldDurationMs:
 		v, ok := value.(int)
@@ -48688,6 +48803,9 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldRequestedModel) {
 		fields = append(fields, usagelog.FieldRequestedModel)
 	}
+	if m.FieldCleared(usagelog.FieldRequestedReasoningEffort) {
+		fields = append(fields, usagelog.FieldRequestedReasoningEffort)
+	}
 	if m.FieldCleared(usagelog.FieldUpstreamModel) {
 		fields = append(fields, usagelog.FieldUpstreamModel)
 	}
@@ -48773,6 +48891,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 	switch name {
 	case usagelog.FieldRequestedModel:
 		m.ClearRequestedModel()
+		return nil
+	case usagelog.FieldRequestedReasoningEffort:
+		m.ClearRequestedReasoningEffort()
 		return nil
 	case usagelog.FieldUpstreamModel:
 		m.ClearUpstreamModel()
@@ -48869,6 +48990,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 	case usagelog.FieldRequestedModel:
 		m.ResetRequestedModel()
 		return nil
+	case usagelog.FieldRequestedReasoningEffort:
+		m.ResetRequestedReasoningEffort()
+		return nil
 	case usagelog.FieldUpstreamModel:
 		m.ResetUpstreamModel()
 		return nil
@@ -48952,6 +49076,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldStream:
 		m.ResetStream()
+		return nil
+	case usagelog.FieldNativeCompactionV2:
+		m.ResetNativeCompactionV2()
 		return nil
 	case usagelog.FieldDurationMs:
 		m.ResetDurationMs()
@@ -49182,9 +49309,10 @@ type UserMutation struct {
 	last_login_at                         *time.Time
 	last_active_at                        *time.Time
 	beginner_guide_prompt_state           *string
-	beginner_guide_progress               *json.RawMessage
-	appendbeginner_guide_progress         json.RawMessage
+	beginner_guide_progress               *jsontext.Value
+	appendbeginner_guide_progress         jsontext.Value
 	beginner_guide_completed_at           *time.Time
+	restrict_public_groups                *bool
 	balance_notify_enabled                *bool
 	subscription_balance_fallback_enabled *bool
 	balance_notify_threshold_type         *string
@@ -50154,13 +50282,13 @@ func (m *UserMutation) ResetBeginnerGuidePromptState() {
 }
 
 // SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
-func (m *UserMutation) SetBeginnerGuideProgress(jm json.RawMessage) {
-	m.beginner_guide_progress = &jm
+func (m *UserMutation) SetBeginnerGuideProgress(j jsontext.Value) {
+	m.beginner_guide_progress = &j
 	m.appendbeginner_guide_progress = nil
 }
 
 // BeginnerGuideProgress returns the value of the "beginner_guide_progress" field in the mutation.
-func (m *UserMutation) BeginnerGuideProgress() (r json.RawMessage, exists bool) {
+func (m *UserMutation) BeginnerGuideProgress() (r jsontext.Value, exists bool) {
 	v := m.beginner_guide_progress
 	if v == nil {
 		return
@@ -50171,7 +50299,7 @@ func (m *UserMutation) BeginnerGuideProgress() (r json.RawMessage, exists bool) 
 // OldBeginnerGuideProgress returns the old "beginner_guide_progress" field's value of the User entity.
 // If the User object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *UserMutation) OldBeginnerGuideProgress(ctx context.Context) (v json.RawMessage, err error) {
+func (m *UserMutation) OldBeginnerGuideProgress(ctx context.Context) (v jsontext.Value, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldBeginnerGuideProgress is only allowed on UpdateOne operations")
 	}
@@ -50185,13 +50313,13 @@ func (m *UserMutation) OldBeginnerGuideProgress(ctx context.Context) (v json.Raw
 	return oldValue.BeginnerGuideProgress, nil
 }
 
-// AppendBeginnerGuideProgress adds jm to the "beginner_guide_progress" field.
-func (m *UserMutation) AppendBeginnerGuideProgress(jm json.RawMessage) {
-	m.appendbeginner_guide_progress = append(m.appendbeginner_guide_progress, jm...)
+// AppendBeginnerGuideProgress adds j to the "beginner_guide_progress" field.
+func (m *UserMutation) AppendBeginnerGuideProgress(j jsontext.Value) {
+	m.appendbeginner_guide_progress = append(m.appendbeginner_guide_progress, j...)
 }
 
 // AppendedBeginnerGuideProgress returns the list of values that were appended to the "beginner_guide_progress" field in this mutation.
-func (m *UserMutation) AppendedBeginnerGuideProgress() (json.RawMessage, bool) {
+func (m *UserMutation) AppendedBeginnerGuideProgress() (jsontext.Value, bool) {
 	if len(m.appendbeginner_guide_progress) == 0 {
 		return nil, false
 	}
@@ -50265,6 +50393,42 @@ func (m *UserMutation) BeginnerGuideCompletedAtCleared() bool {
 func (m *UserMutation) ResetBeginnerGuideCompletedAt() {
 	m.beginner_guide_completed_at = nil
 	delete(m.clearedFields, user.FieldBeginnerGuideCompletedAt)
+}
+
+// SetRestrictPublicGroups sets the "restrict_public_groups" field.
+func (m *UserMutation) SetRestrictPublicGroups(b bool) {
+	m.restrict_public_groups = &b
+}
+
+// RestrictPublicGroups returns the value of the "restrict_public_groups" field in the mutation.
+func (m *UserMutation) RestrictPublicGroups() (r bool, exists bool) {
+	v := m.restrict_public_groups
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRestrictPublicGroups returns the old "restrict_public_groups" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldRestrictPublicGroups(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRestrictPublicGroups is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRestrictPublicGroups requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRestrictPublicGroups: %w", err)
+	}
+	return oldValue.RestrictPublicGroups, nil
+}
+
+// ResetRestrictPublicGroups resets all changes to the "restrict_public_groups" field.
+func (m *UserMutation) ResetRestrictPublicGroups() {
+	m.restrict_public_groups = nil
 }
 
 // SetBalanceNotifyEnabled sets the "balance_notify_enabled" field.
@@ -51437,7 +51601,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 28)
+	fields := make([]string, 0, 29)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -51500,6 +51664,9 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.beginner_guide_completed_at != nil {
 		fields = append(fields, user.FieldBeginnerGuideCompletedAt)
+	}
+	if m.restrict_public_groups != nil {
+		fields = append(fields, user.FieldRestrictPublicGroups)
 	}
 	if m.balance_notify_enabled != nil {
 		fields = append(fields, user.FieldBalanceNotifyEnabled)
@@ -51572,6 +51739,8 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.BeginnerGuideProgress()
 	case user.FieldBeginnerGuideCompletedAt:
 		return m.BeginnerGuideCompletedAt()
+	case user.FieldRestrictPublicGroups:
+		return m.RestrictPublicGroups()
 	case user.FieldBalanceNotifyEnabled:
 		return m.BalanceNotifyEnabled()
 	case user.FieldSubscriptionBalanceFallbackEnabled:
@@ -51637,6 +51806,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldBeginnerGuideProgress(ctx)
 	case user.FieldBeginnerGuideCompletedAt:
 		return m.OldBeginnerGuideCompletedAt(ctx)
+	case user.FieldRestrictPublicGroups:
+		return m.OldRestrictPublicGroups(ctx)
 	case user.FieldBalanceNotifyEnabled:
 		return m.OldBalanceNotifyEnabled(ctx)
 	case user.FieldSubscriptionBalanceFallbackEnabled:
@@ -51794,7 +51965,7 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 		m.SetBeginnerGuidePromptState(v)
 		return nil
 	case user.FieldBeginnerGuideProgress:
-		v, ok := value.(json.RawMessage)
+		v, ok := value.(jsontext.Value)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
@@ -51806,6 +51977,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetBeginnerGuideCompletedAt(v)
+		return nil
+	case user.FieldRestrictPublicGroups:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRestrictPublicGroups(v)
 		return nil
 	case user.FieldBalanceNotifyEnabled:
 		v, ok := value.(bool)
@@ -52093,6 +52271,9 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldBeginnerGuideCompletedAt:
 		m.ResetBeginnerGuideCompletedAt()
+		return nil
+	case user.FieldRestrictPublicGroups:
+		m.ResetRestrictPublicGroups()
 		return nil
 	case user.FieldBalanceNotifyEnabled:
 		m.ResetBalanceNotifyEnabled()

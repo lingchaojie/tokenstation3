@@ -22,17 +22,20 @@ func TestEnsureSimpleModeDefaultGroups_CreatesMissingDefaults(t *testing.T) {
 
 	require.NoError(t, ensureSimpleModeDefaultGroups(seedCtx, client))
 
-	assertGroupExists := func(name string) {
-		exists, err := client.Group.Query().Where(group.NameEQ(name), group.DeletedAtIsNil()).Exist(seedCtx)
+	assertDefaultGroup := func(name string) {
+		got, err := client.Group.Query().Where(group.NameEQ(name), group.DeletedAtIsNil()).Only(seedCtx)
 		require.NoError(t, err)
-		require.True(t, exists, "expected group %s to exist", name)
+		require.Equal(t, service.StatusActive, got.Status, name)
+		require.Equal(t, service.SubscriptionTypeStandard, got.SubscriptionType, name)
+		require.False(t, got.IsExclusive, name)
+		require.Equal(t, 1.0, got.RateMultiplier, name)
 	}
 
-	assertGroupExists(service.PlatformAnthropic + "-default")
-	assertGroupExists(service.PlatformOpenAI + "-default")
-	assertGroupExists(service.PlatformGemini + "-default")
-	assertGroupExists(service.PlatformAntigravity + "-default-1")
-	assertGroupExists(service.PlatformAntigravity + "-default-2")
+	assertDefaultGroup(service.PlatformAnthropic + "-default")
+	assertDefaultGroup(service.PlatformOpenAI + "-default")
+	assertDefaultGroup(service.PlatformGemini + "-default")
+	assertDefaultGroup(service.PlatformAntigravity + "-default-1")
+	assertDefaultGroup(service.PlatformAntigravity + "-default-2")
 
 	grokDefault, err := client.Group.Query().
 		Where(group.NameEQ(service.PlatformGrok+"-default"), group.DeletedAtIsNil()).

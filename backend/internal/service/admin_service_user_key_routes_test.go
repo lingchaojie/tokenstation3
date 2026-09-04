@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -414,6 +415,46 @@ func TestAdminService_UpdateUserAPIKeyRoutes_AllowsSubscriptionGroupWithActiveSu
 	require.Equal(t, int64(42), userSubRepo.calledUserID)
 	require.Equal(t, openAIID, userSubRepo.calledGroupID)
 	require.Equal(t, []effectiveKeyTypeBulkCall{{UserID: 42, KeyType: APIKeyTypeOpenAI, GroupID: openAIID}}, apiKeyRepo.effectiveBulkCalls)
+}
+
+func TestAdminService_UpdateUserAPIKeyRoutes_ActiveSubscriptionStillRequiresCanonicalACL(t *testing.T) {
+	openAIID := int64(20)
+	for _, tt := range []struct {
+		name          string
+		allowedGroups []int64
+		wantReason    string
+	}{
+		{name: "listed", allowedGroups: []int64{openAIID}},
+		{name: "unlisted", wantReason: "GROUP_ACCESS_DENIED"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &User{ID: 42, AllowedGroups: tt.allowedGroups}
+			task4SetBoolField(user, "RestrictPublicGroups", true)
+			groupRepo := &userAPIKeyRouteGroupRepoStub{groups: map[int64]*Group{
+				openAIID: {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription, AllowMessagesDispatch: true},
+			}}
+			routeRepo := &userAPIKeyRouteRepoStub{routes: map[string]UserAPIKeyRoute{}}
+			apiKeyRepo := &apiKeyRepoStubForGroupUpdate{effectiveBulkAffected: 1}
+			svc := &adminServiceImpl{
+				userRepo:            &userRepoStub{user: user},
+				groupRepo:           groupRepo,
+				userAPIKeyRouteRepo: routeRepo,
+				apiKeyRepo:          apiKeyRepo,
+				userSubRepo:         &userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: 42, GroupID: openAIID}},
+			}
+
+			got, err := svc.UpdateUserAPIKeyRoutes(context.Background(), 42, UserAPIKeyRouteUpdate{OpenAIGroupID: &openAIID})
+
+			if tt.wantReason != "" {
+				require.Nil(t, got)
+				require.Equal(t, tt.wantReason, infraerrors.Reason(err))
+				require.Equal(t, 0, routeRepo.upsertCalls)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, openAIID, got.OpenAI.GroupID)
+		})
+	}
 }
 
 func TestAdminService_UpdateUserAPIKeyRoutes_RejectsPlatformMismatch(t *testing.T) {

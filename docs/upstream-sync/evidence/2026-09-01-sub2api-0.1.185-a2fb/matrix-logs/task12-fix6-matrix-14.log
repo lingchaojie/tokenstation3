@@ -1,0 +1,808 @@
+MATRIX ordinal=14
+MATRIX command=pnpm --dir frontend test:run
+MATRIX start=2026-09-03T18:02:09.033193332Z
+
+> sub2api-frontend@1.0.0 test:run /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend
+> vitest run
+
+
+ RUN  v2.1.9 /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend
+
+Browserslist: browsers data (caniuse-lite) is 9 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+ ✓ src/stores/__tests__/beginnerGuide.spec.ts (48 tests) 270ms
+ ✓ src/components/keys/__tests__/UseKeyModal.spec.ts (31 tests) 682ms
+stderr | src/views/__tests__/HomeView.spec.ts > HomeView landing page > keeps static homepage pricing when public subscription plans fail to load
+Failed to load public subscription plans: Error: network
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/__tests__/HomeView.spec.ts:704:42
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/vitest@2.1.9_@types+node@20.19.27_jsdom@24.1.3/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+
+ ✓ src/components/account/__tests__/AccountUsageCell.spec.ts (41 tests) 728ms
+ ✓ src/views/__tests__/HomeView.spec.ts (21 tests) 2039ms
+ ✓ src/components/account/__tests__/BulkEditAccountModal.spec.ts (50 tests) 2911ms
+ ✓ src/components/chat/__tests__/chatStore.spec.ts (18 tests) 137ms
+ ✓ src/views/auth/__tests__/WechatCallbackView.spec.ts (25 tests) 781ms
+ ✓ src/components/account/__tests__/EditAccountModal.spec.ts (56 tests) 3594ms
+   ✓ EditAccountModal > reopening the same account rehydrates the OpenAI whitelist from props 400ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > excludes announcement-page-owned settings from the generic form loader
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits the compact home page toggle
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/account/__tests__/CreateAccountModal.spec.ts (32 tests) 3377ms
+   ✓ CreateAccountModal OpenAI long-context billing > hides only the redundant account toggle when every selected group enables tier pricing 345ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > does not render legacy visible payment method controls
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads, edits, validates, and saves forwarded client-IP headers
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > links payment guidance to README sections instead of removed payment docs
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > does not submit legacy visible payment method settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits the admin recharge affiliate rebate setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/admin/__tests__/UsageView.spec.ts (23 tests) 1889ms
+   ✓ admin UsageView route filters > shows the routed user while applying user_id to usage requests 303ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits the admin recharge affiliate rebate setting
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > renders and submits fixed rewards alongside percentage rebate settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > renders and submits fixed rewards alongside percentage rebate settings
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+ ✓ src/components/user/profile/__tests__/ProfileIdentityBindingsSection.spec.ts (18 tests) 502ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits Anthropic cache TTL injection gateway setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/admin/usage/__tests__/UsageTable.spec.ts (24 tests) 707ms
+ ✓ src/views/public/__tests__/GettingStartedView.spec.ts (37 tests) 3716ms
+ ✓ src/views/user/__tests__/PaymentView.spec.ts (29 tests) 1170ms
+ ✓ src/components/admin/usage/__tests__/UsageFilters.spec.ts (19 tests) 926ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits message cache_control rewrite gateway setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/modelPlaza/__tests__/PlazaModelPricingTable.spec.ts (25 tests) 709ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > blocks settings submission for 'non-positive user ID'
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/auth/__tests__/LinuxDoCallbackView.spec.ts (17 tests) 751ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > blocks settings submission for 'duplicate user ID'
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/chat/__tests__/ChatView.spec.ts (28 tests) 1256ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > blocks settings submission for 'duplicate user ID'
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits validated OpenAI fast policy user IDs
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits validated OpenAI fast policy user IDs
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits global provider default group settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits global provider default group settings
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+Error: Error: connect ECONNREFUSED 127.0.0.1:3000
+    at Object.dispatchError (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/xhr-utils.js:63:19)
+    at Request.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/xhr/XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:531:35)
+    at ClientRequest.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/jsdom@24.1.3/node_modules/jsdom/lib/jsdom/living/helpers/http-request.js:127:14)
+    at ClientRequest.emit (node:events:519:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) undefined
+
+ ✓ src/views/admin/__tests__/AccountsView.bulkEdit.spec.ts (10 tests) 1200ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits Claude OAuth system prompt injection gateway settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > submits Antigravity user agent version gateway setting
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/account/__tests__/credentialsBuilder.spec.ts (58 tests) 61ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > updates provider enablement immediately and reloads providers
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/router/__tests__/guards.spec.ts (40 tests) 38ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > renders advanced scheduler copy as local experimental gateway policy
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > summarizes target and other-model actions, then switches to all models
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/stores/__tests__/app.spec.ts (28 tests) 101ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads and saves upstream billing probe settings from the gateway tab
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/payment/__tests__/PaymentProviderDialog.spec.ts (12 tests) 752ms
+ ✓ src/views/auth/__tests__/OidcCallbackView.spec.ts (15 tests) 646ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads and saves configurable Grok cross-client model mapping
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/auth/__tests__/EmailVerifyView.spec.ts (14 tests) 500ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads and saves the OpenAI Responses first-token metric mode
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/user/__tests__/UsageView.spec.ts (7 tests) 889ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/account/__tests__/CreateAccountModal.kiroReference.spec.ts (8 tests) 32ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > places and explains rate controls for both scheduling modes
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > passes translated upload and remove labels to the payment help image uploader
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/getting-started/__tests__/GuideApiKeyStep.spec.ts (19 tests) 625ms
+ ✓ src/components/common/__tests__/AnnouncementPopup.spec.ts (24 tests) 1189ms
+   ✓ AnnouncementPopup > renders mixed Markdown and HTML inside the shared styled container 379ms
+stderr | src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts > admin AccountsView — 账号行展示 > 仅将具有安全 base_url 的 API Key 账号名称链接到站点主页
+Failed to load upstream billing probe settings: TypeError: Cannot read properties of undefined (reading 'enabled')
+    at loadUpstreamBillingProbeGlobalState (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/AccountsView.vue:1422:58)
+
+ ✓ src/views/admin/__tests__/UsersView.spec.ts (6 tests) 1130ms
+   ✓ admin UsersView > loads groups before opening the provider route configuration modal from the user action menu 510ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > exposes IkunPay in global payment types and provider key options
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts > admin AccountsView — 账号行展示 > prefers persisted Grok JWT tier over lagging billing/quota snapshots
+Failed to load upstream billing probe settings: TypeError: Cannot read properties of undefined (reading 'enabled')
+    at loadUpstreamBillingProbeGlobalState (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/AccountsView.vue:1422:58)
+
+stderr | src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts > admin AccountsView — 账号行展示 > skips malformed Grok plan fields and safely uses the next valid fallback
+Failed to load upstream billing probe settings: TypeError: Cannot read properties of undefined (reading 'enabled')
+    at loadUpstreamBillingProbeGlobalState (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/AccountsView.vue:1422:58)
+
+stderr | src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts > admin AccountsView — 账号行展示 > replaces a Grok row when auto refresh returns a changed canonical usage snapshot
+Failed to load upstream billing probe settings: TypeError: Cannot read properties of undefined (reading 'enabled')
+    at loadUpstreamBillingProbeGlobalState (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/AccountsView.vue:1422:58)
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView payment visible method controls > allows IkunPay to coexist with official visible-method providers
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts (10 tests) 1347ms
+ ✓ src/components/getting-started/__tests__/curriculum.spec.ts (10 tests) 261ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > loads and echoes WeChat Connect fields from the backend payload
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/layout/__tests__/AppSidebar.spec.ts (28 tests) 875ms
+ ✓ src/views/user/__tests__/PaymentResultView.spec.ts (14 tests) 358ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > links GitHub OAuth Apps guide to GitHub developer settings
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/payment/__tests__/paymentFlow.spec.ts (23 tests) 29ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > saves WeChat Connect fields using the backend contract and clears the secret after save
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/user/dashboard/UserDashboardStats.spec.ts (10 tests) 444ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > collapses auth source defaults until the source is enabled
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView wechat connect controls > preserves optional OIDC compatibility flags instead of forcing them on save
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/api/__tests__/client.spec.ts (20 tests) 1608ms
+   ✓ API Client > 401 Token 刷新 > 刷新期间换号时旧请求不会清除新会话 1123ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 9 平台行
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/account/__tests__/UpstreamBillingRateCell.spec.ts (7 tests) 432ms
+ ✓ src/components/account/__tests__/OpenAIQuotaResetCell.spark_shadow.spec.ts (18 tests) 804ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 9 平台）
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/components/user/dashboard/UserDashboardContent.spec.ts (16 tests) 453ms
+ ✓ src/components/common/__tests__/BaseDialog.spec.ts (17 tests) 1011ms
+   ✓ BaseDialog focus management > focuses the first tabbable control while skipping disabled, hidden, and negative-tabindex controls 301ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 加载后 form.default_platform_quotas 含全 9 平台，从嵌套 JSON 正确读取数值
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/api/__tests__/settings.authSourceDefaults.spec.ts (13 tests) 24ms
+stderr | src/views/admin/__tests__/SettingsView.spec.ts > admin SettingsView platform quota matrix > 空输入（v-model.number 产出 ""）在提交时清洗为 null 而非空字符串
+[Vue warn]: Failed to resolve component: router-link
+If this is a native custom element, make sure to exclude it from component resolution via compilerOptions.isCustomElement. 
+  at <SettingsView ref="VTU_COMPONENT" > 
+  at <VTUROOT>
+
+ ✓ src/views/admin/__tests__/SettingsView.spec.ts (37 tests) 12761ms
+   ✓ admin SettingsView payment visible method controls > excludes announcement-page-owned settings from the generic form loader 565ms
+   ✓ admin SettingsView payment visible method controls > submits the compact home page toggle 492ms
+   ✓ admin SettingsView payment visible method controls > does not render legacy visible payment method controls 419ms
+   ✓ admin SettingsView payment visible method controls > loads, edits, validates, and saves forwarded client-IP headers 521ms
+   ✓ admin SettingsView payment visible method controls > submits the admin recharge affiliate rebate setting 354ms
+   ✓ admin SettingsView payment visible method controls > renders and submits fixed rewards alongside percentage rebate settings 501ms
+   ✓ admin SettingsView payment visible method controls > blocks settings submission for 'duplicate user ID' 349ms
+   ✓ admin SettingsView payment visible method controls > submits validated OpenAI fast policy user IDs 327ms
+   ✓ admin SettingsView payment visible method controls > submits global provider default group settings 526ms
+   ✓ admin SettingsView payment visible method controls > submits Claude OAuth system prompt injection gateway settings 461ms
+   ✓ admin SettingsView payment visible method controls > loads and saves upstream billing probe settings from the gateway tab 309ms
+   ✓ admin SettingsView payment visible method controls > loads and saves configurable Grok cross-client model mapping 379ms
+   ✓ admin SettingsView payment visible method controls > loads and saves the OpenAI Responses first-token metric mode 340ms
+   ✓ admin SettingsView payment visible method controls > loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in 390ms
+   ✓ admin SettingsView payment visible method controls > places and explains rate controls for both scheduling modes 470ms
+   ✓ admin SettingsView payment visible method controls > allows IkunPay to coexist with official visible-method providers 411ms
+   ✓ admin SettingsView wechat connect controls > links GitHub OAuth Apps guide to GitHub developer settings 311ms
+   ✓ admin SettingsView wechat connect controls > saves WeChat Connect fields using the backend contract and clears the secret after save 437ms
+   ✓ admin SettingsView wechat connect controls > preserves optional OIDC compatibility flags instead of forcing them on save 366ms
+   ✓ admin SettingsView platform quota matrix > 从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 9 平台行 440ms
+   ✓ admin SettingsView platform quota matrix > 保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 9 平台） 380ms
+ ✓ src/__tests__/integration/navigation.spec.ts (10 tests) 391ms
+ ✓ src/components/payment/__tests__/SubscriptionPlanCard.spec.ts (15 tests) 380ms
+ ✓ src/views/admin/__tests__/RiskControlView.spec.ts (4 tests) 609ms
+   ✓ admin RiskControlView > saves the selected model filter mode and models 312ms
+ ✓ src/components/common/__tests__/DataTable.spec.ts (12 tests) 1206ms
+   ✓ DataTable > clears stale row and element caches when pagination replaces the row ID set 533ms
+ ✓ src/views/user/__tests__/KeysView.spec.ts (9 tests) 570ms
+stderr | src/stores/__tests__/auth.spec.ts > useAuthStore > checkAuth > localStorage 中用户数据损坏时清除状态
+Failed to parse saved user data: SyntaxError: Unexpected token 'i', "invalid-json{{{" is not valid JSON
+    at JSON.parse (<anonymous>)
+    at Proxy.checkAuth (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/stores/auth.ts:118:27)
+    at Proxy.wrappedAction (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/pinia@2.3.1_typescript@5.6.3_vue@3.5.26_typescript@5.6.3_/node_modules/pinia/dist/pinia.mjs:1399:26)
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/stores/__tests__/auth.spec.ts:193:13
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+
+ ✓ src/stores/__tests__/auth.spec.ts (21 tests) 91ms
+ ✓ src/views/admin/__tests__/MonitorFormDialog.accountSelector.spec.ts (10 tests) 1262ms
+ ✓ src/views/admin/__tests__/CaptureSettingsView.spec.ts (5 tests) 695ms
+ ✓ src/views/admin/orders/__tests__/PlanEditDialog.spec.ts (12 tests) 814ms
+ ✓ src/components/account/__tests__/EditAccountModal.grokUpstream.spec.ts (11 tests) 1202ms
+   ✓ EditAccountModal Grok OAuth upstream config > enabling the custom base URL toggle and saving persists base_url 328ms
+ ✓ src/views/admin/__tests__/GroupsView.columnSettings.spec.ts (7 tests) 608ms
+ ✓ src/components/admin/channel/__tests__/types.spec.ts (27 tests) 81ms
+ ✓ src/utils/__tests__/ipGeoLookup.spec.ts (22 tests) 106ms
+ ✓ src/components/auth/__tests__/EmailOAuthButtons.spec.ts (15 tests) 255ms
+ ✓ src/components/models/__tests__/ModelCatalog.spec.ts (5 tests) 482ms
+ ✓ src/views/user/SubscriptionsView.spec.ts (5 tests) 240ms
+ ✓ src/components/chat/__tests__/MessageList.spec.ts (9 tests) 494ms
+ ✓ src/components/admin/user/__tests__/UserPlatformQuotaModal.spec.ts (11 tests) 669ms
+ ✓ src/components/account/__tests__/AccountStatusIndicator.spec.ts (10 tests) 159ms
+ ✓ src/router/__tests__/authRedirect.spec.ts (66 tests) 594ms
+ ✓ src/components/user/profile/__tests__/ProfileAvatarCard.spec.ts (5 tests) 191ms
+stderr | src/stores/__tests__/subscriptions.spec.ts > useSubscriptionStore > fetchActiveSubscriptions > API 错误时抛出异常
+Failed to fetch active subscriptions: Error: Network error
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/stores/__tests__/subscriptions.spec.ts:141:52
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1262:5)
+
+ ✓ src/stores/__tests__/subscriptions.spec.ts (14 tests) 112ms
+ ✓ src/composables/__tests__/useModelWhitelist.spec.ts (17 tests) 38ms
+ ✓ src/__tests__/integration/usage-reasoning-effort.spec.ts (3 tests) 860ms
+   ✓ usage reasoning effort page display > user usage page only shows the requested reasoning effort 391ms
+ ✓ src/composables/__tests__/useKiroOAuth.spec.ts (7 tests) 31ms
+ ✓ src/components/user/__tests__/RewardBalanceBreakdown.spec.ts (6 tests) 271ms
+ ✓ src/utils/__tests__/analytics51la.spec.ts (10 tests) 94ms
+ ✓ src/views/admin/__tests__/GroupsView.duplicate.spec.ts (5 tests) 608ms
+ ✓ src/views/admin/__tests__/RedeemView.generatePlan.spec.ts (4 tests) 975ms
+   ✓ admin RedeemView subscription generation modes > defaults subscription generation to plan mode and sends plan_id without stale group_id 523ms
+ ✓ src/components/account/__tests__/CreateAccountModal.anthropicOAuthMapping.spec.ts (2 tests) 370ms
+ ✓ src/components/keys/__tests__/clientConfigFiles.spec.ts (16 tests) 25ms
+ ✓ src/components/auth/__tests__/PendingOAuthCreateAccountForm.spec.ts (7 tests) 266ms
+ ✓ src/views/auth/__tests__/OAuthCallbackView.spec.ts (6 tests) 215ms
+ ✓ src/api/__tests__/tokenRefresh.spec.ts (7 tests) 126ms
+ ✓ src/composables/__tests__/useRoutePrefetch.spec.ts (15 tests) 2759ms
+   ✓ useRoutePrefetch > requestIdleCallback 超时处理 > 超时后仍能正常执行预加载 2101ms
+ ✓ src/components/admin/channel/__tests__/TimePricingSection.spec.ts (11 tests) 406ms
+ ✓ src/components/admin/account/__tests__/ReAuthAccountModal.kiro.spec.ts (5 tests) 488ms
+ ✓ src/views/__tests__/KeyUsageView.spec.ts (2 tests) 374ms
+ ✓ src/components/auth/__tests__/WechatOAuthSection.spec.ts (6 tests) 138ms
+ ✓ src/views/auth/__tests__/RegisterView.spec.ts (6 tests) 392ms
+stderr | src/composables/__tests__/useTableLoader.spec.ts > useTableLoader > 错误处理 > 非取消错误会被抛出
+Table load error: Error: Server error
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/composables/__tests__/useTableLoader.spec.ts:237:49
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1271:3)
+
+ ✓ src/composables/__tests__/useTableLoader.spec.ts (12 tests) 60ms
+ ✓ src/api/__tests__/auth-oauth-adoption.spec.ts (13 tests) 187ms
+ ✓ src/views/user/__tests__/AffiliateView.spec.ts (3 tests) 229ms
+ ✓ src/components/admin/account/__tests__/AccountTestModal.spec.ts (3 tests) 353ms
+ ✓ src/components/account/__tests__/OllamaCloudUsageSettings.spec.ts (5 tests) 362ms
+ ✓ src/views/admin/__tests__/AccountsView.schedulerScore.spec.ts (5 tests) 646ms
+ ✓ src/views/admin/__tests__/ChannelMonitorView.duplicate.spec.ts (5 tests) 382ms
+ ✓ src/components/account/__tests__/UsageProgressBar.spec.ts (11 tests) 291ms
+stderr | src/views/admin/__tests__/AccountsView.selectAllResults.spec.ts > admin AccountsView select all filtered results > keeps the original page selection when loading all results fails
+Failed to select all account results: Error: load all failed
+    at Object.<anonymous> (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/__tests__/AccountsView.selectAllResults.spec.ts:204:15)
+    at Object.mockCall (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+spy@2.1.9/node_modules/@vitest/spy/dist/index.js:61:17)
+    at Object.spy [as list] (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/tinyspy@3.0.2/node_modules/tinyspy/dist/index.js:45:80)
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/AccountsView.vue:2045:61
+    at Module.fetchAllAccountRows (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/utils/accountSelection.ts:28:27)
+    at handleSelectAllResults (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/AccountsView.vue:2044:24)
+    at callWithErrorHandling (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vue+runtime-core@3.5.26/node_modules/@vue/runtime-core/dist/runtime-core.cjs.js:200:19)
+    at callWithAsyncErrorHandling (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vue+runtime-core@3.5.26/node_modules/@vue/runtime-core/dist/runtime-core.cjs.js:207:17)
+    at emit (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vue+runtime-core@3.5.26/node_modules/@vue/runtime-core/dist/runtime-core.cjs.js:4358:5)
+    at onClick (eval at compileToFunction (/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/vue@3.5.26_typescript@5.6.3/node_modules/vue/dist/vue.cjs.js:71:18), <anonymous>:27:29)
+
+ ✓ src/views/admin/__tests__/AccountsView.selectAllResults.spec.ts (2 tests) 435ms
+ ✓ src/features/channel-monitor-v2/__tests__/RelayPulseMatrix.spec.ts (2 tests) 270ms
+ ✓ src/components/charts/__tests__/ModelDistributionChart.spec.ts (4 tests) 231ms
+ ✓ src/components/admin/account/__tests__/AccountActionMenu.spark_shadow.spec.ts (11 tests) 313ms
+ ✓ src/components/common/__tests__/Select.spec.ts (8 tests) 427ms
+ ✓ src/components/common/__tests__/SubscriptionProgressMini.spec.ts (3 tests) 287ms
+ ✓ src/__tests__/integration/data-import.spec.ts (6 tests) 280ms
+ ✓ src/components/user/profile/__tests__/ProfileInfoCard.spec.ts (6 tests) 470ms
+ ✓ src/components/admin/announcements/__tests__/AnnouncementBannerSettingsCard.spec.ts (7 tests) 457ms
+stderr | src/views/admin/__tests__/AccountsView.usageWindowsHint.spec.ts > admin AccountsView usage windows hint > keeps groups available when loading proxies fails
+Failed to load proxies: Error: proxy service unavailable
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/__tests__/AccountsView.usageWindowsHint.spec.ts:159:37
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1271:3)
+
+ ✓ src/views/admin/__tests__/AccountsView.usageWindowsHint.spec.ts (4 tests) 628ms
+ ✓ src/components/payment/__tests__/providerConfig.spec.ts (12 tests) 31ms
+ ✓ src/components/channels/__tests__/AvailableChannelsTable.spec.ts (6 tests) 370ms
+ ✓ src/views/auth/__tests__/AuthLinearShell.spec.ts (3 tests) 257ms
+ ✓ src/router/__tests__/feature-access.spec.ts (7 tests) 572ms
+ ✓ src/components/payment/__tests__/PaymentStatusPanel.spec.ts (5 tests) 314ms
+stderr | src/views/admin/ops/components/__tests__/OpsOpenAITokenStatsCard.spec.ts > OpsOpenAITokenStatsCard > 接口异常时显示错误提示
+[OpsOpenAITokenStatsCard] Failed to load data Error: 加载失败
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/views/admin/ops/components/__tests__/OpsOpenAITokenStatsCard.spec.ts:217:47
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/vitest@2.1.9_@types+node@20.19.27_jsdom@24.1.3/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+
+ ✓ src/views/admin/ops/components/__tests__/OpsOpenAITokenStatsCard.spec.ts (5 tests) 410ms
+ ✓ src/components/__tests__/LoginForm.spec.ts (5 tests) 254ms
+ ✓ src/views/admin/__tests__/groupsProfitControl.spec.ts (13 tests) 31ms
+ ✓ src/views/__tests__/HomeView.compact.spec.ts (13 tests) 1089ms
+ ✓ src/utils/__tests__/registrationEmailPolicy.spec.ts (13 tests) 27ms
+ ✓ src/views/admin/__tests__/RedeemView.batchUpdate.spec.ts (1 test) 427ms
+   ✓ admin RedeemView batch update > submits only checked fields for selected redeem codes 424ms
+ ✓ src/components/account/__tests__/ModelWhitelistSelector.spec.ts (4 tests) 326ms
+ ✓ src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts (2 tests) 397ms
+   ✓ channel monitor Grok provider > offers Grok in the responsive provider grid and prefills its official defaults 312ms
+ ✓ src/composables/__tests__/useNavigationLoading.spec.ts (11 tests) 48ms
+ ✓ src/components/__tests__/ApiKeyCreate.spec.ts (5 tests) 249ms
+ ✓ src/components/__tests__/Dashboard.spec.ts (5 tests) 168ms
+ ✓ src/views/user/__tests__/RedeemView.planDisplay.spec.ts (2 tests) 249ms
+ ✓ src/views/admin/__tests__/GroupsView.defaultGroupBadge.spec.ts (1 test) 219ms
+ ✓ src/components/user/profile/__tests__/totp-timer-cleanup.spec.ts (4 tests) 234ms
+ ✓ src/components/account/__tests__/OllamaCloudUsageCell.spec.ts (4 tests) 274ms
+ ✓ src/components/account/__tests__/AccountTestModal.spec.ts (2 tests) 265ms
+ ✓ src/utils/__tests__/accountUsageRefresh.spec.ts (8 tests) 34ms
+ ✓ src/features/channel-monitor-v2/__tests__/monitorFormat.spec.ts (12 tests) 63ms
+ ✓ src/views/user/__tests__/UserOrdersView.spec.ts (2 tests) 183ms
+ ✓ src/components/charts/__tests__/TokenUsageTrend.spec.ts (5 tests) 131ms
+ ✓ src/components/admin/user/__tests__/UserEditModal.spec.ts (4 tests) 330ms
+ ✓ src/views/admin/__tests__/AccountsView.priorityColumn.spec.ts (3 tests) 367ms
+ ✓ src/views/admin/__tests__/ChannelMonitorView.checkModeBadge.spec.ts (3 tests) 215ms
+ ✓ src/views/auth/__tests__/RegisterViewAffiliate.spec.ts (2 tests) 258ms
+ ✓ src/utils/__tests__/modelCatalog.spec.ts (6 tests) 29ms
+ ✓ src/views/admin/affiliates/__tests__/AdminAffiliateRebatesView.spec.ts (1 test) 179ms
+ ✓ src/components/common/__tests__/LocaleSwitcher.spec.ts (3 tests) 237ms
+ ✓ src/views/admin/orders/__tests__/AdminPaymentPlansView.spec.ts (4 tests) 192ms
+ ✓ src/views/admin/ops/components/__tests__/OpsAlertRulesCard.spec.ts (10 tests) 213ms
+ ✓ src/components/admin/channel/__tests__/PricingEntryCard.timePricing.spec.ts (7 tests) 265ms
+ ✓ src/components/common/__tests__/MonitorQuotaView.spec.ts (7 tests) 153ms
+ ✓ src/views/admin/ops/utils/__tests__/errorDetailResponse.spec.ts (7 tests) 27ms
+ ✓ src/views/admin/__tests__/AccountsView.kiroUsage.spec.ts (1 test) 190ms
+ ✓ src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts (7 tests) 28ms
+ ✓ src/api/__tests__/admin.users.spec.ts (3 tests) 13ms
+ ✓ src/views/admin/__tests__/BackupView.spec.ts (3 tests) 424ms
+ ✓ src/components/common/__tests__/PlatformTypeBadge.grok.spec.ts (5 tests) 222ms
+ ✓ src/views/admin/__tests__/SubscriptionsView.spec.ts (1 test) 205ms
+ ✓ src/composables/__tests__/useAnnouncementBanner.spec.ts (6 tests) 87ms
+ ✓ src/components/admin/user/__tests__/BulkEditUserModal.spec.ts (5 tests) 240ms
+ ✓ src/composables/__tests__/useClipboard.spec.ts (8 tests) 56ms
+ ✓ src/components/admin/payment/__tests__/orderCurrencyDisplay.spec.ts (4 tests) 236ms
+ ✓ src/views/admin/ops/components/__tests__/OpsErrorScopeCharts.spec.ts (3 tests) 157ms
+ ✓ src/views/admin/__tests__/apiKeyGroupFilterOptions.spec.ts (6 tests) 20ms
+ ✓ src/api/__tests__/admin.channelMonitor.duplicate.spec.ts (5 tests) 26ms
+ ✓ src/components/modelPlaza/__tests__/PlazaGroupSection.spec.ts (6 tests) 111ms
+ ✓ src/api/__tests__/admin.groups.duplicate.spec.ts (5 tests) 29ms
+ ✓ src/components/account/__tests__/CNProviderQuotaCell.spec.ts (2 tests) 152ms
+ ✓ src/components/common/__tests__/IpGeoCell.spec.ts (6 tests) 112ms
+ ✓ src/views/user/__tests__/SecondaryUserPagesLinearSource.spec.ts (4 tests) 13ms
+ ✓ src/views/admin/ops/components/__tests__/OpsSystemLogTable.spec.ts (3 tests) 234ms
+ ✓ src/components/charts/__tests__/GroupDistributionChart.spec.ts (3 tests) 184ms
+ ✓ src/views/user/__tests__/StripePaymentView.spec.ts (1 test) 173ms
+ ✓ src/i18n/__tests__/localesNoKeyCollision.spec.ts (8 tests) 13ms
+ ✓ src/views/auth/__tests__/WechatPaymentCallbackView.spec.ts (3 tests) 94ms
+stderr | src/stores/__tests__/announcements.spec.ts > announcement popup batches > advances but reports failed persistence
+Failed to mark announcement as read: Error: offline
+    at /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/src/stores/__tests__/announcements.spec.ts:53:64
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:146:14
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:533:11
+    at runWithTimeout (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:39:7)
+    at runTest (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1056:17)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runSuite (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1205:15)
+    at runFiles (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1262:5)
+    at startTests (file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/@vitest+runner@2.1.9/node_modules/@vitest/runner/dist/index.js:1271:3)
+    at file:///home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend/node_modules/.pnpm/vitest@2.1.9_@types+node@20.19.27_jsdom@24.1.3/node_modules/vitest/dist/chunks/runBaseTests.3qpJUEJM.js:126:11
+
+ ✓ src/stores/__tests__/announcements.spec.ts (6 tests) 56ms
+ ✓ src/composables/__tests__/useForm.spec.ts (7 tests) 42ms
+ ✓ src/components/getting-started/__tests__/GuideTroubleshooting.spec.ts (3 tests) 176ms
+ ✓ src/views/user/__tests__/AirwallexPaymentView.spec.ts (2 tests) 101ms
+ ✓ src/views/admin/__tests__/groupsModelsList.spec.ts (8 tests) 17ms
+ ✓ src/views/user/__tests__/CheckInView.spec.ts (3 tests) 249ms
+ ✓ src/views/admin/__tests__/DashboardView.spec.ts (1 test) 195ms
+ ✓ src/views/admin/settings/__tests__/OpenAIFastPolicyUserSelector.spec.ts (3 tests) 130ms
+ ✓ src/components/account/__tests__/AccountTodayStatsCell.spec.ts (5 tests) 131ms
+ ✓ src/api/__tests__/admin.excludedUserIds.spec.ts (20 tests) 23ms
+ ✓ src/router/__tests__/admin-my-account-dashboard-route.spec.ts (1 test) 208ms
+ ✓ src/utils/__tests__/openaiWsMode.spec.ts (6 tests) 13ms
+ ✓ src/components/getting-started/__tests__/GuideProgressNav.spec.ts (4 tests) 311ms
+ ✓ src/views/admin/ops/components/__tests__/OpsErrorLogTable.spec.ts (4 tests) 253ms
+ ✓ src/views/admin/affiliates/__tests__/AdminCheckInConfigView.spec.ts (3 tests) 306ms
+ ✓ src/components/user/dashboard/UserDashboardCharts.spec.ts (2 tests) 166ms
+ ✓ src/views/admin/__tests__/groupsMessagesDispatch.spec.ts (5 tests) 41ms
+ ✓ src/stores/__tests__/captureHealth.spec.ts (2 tests) 17ms
+ ✓ src/components/user/__tests__/MonitorCard.quota.spec.ts (5 tests) 161ms
+ ✓ src/components/getting-started/__tests__/BeginnerWelcomeDialog.spec.ts (5 tests) 392ms
+ ✓ src/composables/__tests__/useOpenAIOAuth.spec.ts (4 tests) 20ms
+ ✓ src/views/user/__tests__/paymentUx.spec.ts (9 tests) 13ms
+ ✓ src/utils/__tests__/device.spec.ts (9 tests) 18ms
+ ✓ src/utils/__tests__/ccswitchImport.spec.ts (10 tests) 29ms
+ ✓ src/api/__tests__/admin.captureSettings.spec.ts (3 tests) 19ms
+ ✓ src/components/account/__tests__/OAuthAuthorizationFlow.spec.ts (4 tests) 240ms
+ ✓ src/views/user/__tests__/ProfileView.spec.ts (1 test) 131ms
+ ✓ src/components/user/profile/__tests__/ProfilePasswordForm.spec.ts (2 tests) 117ms
+ ✓ src/components/user/__tests__/UserPlatformQuotaCell.spec.ts (5 tests) 80ms
+ ✓ src/views/admin/__tests__/groupsReasoningEffort.spec.ts (6 tests) 14ms
+ ✓ src/views/user/__tests__/DashboardLinearSource.spec.ts (4 tests) 11ms
+ ✓ src/composables/__tests__/useSwipeSelect.spec.ts (5 tests) 10ms
+ ✓ src/api/__tests__/settings.paymentVisibleMethods.spec.ts (3 tests) 13ms
+ ✓ src/api/__tests__/adminUIRequest.spec.ts (57 tests) 87ms
+ ✓ src/components/common/__tests__/DateRangePicker.spec.ts (2 tests) 160ms
+ ✓ src/utils/__tests__/promotionChannel.spec.ts (10 tests) 20ms
+ ✓ src/components/admin/usage/__tests__/UsageCleanupDialog.spec.ts (1 test) 185ms
+ ✓ src/router/__tests__/getting-started-route.spec.ts (2 tests) 199ms
+ ✓ src/views/user/__tests__/PaymentLinearSource.spec.ts (4 tests) 9ms
+ ✓ src/utils/__tests__/kiroAccount.spec.ts (6 tests) 22ms
+ ✓ src/api/__tests__/admin.redeem.spec.ts (5 tests) 16ms
+ ✓ src/api/__tests__/codex.spec.ts (3 tests) 18ms
+ ✓ src/components/admin/account/__tests__/AccountUpstreamUserAgentsModal.spec.ts (2 tests) 166ms
+ ✓ src/components/chat/__tests__/ConversationRail.spec.ts (1 test) 157ms
+ ✓ src/composables/__tests__/useGrokOAuth.spec.ts (2 tests) 14ms
+ ✓ src/api/__tests__/admin.accounts.ollamaCloudUsage.spec.ts (2 tests) 17ms
+ ✓ src/components/getting-started/__tests__/GuideCommandBlock.spec.ts (3 tests) 178ms
+ ✓ src/composables/__tests__/useKeyedDebouncedSearch.spec.ts (3 tests) 24ms
+ ✓ src/components/admin/monitor/MonitorActionsCell.spec.ts (3 tests) 125ms
+ ✓ src/components/admin/usage/__tests__/UsageStatsCards.spec.ts (2 tests) 247ms
+ ✓ src/components/common/__tests__/NavigationProgress.spec.ts (5 tests) 244ms
+ ✓ src/__tests__/linear-theme-source.spec.ts (4 tests) 19ms
+ ✓ src/views/admin/ops/components/__tests__/OpsErrorDetailModal.spec.ts (1 test) 152ms
+ ✓ src/utils/__tests__/tablePreferences.spec.ts (6 tests) 14ms
+ ✓ src/components/payment/__tests__/PaymentQRDialog.spec.ts (1 test) 118ms
+ ✓ src/components/user/dashboard/UserDashboardRecentUsage.spec.ts (1 test) 124ms
+ ✓ src/i18n/__tests__/openaiFastPolicyLocales.spec.ts (3 tests) 11ms
+ ✓ src/utils/__tests__/subscriptionQuota.spec.ts (5 tests) 10ms
+ ✓ src/components/user/dashboard/UserDashboardQuickActions.spec.ts (2 tests) 152ms
+ ✓ src/__tests__/App.branding.spec.ts (1 test) 97ms
+ ✓ src/components/payment/__tests__/PaymentMethodSelector.spec.ts (3 tests) 122ms
+ ✓ src/components/account/__tests__/CNProviderBalanceCell.spec.ts (3 tests) 133ms
+ ✓ src/components/admin/usage/__tests__/UserTokenRanking.spec.ts (2 tests) 247ms
+ ✓ src/components/channels/AvailableChannelsTable.spec.ts (1 test) 97ms
+ ✓ src/utils/__tests__/embedded-url.spec.ts (4 tests) 30ms
+ ✓ src/__tests__/App.announcements.spec.ts (2 tests) 112ms
+ ✓ src/utils/__tests__/monthlyPlans.spec.ts (4 tests) 46ms
+ ✓ src/components/admin/announcements/__tests__/AnnouncementReadStatusDialog.spec.ts (1 test) 153ms
+ ✓ src/utils/__tests__/proxyExpiry.spec.ts (9 tests) 23ms
+ ✓ src/components/common/__tests__/HelpTooltip.spec.ts (2 tests) 190ms
+ ✓ src/features/channel-monitor-v2/__tests__/monitorZoom.spec.ts (5 tests) 25ms
+ ✓ src/components/admin/monitor/__tests__/MonitorPrimaryModelCell.spec.ts (2 tests) 100ms
+ ✓ src/views/admin/__tests__/groupsImagePricing.spec.ts (6 tests) 14ms
+ ✓ src/utils/__tests__/codexCatalogConfig.spec.ts (5 tests) 12ms
+ ✓ src/components/keys/__tests__/EndpointPopover.spec.ts (2 tests) 138ms
+ ✓ src/components/auth/__tests__/OAuthLoginSections.spec.ts (4 tests) 139ms
+ ✓ src/api/__tests__/admin.accounts.duplicate.spec.ts (3 tests) 44ms
+ ✓ src/utils/__tests__/accountSelection.spec.ts (3 tests) 14ms
+ ✓ src/views/user/__tests__/DataPagesLinearSource.spec.ts (3 tests) 10ms
+ ✓ src/utils/__tests__/webChatModelName.spec.ts (18 tests) 15ms
+ ✓ src/i18n/__tests__/opsLocaleKeys.spec.ts (27 tests) 316ms
+ ✓ src/api/__tests__/admin.accounts.upstreamUserAgents.spec.ts (2 tests) 14ms
+ ✓ src/api/__tests__/admin.accounts.upstreamBillingProbe.spec.ts (2 tests) 13ms
+ ✓ src/components/admin/account/__tests__/ReAuthAccountModal.grok.spec.ts (4 tests) 7ms
+ ✓ src/utils/__tests__/oauthAffiliate.spec.ts (4 tests) 24ms
+ ✓ src/views/admin/__tests__/ProxiesView.ipv6.spec.ts (12 tests) 10ms
+ ✓ src/components/layout/__tests__/AppShellLinear.spec.ts (4 tests) 11ms
+ ✓ src/utils/__tests__/webChatAttachmentAccept.spec.ts (2 tests) 9ms
+ ✓ src/components/admin/account/__tests__/AccountBulkActionsBar.spec.ts (3 tests) 117ms
+ ✓ src/__tests__/integration/proxy-data-import.spec.ts (2 tests) 142ms
+ ✓ src/router/__tests__/wechat-route.spec.ts (2 tests) 309ms
+   ✓ router WeChat OAuth route > registers the WeChat callback route as a public route 306ms
+ ✓ src/components/payment/__tests__/validity.spec.ts (6 tests) 8ms
+ ✓ src/views/admin/__tests__/groupsModelsListCandidates.spec.ts (3 tests) 16ms
+ ✓ src/utils/__tests__/formatDateTimeLocalInput.spec.ts (5 tests) 70ms
+ ✓ src/features/channel-monitor-v2/__tests__/MetricCell.spec.ts (3 tests) 129ms
+ ✓ src/api/__tests__/admin.system.rollback.spec.ts (3 tests) 17ms
+ ✓ src/views/admin/__tests__/groupsModelPricing.spec.ts (3 tests) 13ms
+ ✓ src/__tests__/integration/frontend-exclusions.spec.ts (2 tests) 18ms
+ ✓ src/router/__tests__/title.spec.ts (5 tests) 11ms
+ ✓ src/components/account/__tests__/CreateAccountModal.grok.spec.ts (4 tests) 12ms
+ ✓ src/views/user/__tests__/paymentWechatResume.spec.ts (3 tests) 10ms
+ ✓ src/views/user/__tests__/ChatViewSource.spec.ts (3 tests) 11ms
+ ✓ src/utils/__tests__/usageServiceTier.spec.ts (5 tests) 13ms
+ ✓ src/components/account/__tests__/GrokQuotaProbeCell.spec.ts (1 test) 120ms
+ ✓ src/views/admin/__tests__/groupsVideoModelPricing.spec.ts (3 tests) 20ms
+ ✓ src/api/__tests__/admin.grok.spec.ts (5 tests) 27ms
+ ✓ src/utils/__tests__/dailyCheckIn.spec.ts (3 tests) 9ms
+ ✓ src/views/admin/ops/components/__tests__/OpsThroughputTrendChart.spec.ts (1 test) 102ms
+ ✓ src/views/admin/__tests__/platformFilterCatalogUsage.spec.ts (3 tests) 8ms
+ ✓ src/composables/__tests__/useDailyCheckInActivity.spec.ts (1 test) 40ms
+ ✓ src/i18n/__tests__/localesMessageCompile.spec.ts (2 tests) 746ms
+   ✓ locale messages compile > zh messages all compile without placeholder errors 489ms
+ ✓ src/components/layout/__tests__/docUrlSanitization.spec.ts (6 tests) 26ms
+ ✓ src/components/account/__tests__/credentialsBuilder.cnAdaptive.spec.ts (3 tests) 7ms
+ ✓ src/components/layout/__tests__/siteLogoSanitization.spec.ts (4 tests) 14ms
+ ✓ src/composables/__tests__/useAntigravityOAuth.spec.ts (2 tests) 6ms
+ ✓ src/components/common/__tests__/GroupOptionItem.spec.ts (1 test) 75ms
+ ✓ src/views/admin/__tests__/GroupsView.kiroEndpointMode.spec.ts (3 tests) 9ms
+ ✓ src/api/__tests__/channelMonitorV2.spec.ts (2 tests) 24ms
+ ✓ src/components/getting-started/__tests__/GuideStepPanel.spec.ts (1 test) 100ms
+ ✓ src/views/user/__tests__/ChannelStatusView.mode.spec.ts (2 tests) 80ms
+ ✓ src/utils/__tests__/webChatModelSort.spec.ts (1 test) 48ms
+ ✓ src/i18n/__tests__/riskControlLocales.spec.ts (3 tests) 9ms
+ ✓ src/views/user/__tests__/stripeLazyLoading.spec.ts (4 tests) 21ms
+ ✓ src/views/admin/__tests__/codexFingerprintSignals.spec.ts (3 tests) 8ms
+ ✓ src/utils/__tests__/authError.spec.ts (4 tests) 7ms
+ ✓ src/utils/__tests__/branding.spec.ts (4 tests) 59ms
+ ✓ src/__tests__/promotionBootstrapSource.spec.ts (1 test) 5ms
+ ✓ src/utils/__tests__/formatReasoningEffort.spec.ts (4 tests) 7ms
+ ✓ src/utils/__tests__/stableObjectKey.spec.ts (3 tests) 6ms
+ ✓ src/views/admin/__tests__/AnnouncementSettingsMigration.spec.ts (2 tests) 12ms
+ ✓ src/router/__tests__/checkInRoute.spec.ts (2 tests) 10ms
+ ✓ src/utils/__tests__/floatingPanel.spec.ts (3 tests) 11ms
+ ✓ src/components/auth/__tests__/TotpLoginModal.spec.ts (1 test) 105ms
+ ✓ src/components/layout/__tests__/TablePageLayout.spec.ts (1 test) 6ms
+ ✓ src/views/admin/__tests__/MyAccountDashboardView.spec.ts (1 test) 76ms
+ ✓ src/api/__tests__/user.spec.ts (1 test) 297ms
+ ✓ src/views/auth/__tests__/RegisterPromotionChannelSource.spec.ts (2 tests) 7ms
+ ✓ src/utils/__tests__/latencyHealth.spec.ts (2 tests) 8ms
+ ✓ src/components/account/__tests__/longContextBilling.spec.ts (3 tests) 7ms
+ ✓ src/views/admin/__tests__/groupsSupportedModelScopes.spec.ts (4 tests) 8ms
+ ✓ src/utils/__tests__/kiroEndpointMode.spec.ts (14 tests) 13ms
+ ✓ src/utils/__tests__/excludedUserIds.spec.ts (4 tests) 6ms
+ ✓ src/api/__tests__/payment.spec.ts (2 tests) 28ms
+ ✓ src/views/user/__tests__/DashboardView.spec.ts (1 test) 88ms
+ ✓ src/utils/__tests__/formatMultiplier.spec.ts (4 tests) 12ms
+ ✓ src/i18n/__tests__/ipGeoLocales.spec.ts (2 tests) 5ms
+ ✓ src/views/admin/ops/utils/__tests__/opsFormatters.spec.ts (3 tests) 6ms
+ ✓ src/utils/__tests__/billingMode.spec.ts (3 tests) 9ms
+ ✓ src/api/__tests__/settings.wechatConnect.spec.ts (2 tests) 8ms
+ ✓ src/views/admin/__tests__/GroupsView.createForm.spec.ts (1 test) 6ms
+ ✓ src/constants/__tests__/platforms.spec.ts (2 tests) 8ms
+ ✓ src/utils/__tests__/formatCompactNumber.spec.ts (3 tests) 7ms
+ ✓ src/components/layout/__tests__/AppHeaderRewardBalance.spec.ts (1 test) 10ms
+ ✓ src/components/payment/__tests__/currency.spec.ts (2 tests) 56ms
+ ✓ src/api/__tests__/admin.groups.usage-summary.spec.ts (1 test) 9ms
+ ✓ src/components/payment/__tests__/AmountInput.spec.ts (1 test) 85ms
+ ✓ src/views/admin/__tests__/groupsModelsListLayout.spec.ts (1 test) 5ms
+ ✓ src/i18n/__tests__/usageServiceTierLocales.spec.ts (2 tests) 9ms
+ ✓ src/components/layout/__tests__/AppHeaderColorContract.spec.ts (1 test) 4ms
+ ✓ src/views/admin/ops/utils/__tests__/opsErrorParams.spec.ts (2 tests) 7ms
+ ✓ src/composables/__tests__/usePersistedPageSize.spec.ts (1 test) 6ms
+ ✓ src/utils/__tests__/formatDateLocalInput.spec.ts (2 tests) 6ms
+ ✓ src/i18n/__tests__/wsModeLocaleDesc.spec.ts (1 test) 5ms
+ ✓ src/utils/__tests__/formatDateTimeToMinute.spec.ts (2 tests) 27ms
+
+ Test Files  325 passed (325)
+      Tests  2499 passed (2499)
+   Start at  02:02:10
+   Duration  88.52s (transform 61.88s, setup 75.25s, collect 189.69s, tests 103.59s, environment 399.05s, prepare 62.53s)
+
+MATRIX end=2026-09-03T18:03:39.357688655Z
+MATRIX exit=0
+MATRIX summary=frontend full tests passed

@@ -280,6 +280,10 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 		err     error
 	}
 	var weekly, monthly billingResult
+	// The weekly and monthly probes share this immutable account snapshot.
+	// Populate its lazy header-override cache before starting both goroutines so
+	// the parallel request builders only read the cached result.
+	_ = account.GetHeaderOverrides()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {

@@ -26,6 +26,11 @@ type userUsageRepoCapture struct {
 	stats        *usagestats.UsageStats
 	modelStats   []usagestats.ModelStat
 	groupStats   []usagestats.GroupStat
+	detailRow    *service.UsageLog
+}
+
+func (s *userUsageRepoCapture) GetByID(context.Context, int64) (*service.UsageLog, error) {
+	return s.detailRow, nil
 }
 
 func (s *userUsageRepoCapture) ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters usagestats.UsageLogFilters) ([]service.UsageLog, *pagination.PaginationResult, error) {
@@ -102,6 +107,7 @@ func newUserUsageRequestTypeTestRouter(repo *userUsageRepoCapture) *gin.Engine {
 		c.Next()
 	})
 	router.GET("/usage", handler.List)
+	router.GET("/usage/:id", handler.GetByID)
 	router.GET("/usage/stats", handler.Stats)
 	router.GET("/usage/dashboard/models", handler.DashboardModels)
 	router.GET("/usage/dashboard/snapshot-v2", handler.DashboardSnapshotV2)
@@ -139,6 +145,51 @@ func TestUserUsageListInvalidStream(t *testing.T) {
 	router := newUserUsageRequestTypeTestRouter(repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/usage?stream=invalid", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUserUsageListNativeCompactionFilter(t *testing.T) {
+	repo := &userUsageRepoCapture{}
+	router := newUserUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/usage?request_type=stream&native_compaction_v2=true", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, repo.listFilters.RequestType)
+	require.Equal(t, int16(service.RequestTypeStream), *repo.listFilters.RequestType)
+	require.NotNil(t, repo.listFilters.NativeCompactionV2)
+	require.True(t, *repo.listFilters.NativeCompactionV2)
+}
+
+func TestUserUsageListAppliesOwnershipBeforePrivacySafeObservabilityFilters(t *testing.T) {
+	repo := &userUsageRepoCapture{}
+	router := newUserUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/usage?service_tier=priority&reasoning_effort=max&inbound_endpoint=%2Fv1%2Fresponses&account_id=31&channel_id=41&upstream_endpoint=%2Fsecret&requested_reasoning_effort=internal", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, int64(42), repo.listFilters.UserID)
+	require.Equal(t, "priority", repo.listFilters.ServiceTier)
+	require.Equal(t, "max", repo.listFilters.RequestedReasoningEffort)
+	require.Equal(t, "/v1/responses", repo.listFilters.InboundEndpoint)
+	require.Zero(t, repo.listFilters.AccountID)
+	require.Zero(t, repo.listFilters.ChannelID)
+	require.Empty(t, repo.listFilters.ReasoningEffort)
+	require.Empty(t, repo.listFilters.UpstreamEndpoint)
+}
+
+func TestUserUsageListInvalidNativeCompactionFilter(t *testing.T) {
+	repo := &userUsageRepoCapture{}
+	router := newUserUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/usage?native_compaction_v2=unknown", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -203,6 +254,7 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 			AccountID:             5,
 			RequestID:             "req_user_billing",
 			Model:                 "gpt-5",
+			NativeCompactionV2:    true,
 			InputCost:             0.01,
 			OutputCost:            0.02,
 			CacheCreationCost:     0.03,
@@ -232,7 +284,9 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 	require.Contains(t, body, `"total_cost":0.08`)
 	require.Contains(t, body, `"actual_cost":0.08`)
 	require.Contains(t, body, `"rate_multiplier":1`)
+	require.Contains(t, body, `"native_compaction_v2":true`)
 	require.Contains(t, body, `"ip_address":"203.0.113.10"`)
+	require.NotContains(t, body, `"account_id"`)
 	require.NotContains(t, body, "upstream_endpoint")
 	require.NotContains(t, body, "account_rate_multiplier")
 	require.NotContains(t, body, "account_stats_cost")
@@ -242,6 +296,24 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 	require.NotContains(t, body, "billing_tier")
 	require.NotContains(t, body, "channel_id")
 	require.NotContains(t, body, `"account":`)
+}
+
+func TestUserUsageDetailOmitsAdminAccountID(t *testing.T) {
+	repo := &userUsageRepoCapture{detailRow: &service.UsageLog{
+		ID:        9,
+		UserID:    42,
+		AccountID: 77,
+		RequestID: "req_detail",
+	}}
+	router := newUserUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/usage/9", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"request_id":"req_detail"`)
+	require.NotContains(t, rec.Body.String(), `"account_id"`)
 }
 
 func TestUserUsageStatsUsesScopedFilters(t *testing.T) {

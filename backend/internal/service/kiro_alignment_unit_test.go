@@ -131,7 +131,7 @@ func TestGatewayServiceRecordUsage_KiroUnknownPricingFallsBackToConservativeCost
 		},
 		APIKey:  &APIKey{ID: 601, Quota: 100},
 		User:    &User{ID: 701},
-		Account: &Account{ID: 801, Platform: PlatformKiro},
+		Account: &Account{ID: 801, Platform: PlatformKiro, Type: AccountTypeOAuth},
 	})
 
 	require.NoError(t, err)

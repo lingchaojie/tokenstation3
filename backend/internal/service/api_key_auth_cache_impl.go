@@ -14,8 +14,8 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-// v20: union of local peak-rate/Kiro/WebChat fields and upstream group pricing/profit fields.
-const apiKeyAuthSnapshotVersion = 20
+// v21 adds the public-group restriction bit to the user authorization snapshot.
+const apiKeyAuthSnapshotVersion = 21
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -377,6 +377,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Username:                           apiKey.User.Username,
 			BalanceNotifyEnabled:               apiKey.User.BalanceNotifyEnabled,
 			SubscriptionBalanceFallbackEnabled: apiKey.User.SubscriptionBalanceFallbackEnabled,
+			RestrictPublicGroups:               apiKey.User.RestrictPublicGroups,
 			BalanceNotifyThresholdType:         apiKey.User.BalanceNotifyThresholdType,
 			BalanceNotifyThreshold:             apiKey.User.BalanceNotifyThreshold,
 			BalanceNotifyExtraEmails:           apiKey.User.BalanceNotifyExtraEmails,
@@ -500,6 +501,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			Username:                           snapshot.User.Username,
 			BalanceNotifyEnabled:               snapshot.User.BalanceNotifyEnabled,
 			SubscriptionBalanceFallbackEnabled: snapshot.User.SubscriptionBalanceFallbackEnabled,
+			RestrictPublicGroups:               snapshot.User.RestrictPublicGroups,
 			BalanceNotifyThresholdType:         snapshot.User.BalanceNotifyThresholdType,
 			BalanceNotifyThreshold:             snapshot.User.BalanceNotifyThreshold,
 			BalanceNotifyExtraEmails:           snapshot.User.BalanceNotifyExtraEmails,

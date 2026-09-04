@@ -1,15 +1,19 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +26,17 @@ import (
 )
 
 var (
-	openAIModelDatePattern     = regexp.MustCompile(`-\d{8}$`)
-	openAIModelBasePattern     = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
+	openAIModelDatePattern = regexp.MustCompile(`-\d{8}$`)
+	openAIModelBasePattern = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
+	// aboveTierPricePattern 匹配 LiteLLM 长上下文绝对价字段名
+	// （input_cost_per_token_above_272k_tokens / output_cost_per_token_above_200k_tokens 等）。
+	// 带 _flex/_priority 服务档后缀的变体与 cache 侧字段不参与阈值/倍率折算。
+	aboveTierPricePattern = regexp.MustCompile(`^(input|output)_cost_per_token_above_(\d+)k_tokens$`)
+	// cacheTierPricePattern 匹配 cache 侧的长上下文绝对价字段名
+	// （cache_creation_input_token_cost_above_200k_tokens、cache_read_input_token_cost_above_272k_tokens_priority、
+	// cache_creation_input_token_cost_above_1hr_above_200k_tokens 等）。
+	// 组 1 为基础价字段名主干，组 2 为 1h 缓存时长段（可为空），组 3 为服务档后缀（可为空）。
+	cacheTierPricePattern      = regexp.MustCompile(`^(cache_(?:creation|read)_input_token_cost)(_above_1hr)?_above_\d+k_tokens((?:_[a-z]+)?)$`)
 	openAIGPT54FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:               2.5e-06, // $2.5 per MTok
 		InputCostPerTokenPriority:       5e-06,   // $5 per MTok
@@ -53,17 +66,14 @@ var (
 		SupportsPromptCaching:           true,
 	}
 	openAIGPT56SolFallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:                   5e-06,
-		InputCostPerTokenPriority:           1e-05,
-		OutputCostPerToken:                  3e-05,
-		OutputCostPerTokenPriority:          6e-05,
-		CacheCreationInputTokenCost:         6.25e-06,
-		CacheCreationInputTokenCostPriority: 1.25e-05,
-		CacheReadInputTokenCost:             5e-07,
-		CacheReadInputTokenCostPriority:     1e-06,
-		LongContextInputTokenThreshold:      openAIGPT54LongContextInputThreshold,
-		LongContextInputCostMultiplier:      openAIGPT54LongContextInputMultiplier,
-		LongContextOutputCostMultiplier:     openAIGPT54LongContextOutputMultiplier,
+		InputCostPerToken:                   4e-06,
+		InputCostPerTokenPriority:           8e-06,
+		OutputCostPerToken:                  2e-05,
+		OutputCostPerTokenPriority:          4e-05,
+		CacheCreationInputTokenCost:         5e-06,
+		CacheCreationInputTokenCostPriority: 1e-05,
+		CacheReadInputTokenCost:             4e-07,
+		CacheReadInputTokenCostPriority:     8e-07,
 		SupportsServiceTier:                 true,
 		LiteLLMProvider:                     "openai",
 		Mode:                                "chat",
@@ -78,9 +88,6 @@ var (
 		CacheCreationInputTokenCostPriority: 5e-06,
 		CacheReadInputTokenCost:             2e-07,
 		CacheReadInputTokenCostPriority:     4e-07,
-		LongContextInputTokenThreshold:      openAIGPT54LongContextInputThreshold,
-		LongContextInputCostMultiplier:      openAIGPT54LongContextInputMultiplier,
-		LongContextOutputCostMultiplier:     openAIGPT54LongContextOutputMultiplier,
 		SupportsServiceTier:                 true,
 		LiteLLMProvider:                     "openai",
 		Mode:                                "chat",
@@ -95,9 +102,6 @@ var (
 		CacheCreationInputTokenCostPriority: 5e-07,
 		CacheReadInputTokenCost:             2e-08,
 		CacheReadInputTokenCostPriority:     4e-08,
-		LongContextInputTokenThreshold:      openAIGPT54LongContextInputThreshold,
-		LongContextInputCostMultiplier:      openAIGPT54LongContextInputMultiplier,
-		LongContextOutputCostMultiplier:     openAIGPT54LongContextOutputMultiplier,
 		SupportsServiceTier:                 true,
 		LiteLLMProvider:                     "openai",
 		Mode:                                "chat",
@@ -128,40 +132,86 @@ var (
 // 价格值保留为 float64；对应的 Configured 字段记录源 JSON 是否显式提供该价格，
 // 从而区分“字段缺失”和“显式配置为 0（免费）”。
 type LiteLLMModelPricing struct {
-	InputCostPerToken                   float64 `json:"input_cost_per_token"`
-	InputCostPerTokenPriority           float64 `json:"input_cost_per_token_priority"`
-	OutputCostPerToken                  float64 `json:"output_cost_per_token"`
-	OutputCostPerTokenPriority          float64 `json:"output_cost_per_token_priority"`
-	CacheCreationInputTokenCost         float64 `json:"cache_creation_input_token_cost"`
-	CacheCreationInputTokenCostPriority float64 `json:"cache_creation_input_token_cost_priority"`
-	CacheCreationInputTokenCostAbove1hr float64 `json:"cache_creation_input_token_cost_above_1hr"`
-	CacheReadInputTokenCost             float64 `json:"cache_read_input_token_cost"`
-	CacheReadInputTokenCostPriority     float64 `json:"cache_read_input_token_cost_priority"`
-	LongContextInputTokenThreshold      int     `json:"long_context_input_token_threshold,omitempty"`
-	LongContextInputCostMultiplier      float64 `json:"long_context_input_cost_multiplier,omitempty"`
-	LongContextOutputCostMultiplier     float64 `json:"long_context_output_cost_multiplier,omitempty"`
-	SupportsServiceTier                 bool    `json:"supports_service_tier"`
-	LiteLLMProvider                     string  `json:"litellm_provider"`
-	Mode                                string  `json:"mode"`
-	SupportsPromptCaching               bool    `json:"supports_prompt_caching"`
-	OutputCostPerImage                  float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
-	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
-	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
+	InputCostPerToken                           float64 `json:"input_cost_per_token"`
+	InputCostPerTokenPriority                   float64 `json:"input_cost_per_token_priority"`
+	OutputCostPerToken                          float64 `json:"output_cost_per_token"`
+	OutputCostPerTokenPriority                  float64 `json:"output_cost_per_token_priority"`
+	CacheCreationInputTokenCost                 float64 `json:"cache_creation_input_token_cost"`
+	CacheCreationInputTokenCostPriority         float64 `json:"cache_creation_input_token_cost_priority"`
+	CacheCreationInputTokenCostAbove1hr         float64 `json:"cache_creation_input_token_cost_above_1hr"`
+	CacheCreationInputTokenCostAbove1hrPriority float64 `json:"cache_creation_input_token_cost_above_1hr_priority"`
+	CacheReadInputTokenCost                     float64 `json:"cache_read_input_token_cost"`
+	CacheReadInputTokenCostPriority             float64 `json:"cache_read_input_token_cost_priority"`
+	LongContextInputTokenThreshold              int     `json:"long_context_input_token_threshold,omitempty"`
+	LongContextInputCostMultiplier              float64 `json:"long_context_input_cost_multiplier,omitempty"`
+	LongContextOutputCostMultiplier             float64 `json:"long_context_output_cost_multiplier,omitempty"`
+	SupportsServiceTier                         bool    `json:"supports_service_tier"`
+	LiteLLMProvider                             string  `json:"litellm_provider"`
+	Mode                                        string  `json:"mode"`
+	SupportsPromptCaching                       bool    `json:"supports_prompt_caching"`
+	OutputCostPerImage                          float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
+	OutputCostPerImageToken                     float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
+	InputCostPerImageToken                      float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
 
-	InputCostPerTokenConfigured                   bool `json:"-"`
-	InputCostPerTokenPriorityConfigured           bool `json:"-"`
-	OutputCostPerTokenConfigured                  bool `json:"-"`
-	OutputCostPerTokenPriorityConfigured          bool `json:"-"`
-	CacheCreationInputTokenCostConfigured         bool `json:"-"`
-	CacheCreationInputTokenCostPriorityConfigured bool `json:"-"`
-	CacheReadInputTokenCostConfigured             bool `json:"-"`
-	CacheReadInputTokenCostPriorityConfigured     bool `json:"-"`
-	OutputCostPerImageTokenConfigured             bool `json:"-"`
+	InputCostPerTokenConfigured                           bool `json:"-"`
+	InputCostPerTokenPriorityConfigured                   bool `json:"-"`
+	OutputCostPerTokenConfigured                          bool `json:"-"`
+	OutputCostPerTokenPriorityConfigured                  bool `json:"-"`
+	CacheCreationInputTokenCostConfigured                 bool `json:"-"`
+	CacheCreationInputTokenCostPriorityConfigured         bool `json:"-"`
+	CacheCreationInputTokenCostAbove1hrConfigured         bool `json:"-"`
+	CacheCreationInputTokenCostAbove1hrPriorityConfigured bool `json:"-"`
+	CacheReadInputTokenCostConfigured                     bool `json:"-"`
+	CacheReadInputTokenCostPriorityConfigured             bool `json:"-"`
+	OutputCostPerImageTokenConfigured                     bool `json:"-"`
+	InputCostPerImageTokenConfigured                      bool `json:"-"`
 
 	// TokenPricingAbsent 表示源数据中所有 token bucket 价格均缺失（仅有图片价）。
 	// 此类条目只可用于图片计费，token 计费必须回退到 fallback 或 fail-closed，
 	// 否则 token 流量会被按 $0 计费。零值（false）表示条目具备 token 价格。
 	TokenPricingAbsent bool `json:"-"`
+
+	// Bucket provenance is carried through to the resolver so an override in
+	// one bucket cannot accidentally relabel prices inherited from the catalog.
+	inputPriceSource                          string
+	inputPrioritySource                       string
+	outputPriceSource                         string
+	outputPrioritySource                      string
+	cacheWritePriceSource                     string
+	cacheWritePrioritySource                  string
+	cacheWrite1hPriceSource                   string
+	cacheWrite1hPrioritySource                string
+	cacheReadPriceSource                      string
+	cacheReadPrioritySource                   string
+	imageInputPriceSource                     string
+	imageOutputPriceSource                    string
+	longContextThresholdSource                string
+	longContextInputSource                    string
+	longContextOutputSource                   string
+	longContextCacheWrite5mSource             string
+	longContextCacheWrite1hSource             string
+	longContextCacheWrite5mPrioritySource     string
+	longContextCacheWrite1hPrioritySource     string
+	longContextCacheReadSource                string
+	longContextCacheReadPrioritySource        string
+	longContextCacheWrite5mMultiplier         float64
+	longContextCacheWrite1hMultiplier         float64
+	longContextCacheWrite5mPriorityMultiplier float64
+	longContextCacheWrite1hPriorityMultiplier float64
+	longContextCacheReadMultiplier            float64
+	longContextCacheReadPriorityMultiplier    float64
+	longContextCacheWrite5mConfigured         bool
+	longContextCacheWrite1hConfigured         bool
+	longContextCacheWrite5mPriorityConfigured bool
+	longContextCacheWrite1hPriorityConfigured bool
+	longContextCacheReadConfigured            bool
+	longContextCacheReadPriorityConfigured    bool
+	longContextCacheWrite5mInvalid            bool
+	longContextCacheWrite1hInvalid            bool
+	longContextCacheReadInvalid               bool
+	longContextCacheWrite5mPriorityInvalid    bool
+	longContextCacheWrite1hPriorityInvalid    bool
+	longContextCacheReadPriorityInvalid       bool
 }
 
 // PricingRemoteClient 远程价格数据获取接口
@@ -172,25 +222,26 @@ type PricingRemoteClient interface {
 
 // LiteLLMRawEntry 用于解析原始JSON数据
 type LiteLLMRawEntry struct {
-	InputCostPerToken                   *float64 `json:"input_cost_per_token"`
-	InputCostPerTokenPriority           *float64 `json:"input_cost_per_token_priority"`
-	OutputCostPerToken                  *float64 `json:"output_cost_per_token"`
-	OutputCostPerTokenPriority          *float64 `json:"output_cost_per_token_priority"`
-	CacheCreationInputTokenCost         *float64 `json:"cache_creation_input_token_cost"`
-	CacheCreationInputTokenCostPriority *float64 `json:"cache_creation_input_token_cost_priority"`
-	CacheCreationInputTokenCostAbove1hr *float64 `json:"cache_creation_input_token_cost_above_1hr"`
-	CacheReadInputTokenCost             *float64 `json:"cache_read_input_token_cost"`
-	CacheReadInputTokenCostPriority     *float64 `json:"cache_read_input_token_cost_priority"`
-	LongContextInputTokenThreshold      *int     `json:"long_context_input_token_threshold"`
-	LongContextInputCostMultiplier      *float64 `json:"long_context_input_cost_multiplier"`
-	LongContextOutputCostMultiplier     *float64 `json:"long_context_output_cost_multiplier"`
-	SupportsServiceTier                 bool     `json:"supports_service_tier"`
-	LiteLLMProvider                     string   `json:"litellm_provider"`
-	Mode                                string   `json:"mode"`
-	SupportsPromptCaching               bool     `json:"supports_prompt_caching"`
-	OutputCostPerImage                  *float64 `json:"output_cost_per_image"`
-	OutputCostPerImageToken             *float64 `json:"output_cost_per_image_token"`
-	InputCostPerImageToken              *float64 `json:"input_cost_per_image_token"`
+	InputCostPerToken                           *float64 `json:"input_cost_per_token"`
+	InputCostPerTokenPriority                   *float64 `json:"input_cost_per_token_priority"`
+	OutputCostPerToken                          *float64 `json:"output_cost_per_token"`
+	OutputCostPerTokenPriority                  *float64 `json:"output_cost_per_token_priority"`
+	CacheCreationInputTokenCost                 *float64 `json:"cache_creation_input_token_cost"`
+	CacheCreationInputTokenCostPriority         *float64 `json:"cache_creation_input_token_cost_priority"`
+	CacheCreationInputTokenCostAbove1hr         *float64 `json:"cache_creation_input_token_cost_above_1hr"`
+	CacheCreationInputTokenCostAbove1hrPriority *float64 `json:"cache_creation_input_token_cost_above_1hr_priority"`
+	CacheReadInputTokenCost                     *float64 `json:"cache_read_input_token_cost"`
+	CacheReadInputTokenCostPriority             *float64 `json:"cache_read_input_token_cost_priority"`
+	LongContextInputTokenThreshold              *int     `json:"long_context_input_token_threshold"`
+	LongContextInputCostMultiplier              *float64 `json:"long_context_input_cost_multiplier"`
+	LongContextOutputCostMultiplier             *float64 `json:"long_context_output_cost_multiplier"`
+	SupportsServiceTier                         bool     `json:"supports_service_tier"`
+	LiteLLMProvider                             string   `json:"litellm_provider"`
+	Mode                                        string   `json:"mode"`
+	SupportsPromptCaching                       bool     `json:"supports_prompt_caching"`
+	OutputCostPerImage                          *float64 `json:"output_cost_per_image"`
+	OutputCostPerImageToken                     *float64 `json:"output_cost_per_image_token"`
+	InputCostPerImageToken                      *float64 `json:"input_cost_per_image_token"`
 }
 
 // PricingService 动态价格服务
@@ -205,6 +256,106 @@ type PricingService struct {
 	// 停止信号
 	stopCh chan struct{}
 	wg     sync.WaitGroup
+}
+
+func markLiteLLMBucketSources(pricing *LiteLLMModelPricing, entry LiteLLMRawEntry, rawEntry, override json.RawMessage) {
+	if pricing == nil {
+		return
+	}
+	source := func(configured bool, keys ...string) string {
+		if !configured {
+			return ""
+		}
+		if rawObjectHasNonNullKey(override, keys...) {
+			return "override_file"
+		}
+		return "litellm"
+	}
+	pricing.inputPriceSource = source(entry.InputCostPerToken != nil, "input_cost_per_token")
+	pricing.inputPrioritySource = source(entry.InputCostPerTokenPriority != nil, "input_cost_per_token_priority")
+	pricing.outputPriceSource = source(entry.OutputCostPerToken != nil, "output_cost_per_token")
+	pricing.outputPrioritySource = source(entry.OutputCostPerTokenPriority != nil, "output_cost_per_token_priority")
+	pricing.cacheWritePriceSource = source(entry.CacheCreationInputTokenCost != nil, "cache_creation_input_token_cost")
+	pricing.cacheWritePrioritySource = source(entry.CacheCreationInputTokenCostPriority != nil, "cache_creation_input_token_cost_priority")
+	pricing.cacheWrite1hPriceSource = source(entry.CacheCreationInputTokenCostAbove1hr != nil, "cache_creation_input_token_cost_above_1hr")
+	pricing.cacheWrite1hPrioritySource = source(entry.CacheCreationInputTokenCostAbove1hrPriority != nil, "cache_creation_input_token_cost_above_1hr_priority")
+	pricing.cacheReadPriceSource = source(entry.CacheReadInputTokenCost != nil, "cache_read_input_token_cost")
+	pricing.cacheReadPrioritySource = source(entry.CacheReadInputTokenCostPriority != nil, "cache_read_input_token_cost_priority")
+	pricing.imageInputPriceSource = source(entry.InputCostPerImageToken != nil, "input_cost_per_image_token")
+	pricing.imageOutputPriceSource = source(entry.OutputCostPerImageToken != nil, "output_cost_per_image_token")
+	pricing.longContextThresholdSource = source(entry.LongContextInputTokenThreshold != nil, "long_context_input_token_threshold")
+	pricing.longContextInputSource = source(entry.LongContextInputCostMultiplier != nil, "long_context_input_cost_multiplier")
+	pricing.longContextOutputSource = source(entry.LongContextOutputCostMultiplier != nil, "long_context_output_cost_multiplier")
+}
+
+func markDerivedLongContextSources(pricing *LiteLLMModelPricing, entry LiteLLMRawEntry, rawEntry, override json.RawMessage, derivedThreshold int) {
+	if pricing == nil || derivedThreshold <= 0 {
+		return
+	}
+	thresholdSuffix := fmt.Sprintf("_above_%dk_tokens", derivedThreshold/1000)
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(rawEntry, &fields) != nil {
+		return
+	}
+	sourceForKey := func(key string) string {
+		value, ok := fields[key]
+		if !ok || string(value) == "null" {
+			return ""
+		}
+		if rawObjectHasNonNullKey(override, key) {
+			return PricingSourceOverrideFile
+		}
+		return PricingSourceLiteLLM
+	}
+	inputSource := sourceForKey("input_cost_per_token" + thresholdSuffix)
+	outputSource := sourceForKey("output_cost_per_token" + thresholdSuffix)
+	if entry.LongContextInputCostMultiplier == nil {
+		pricing.longContextInputSource = inputSource
+	}
+	if entry.LongContextOutputCostMultiplier == nil {
+		pricing.longContextOutputSource = outputSource
+	}
+	if pricing.longContextCacheWrite5mConfigured || pricing.longContextCacheWrite5mInvalid {
+		pricing.longContextCacheWrite5mSource = sourceForKey("cache_creation_input_token_cost" + thresholdSuffix)
+	}
+	if pricing.longContextCacheWrite1hConfigured || pricing.longContextCacheWrite1hInvalid {
+		pricing.longContextCacheWrite1hSource = sourceForKey("cache_creation_input_token_cost_above_1hr" + thresholdSuffix)
+	}
+	if pricing.longContextCacheWrite5mPriorityConfigured || pricing.longContextCacheWrite5mPriorityInvalid {
+		pricing.longContextCacheWrite5mPrioritySource = sourceForKey("cache_creation_input_token_cost" + thresholdSuffix + "_priority")
+	}
+	if pricing.longContextCacheWrite1hPriorityConfigured || pricing.longContextCacheWrite1hPriorityInvalid {
+		pricing.longContextCacheWrite1hPrioritySource = sourceForKey("cache_creation_input_token_cost_above_1hr" + thresholdSuffix + "_priority")
+	}
+	if pricing.longContextCacheReadConfigured || pricing.longContextCacheReadInvalid {
+		pricing.longContextCacheReadSource = sourceForKey("cache_read_input_token_cost" + thresholdSuffix)
+	}
+	if pricing.longContextCacheReadPriorityConfigured || pricing.longContextCacheReadPriorityInvalid {
+		pricing.longContextCacheReadPrioritySource = sourceForKey("cache_read_input_token_cost" + thresholdSuffix + "_priority")
+	}
+	if entry.LongContextInputTokenThreshold == nil {
+		pricing.longContextThresholdSource = PricingSourceLiteLLM
+		if inputSource == PricingSourceOverrideFile || outputSource == PricingSourceOverrideFile {
+			pricing.longContextThresholdSource = PricingSourceOverrideFile
+		}
+	}
+}
+
+func rawObjectHasNonNullKey(raw json.RawMessage, keys ...string) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	for _, key := range keys {
+		value, ok := fields[key]
+		if ok && string(value) != "null" {
+			return true
+		}
+	}
+	return false
 }
 
 // NewPricingService 创建价格服务
@@ -419,6 +570,7 @@ func (s *PricingService) downloadPricingData() error {
 		return fmt.Errorf("parse pricing data: %w", err)
 	}
 	data = s.mergeFallbackPricingData(data)
+	data = s.mergeOverrideOnlyModels(data)
 
 	// 保存到本地文件
 	pricingFile := s.getPricingFilePath()
@@ -439,6 +591,7 @@ func (s *PricingService) downloadPricingData() error {
 
 	// 更新内存数据
 	s.mu.Lock()
+	warnDroppedLongContextLadders(s.pricingData, data)
 	s.pricingData = data
 	s.lastUpdated = time.Now()
 	s.localHash = syncHash
@@ -450,14 +603,21 @@ func (s *PricingService) downloadPricingData() error {
 
 // parsePricingData 解析价格数据（处理各种格式）
 func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModelPricing, error) {
+	if err := rejectDuplicatePricingModelKeys(body); err != nil {
+		return nil, err
+	}
 	// 首先解析为 map[string]json.RawMessage
 	var rawData map[string]json.RawMessage
 	if err := json.Unmarshal(body, &rawData); err != nil {
 		return nil, fmt.Errorf("parse raw JSON: %w", err)
 	}
+	applyBuiltInPricingCorrections(rawData)
+	overrides := s.loadPricingOverrideEntries()
+	rawData = s.applyPricingOverrides(rawData)
 
 	result := make(map[string]*LiteLLMModelPricing)
 	skipped := 0
+	var orphanCacheTiers, lopsidedLadders []string
 
 	for modelName, rawEntry := range rawData {
 		// 跳过 sample_spec 等文档条目
@@ -475,7 +635,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		hasTokenPricing := entry.InputCostPerToken != nil || entry.InputCostPerTokenPriority != nil ||
 			entry.OutputCostPerToken != nil || entry.OutputCostPerTokenPriority != nil ||
 			entry.CacheCreationInputTokenCost != nil || entry.CacheCreationInputTokenCostPriority != nil ||
-			entry.CacheCreationInputTokenCostAbove1hr != nil ||
+			entry.CacheCreationInputTokenCostAbove1hr != nil || entry.CacheCreationInputTokenCostAbove1hrPriority != nil ||
 			entry.CacheReadInputTokenCost != nil || entry.CacheReadInputTokenCostPriority != nil
 		// 只保留有有效价格的条目
 		if !hasTokenPricing && entry.OutputCostPerImage == nil && entry.OutputCostPerImageToken == nil && entry.InputCostPerImageToken == nil {
@@ -489,16 +649,20 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			SupportsServiceTier:   entry.SupportsServiceTier,
 			TokenPricingAbsent:    !hasTokenPricing,
 
-			InputCostPerTokenConfigured:                   entry.InputCostPerToken != nil,
-			InputCostPerTokenPriorityConfigured:           entry.InputCostPerTokenPriority != nil,
-			OutputCostPerTokenConfigured:                  entry.OutputCostPerToken != nil,
-			OutputCostPerTokenPriorityConfigured:          entry.OutputCostPerTokenPriority != nil,
-			CacheCreationInputTokenCostConfigured:         entry.CacheCreationInputTokenCost != nil,
-			CacheCreationInputTokenCostPriorityConfigured: entry.CacheCreationInputTokenCostPriority != nil,
-			CacheReadInputTokenCostConfigured:             entry.CacheReadInputTokenCost != nil,
-			CacheReadInputTokenCostPriorityConfigured:     entry.CacheReadInputTokenCostPriority != nil,
-			OutputCostPerImageTokenConfigured:             entry.OutputCostPerImageToken != nil,
+			InputCostPerTokenConfigured:                           entry.InputCostPerToken != nil,
+			InputCostPerTokenPriorityConfigured:                   entry.InputCostPerTokenPriority != nil,
+			OutputCostPerTokenConfigured:                          entry.OutputCostPerToken != nil,
+			OutputCostPerTokenPriorityConfigured:                  entry.OutputCostPerTokenPriority != nil,
+			CacheCreationInputTokenCostConfigured:                 entry.CacheCreationInputTokenCost != nil,
+			CacheCreationInputTokenCostPriorityConfigured:         entry.CacheCreationInputTokenCostPriority != nil,
+			CacheCreationInputTokenCostAbove1hrConfigured:         entry.CacheCreationInputTokenCostAbove1hr != nil,
+			CacheCreationInputTokenCostAbove1hrPriorityConfigured: entry.CacheCreationInputTokenCostAbove1hrPriority != nil,
+			CacheReadInputTokenCostConfigured:                     entry.CacheReadInputTokenCost != nil,
+			CacheReadInputTokenCostPriorityConfigured:             entry.CacheReadInputTokenCostPriority != nil,
+			OutputCostPerImageTokenConfigured:                     entry.OutputCostPerImageToken != nil,
+			InputCostPerImageTokenConfigured:                      entry.InputCostPerImageToken != nil,
 		}
+		markLiteLLMBucketSources(pricing, entry, rawEntry, overrides[modelName])
 
 		if entry.InputCostPerToken != nil {
 			pricing.InputCostPerToken = *entry.InputCostPerToken
@@ -520,6 +684,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 		if entry.CacheCreationInputTokenCostAbove1hr != nil {
 			pricing.CacheCreationInputTokenCostAbove1hr = *entry.CacheCreationInputTokenCostAbove1hr
+		}
+		if entry.CacheCreationInputTokenCostAbove1hrPriority != nil {
+			pricing.CacheCreationInputTokenCostAbove1hrPriority = *entry.CacheCreationInputTokenCostAbove1hrPriority
 		}
 		if entry.CacheReadInputTokenCost != nil {
 			pricing.CacheReadInputTokenCost = *entry.CacheReadInputTokenCost
@@ -546,18 +713,452 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			pricing.InputCostPerImageToken = *entry.InputCostPerImageToken
 		}
 
+		derivedThreshold := deriveLongContextFromAboveTierFields(rawEntry, pricing, entry)
+		if derivedThreshold > 0 {
+			markDerivedLongContextSources(pricing, entry, rawEntry, overrides[modelName], derivedThreshold)
+			if isLopsidedLongContextLadder(pricing) {
+				lopsidedLadders = append(lopsidedLadders, fmt.Sprintf("%s(input x%.2f, output x%.2f)", modelName,
+					pricing.LongContextInputCostMultiplier, pricing.LongContextOutputCostMultiplier))
+			}
+		}
+		if orphans := orphanCacheTierFields(rawEntry); len(orphans) > 0 {
+			orphanCacheTiers = append(orphanCacheTiers, modelName+"("+strings.Join(orphans, ",")+")")
+		}
+
 		result[modelName] = pricing
 	}
 
 	if skipped > 0 {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Skipped %d invalid entries", skipped)
 	}
+	warnOrphanCacheTierFields(orphanCacheTiers)
+	warnLopsidedLongContextLadders(lopsidedLadders)
 
 	if len(result) == 0 {
 		return nil, fmt.Errorf("no valid pricing entries found")
 	}
 
 	return result, nil
+}
+
+// applyBuiltInPricingCorrections fixes known stale catalog values before the
+// operator override file is merged. Corrections are guarded by the exact legacy
+// value, so a future catalog price change is preserved automatically.
+func applyBuiltInPricingCorrections(rawData map[string]json.RawMessage) {
+	correctLegacyGPT56SolPricing(rawData)
+}
+
+func correctLegacyGPT56SolPricing(rawData map[string]json.RawMessage) {
+	rawEntry, ok := rawData["gpt-5.6-sol"]
+	if !ok {
+		return
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(rawEntry, &fields); err != nil || fields == nil {
+		return
+	}
+
+	type correction struct {
+		legacy  float64
+		current float64
+	}
+	corrections := map[string]correction{
+		"input_cost_per_token":                                       {legacy: 5e-6, current: 4e-6},
+		"input_cost_per_token_priority":                              {legacy: 10e-6, current: 8e-6},
+		"input_cost_per_token_above_272k_tokens":                     {legacy: 10e-6, current: 8e-6},
+		"output_cost_per_token":                                      {legacy: 30e-6, current: 20e-6},
+		"output_cost_per_token_priority":                             {legacy: 60e-6, current: 40e-6},
+		"output_cost_per_token_above_272k_tokens":                    {legacy: 45e-6, current: 30e-6},
+		"cache_creation_input_token_cost":                            {legacy: 6.25e-6, current: 5e-6},
+		"cache_creation_input_token_cost_priority":                   {legacy: 12.5e-6, current: 10e-6},
+		"cache_creation_input_token_cost_above_272k_tokens":          {legacy: 12.5e-6, current: 10e-6},
+		"cache_creation_input_token_cost_above_272k_tokens_priority": {legacy: 25e-6, current: 20e-6},
+		"cache_read_input_token_cost":                                {legacy: 0.5e-6, current: 0.4e-6},
+		"cache_read_input_token_cost_priority":                       {legacy: 1e-6, current: 0.8e-6},
+		"cache_read_input_token_cost_above_272k_tokens":              {legacy: 1e-6, current: 0.8e-6},
+		"cache_read_input_token_cost_above_272k_tokens_priority":     {legacy: 2e-6, current: 1.6e-6},
+	}
+
+	changed := false
+	for key, priceCorrection := range corrections {
+		value, exists := fields[key].(float64)
+		if !exists || value != priceCorrection.legacy {
+			continue
+		}
+		fields[key] = priceCorrection.current
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	corrected, err := json.Marshal(fields)
+	if err == nil {
+		rawData["gpt-5.6-sol"] = corrected
+	}
+}
+
+// rejectDuplicatePricingModelKeys rejects duplicate top-level model names.
+// encoding/json otherwise silently applies last-key-wins, which makes a price
+// catalog or override depend on source ordering without an auditable policy.
+func rejectDuplicatePricingModelKeys(body []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+		return fmt.Errorf("pricing JSON must be an object")
+	}
+	seen := make(map[string]struct{})
+	for decoder.More() {
+		token, err = decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return fmt.Errorf("pricing JSON model key must be a string")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate model key %q", key)
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	_, err = decoder.Token()
+	return err
+}
+
+// deriveLongContextFromAboveTierFields 把 LiteLLM 目录的 *_above_XXXk_tokens 绝对价字段
+// 折算成 long_context_* 阈值+倍率（sub2api 计费机制的内部表达）：阈值取自字段名，
+// 倍率 = above 价 ÷ 基础价。显式 long_context_* 字段只替换自身组件；未显式提供的
+// threshold/input/output 以及各 cache above 档仍从目录逐项派生。多个阈值并存时取
+// 最小阈值。显式 0 也视为已配置，不会被派生值覆盖。
+func deriveLongContextFromAboveTierFields(rawEntry json.RawMessage, pricing *LiteLLMModelPricing, entry LiteLLMRawEntry) int {
+	if pricing == nil {
+		return 0
+	}
+	// threshold=0 是既有的显式整梯关闭开关；它与某个 multiplier=0（只关闭
+	// 自身附加费）不同，因此不能从 above 字段补回其余梯级组件。
+	if entry.LongContextInputTokenThreshold != nil && *entry.LongContextInputTokenThreshold == 0 {
+		return 0
+	}
+	if !bytes.Contains(rawEntry, []byte("_above_")) {
+		return 0
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(rawEntry, &fields); err != nil {
+		return 0
+	}
+	type tierPrices struct{ input, output float64 }
+	tiers := make(map[int]*tierPrices)
+	for key, value := range fields {
+		m := aboveTierPricePattern.FindStringSubmatch(key)
+		if m == nil {
+			continue
+		}
+		price, ok := value.(float64)
+		if !ok || price <= 0 {
+			continue
+		}
+		thousands, err := strconv.Atoi(m[2])
+		if err != nil || thousands <= 0 {
+			continue
+		}
+		threshold := thousands * 1000
+		tp := tiers[threshold]
+		if tp == nil {
+			tp = &tierPrices{}
+			tiers[threshold] = tp
+		}
+		if m[1] == "input" {
+			tp.input = price
+		} else {
+			tp.output = price
+		}
+	}
+	if len(tiers) == 0 {
+		return 0
+	}
+	threshold := 0
+	for t := range tiers {
+		if threshold == 0 || t < threshold {
+			threshold = t
+		}
+	}
+	tp := tiers[threshold]
+	inputMultiplier, outputMultiplier := 1.0, 1.0
+	if tp.input > 0 && pricing.InputCostPerToken > 0 {
+		inputMultiplier = tp.input / pricing.InputCostPerToken
+	}
+	if tp.output > 0 && pricing.OutputCostPerToken > 0 {
+		outputMultiplier = tp.output / pricing.OutputCostPerToken
+	}
+	// above 价不高于基础价时视为无附加费，不生成阶梯。
+	if inputMultiplier <= 1 && outputMultiplier <= 1 {
+		return 0
+	}
+	if entry.LongContextInputTokenThreshold == nil {
+		pricing.LongContextInputTokenThreshold = threshold
+	}
+	if entry.LongContextInputCostMultiplier == nil {
+		pricing.LongContextInputCostMultiplier = inputMultiplier
+	}
+	if entry.LongContextOutputCostMultiplier == nil {
+		pricing.LongContextOutputCostMultiplier = outputMultiplier
+	}
+
+	thresholdSuffix := fmt.Sprintf("_above_%dk_tokens", threshold/1000)
+	deriveCacheMultiplier := func(key string, base float64, baseConfigured bool) (float64, bool, bool) {
+		value, ok := fields[key]
+		if !ok {
+			return 0, false, false
+		}
+		price, ok := value.(float64)
+		if !ok || price < 0 {
+			return 0, false, false
+		}
+		// An explicit zero above-tier price is a configured free bucket even when
+		// its base price is zero. Positive prices require a positive typed base and
+		// a finite, positive ratio; invalid ratios retain presence/source separately
+		// and are rejected only if this exact long-context bucket is actually used.
+		if price == 0 {
+			return 0, true, false
+		}
+		if !baseConfigured || base <= 0 {
+			return 0, false, true
+		}
+		ratio := price / base
+		if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+			return 0, false, true
+		}
+		return ratio, true, false
+	}
+	pricing.longContextCacheWrite5mMultiplier, pricing.longContextCacheWrite5mConfigured, pricing.longContextCacheWrite5mInvalid = deriveCacheMultiplier(
+		"cache_creation_input_token_cost"+thresholdSuffix, pricing.CacheCreationInputTokenCost, pricing.CacheCreationInputTokenCostConfigured)
+	pricing.longContextCacheWrite1hMultiplier, pricing.longContextCacheWrite1hConfigured, pricing.longContextCacheWrite1hInvalid = deriveCacheMultiplier(
+		"cache_creation_input_token_cost_above_1hr"+thresholdSuffix, pricing.CacheCreationInputTokenCostAbove1hr, pricing.CacheCreationInputTokenCostAbove1hrConfigured)
+	pricing.longContextCacheReadMultiplier, pricing.longContextCacheReadConfigured, pricing.longContextCacheReadInvalid = deriveCacheMultiplier(
+		"cache_read_input_token_cost"+thresholdSuffix, pricing.CacheReadInputTokenCost, pricing.CacheReadInputTokenCostConfigured)
+	priorityBase := func(priority float64, priorityConfigured bool, standard float64, standardConfigured bool) (float64, bool) {
+		if priorityConfigured {
+			return priority, true
+		}
+		return standard, standardConfigured
+	}
+	priority5mBase, priority5mBaseConfigured := priorityBase(
+		pricing.CacheCreationInputTokenCostPriority, pricing.CacheCreationInputTokenCostPriorityConfigured,
+		pricing.CacheCreationInputTokenCost, pricing.CacheCreationInputTokenCostConfigured)
+	priority1hBase, priority1hBaseConfigured := priorityBase(
+		pricing.CacheCreationInputTokenCostAbove1hrPriority, pricing.CacheCreationInputTokenCostAbove1hrPriorityConfigured,
+		pricing.CacheCreationInputTokenCostAbove1hr, pricing.CacheCreationInputTokenCostAbove1hrConfigured)
+	priorityReadBase, priorityReadBaseConfigured := priorityBase(
+		pricing.CacheReadInputTokenCostPriority, pricing.CacheReadInputTokenCostPriorityConfigured,
+		pricing.CacheReadInputTokenCost, pricing.CacheReadInputTokenCostConfigured)
+	pricing.longContextCacheWrite5mPriorityMultiplier, pricing.longContextCacheWrite5mPriorityConfigured, pricing.longContextCacheWrite5mPriorityInvalid = deriveCacheMultiplier(
+		"cache_creation_input_token_cost"+thresholdSuffix+"_priority", priority5mBase, priority5mBaseConfigured)
+	pricing.longContextCacheWrite1hPriorityMultiplier, pricing.longContextCacheWrite1hPriorityConfigured, pricing.longContextCacheWrite1hPriorityInvalid = deriveCacheMultiplier(
+		"cache_creation_input_token_cost_above_1hr"+thresholdSuffix+"_priority", priority1hBase, priority1hBaseConfigured)
+	pricing.longContextCacheReadPriorityMultiplier, pricing.longContextCacheReadPriorityConfigured, pricing.longContextCacheReadPriorityInvalid = deriveCacheMultiplier(
+		"cache_read_input_token_cost"+thresholdSuffix+"_priority", priorityReadBase, priorityReadBaseConfigured)
+	return threshold
+}
+
+// isLopsidedLongContextLadder 判断折算出的阶梯是否只有一侧带附加费。官方阶梯（OpenAI、
+// Google、Anthropic、xAI）都同时抬高 input 与 output；单侧附加费意味着条目的基础价与
+// above 档来自不同价格版本（如基础价被手工 pin、above 档随上游更新），折算出的倍率失真。
+func isLopsidedLongContextLadder(pricing *LiteLLMModelPricing) bool {
+	if pricing == nil || pricing.LongContextInputTokenThreshold <= 0 {
+		return false
+	}
+	return (pricing.LongContextInputCostMultiplier > 1) != (pricing.LongContextOutputCostMultiplier > 1)
+}
+
+// warnLopsidedLongContextLadders 对单侧附加费的折算阶梯打 WARN：应成组修正该条目的
+// 基础价与 above 档（目录或 pricing.override_file）。
+func warnLopsidedLongContextLadders(entries []string) {
+	if len(entries) == 0 {
+		return
+	}
+	sort.Strings(entries)
+	total := len(entries)
+	if total > 20 {
+		entries = append(entries[:20], "...")
+	}
+	logger.LegacyPrintf("service.pricing", "[Pricing] Warning: %d model(s) derive a one-sided long-context ladder (surcharge on only input or only output); base prices and above-tier prices likely come from different price versions: %s", total, strings.Join(entries, ", "))
+}
+
+// orphanCacheTierFields 返回条目中没有对应基础价的 cache 侧 above 档字段名。
+// cache 侧 above 档会折算为相对基础价的倍率；正价若没有可用的正基础价，或折算
+// 得到非有限/非正倍率，会保留字段 presence，并在该阶梯和精确 bucket 实际使用时拒绝计费。
+// 计费对变体有回落：服务档变体（_priority/_flex）
+// 缺自身基础价时用标准基础价，1h 缓存写入缺 above_1hr 价时全部按 5m 价——因此沿
+// 回落链任一基础价存在即不算孤儿。
+func orphanCacheTierFields(rawEntry json.RawMessage) []string {
+	if !bytes.Contains(rawEntry, []byte("_above_")) {
+		return nil
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(rawEntry, &fields); err != nil {
+		return nil
+	}
+	positive := func(key string) bool {
+		price, ok := fields[key].(float64)
+		return ok && price > 0
+	}
+	var orphans []string
+	for key := range fields {
+		m := cacheTierPricePattern.FindStringSubmatch(key)
+		if m == nil || !positive(key) {
+			continue
+		}
+		stem, hourly, tier := m[1], m[2], m[3]
+		if positive(stem+hourly+tier) || positive(stem+hourly) || positive(stem+tier) || positive(stem) {
+			continue
+		}
+		orphans = append(orphans, key)
+	}
+	sort.Strings(orphans)
+	return orphans
+}
+
+// warnOrphanCacheTierFields 对带 cache 侧 above 档却没有基础价的条目打 WARN：
+// 该缓存分项激活时会 typed fail-closed；目录或 pricing.override_file 补上基础价即可消除。
+func warnOrphanCacheTierFields(entries []string) {
+	if len(entries) == 0 {
+		return
+	}
+	sort.Strings(entries)
+	total := len(entries)
+	if total > 20 {
+		entries = append(entries[:20], "...")
+	}
+	logger.LegacyPrintf("service.pricing", "[Pricing] Warning: %d model(s) carry cache above-tier prices without a usable base cache price; the active exact bucket fails closed until the catalog/override supplies the base: %s", total, strings.Join(entries, ", "))
+}
+
+// applyPricingOverrides 把 override 文件的条目逐字段修补进原始目录数据。目录与回退
+// 文件的解析都经过 parsePricingData，因此 override 是最高优先级的数据源。这里只修补
+// 已存在的条目：目录/回退里都没有的模型由 mergeOverrideOnlyModels 在两层数据合并后
+// 统一并入——若在此处抢先建条目，纯 override 条目会挡住回退文件中同名完整条目的合并。
+func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessage) map[string]json.RawMessage {
+	overrides := s.loadPricingOverrideEntries()
+	if len(overrides) == 0 {
+		return rawData
+	}
+	for name, patch := range overrides {
+		base, ok := rawData[name]
+		if !ok {
+			continue
+		}
+		merged, valid := mergePricingOverrideEntry(base, patch)
+		if !valid {
+			logger.LegacyPrintf("service.pricing", "[Pricing] Warning: override entry %q skipped: not a JSON object", name)
+			continue
+		}
+		rawData[name] = merged
+	}
+	return rawData
+}
+
+// loadPricingOverrideEntries 读取 override 文件的原始条目。未配置返回 nil；
+// 读取或解析失败打日志并跳过，不影响目录加载。
+func (s *PricingService) loadPricingOverrideEntries() map[string]json.RawMessage {
+	if s == nil || s.cfg == nil {
+		return nil
+	}
+	path := strings.TrimSpace(s.cfg.Pricing.OverrideFile)
+	if path == "" {
+		return nil
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Warning: override merge skipped: %v", err)
+		return nil
+	}
+	if err := rejectDuplicatePricingModelKeys(body); err != nil {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Warning: override merge skipped: %v", err)
+		return nil
+	}
+	var entries map[string]json.RawMessage
+	if err := json.Unmarshal(body, &entries); err != nil {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Warning: override merge skipped: %v", err)
+		return nil
+	}
+	return entries
+}
+
+// mergePricingOverrideEntry 在 JSON 字段层浅合并：patch 字段覆盖 base 同名字段，
+// 值为 null 的 patch 字段从结果中删除，base 为空时结果即 patch 本身。
+// patch 不是 JSON 对象时返回 ok=false。
+func mergePricingOverrideEntry(base, patch json.RawMessage) (json.RawMessage, bool) {
+	var patchFields map[string]any
+	if err := json.Unmarshal(patch, &patchFields); err != nil || patchFields == nil {
+		return nil, false
+	}
+	merged := make(map[string]any, len(patchFields))
+	if len(base) > 0 {
+		// base 非对象时忽略，仅以 patch 为准。
+		if err := json.Unmarshal(base, &merged); err != nil {
+			merged = make(map[string]any, len(patchFields))
+		}
+	}
+	for k, v := range patchFields {
+		if v == nil {
+			delete(merged, k)
+			continue
+		}
+		merged[k] = v
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// mergeOverrideOnlyModels 把 override 中目录/回退两层都不存在的模型作为独立条目并入
+// （条目须自带价格字段才能通过有效性过滤），并对最终仍未生效的条目打 WARN：
+// 模型名拼错、或纯补丁条目落在不存在的模型上时会被静默丢弃，让"已改价/已关阶梯"
+// 的运营预期与实际计费脱节，这里是唯一的哨兵。
+func (s *PricingService) mergeOverrideOnlyModels(data map[string]*LiteLLMModelPricing) map[string]*LiteLLMModelPricing {
+	overrides := s.loadPricingOverrideEntries()
+	if len(overrides) == 0 {
+		return data
+	}
+	if data == nil {
+		data = make(map[string]*LiteLLMModelPricing)
+	}
+	leftover := make(map[string]json.RawMessage)
+	for name, patch := range overrides {
+		if _, ok := data[name]; !ok {
+			leftover[name] = patch
+		}
+	}
+	if len(leftover) == 0 {
+		return data
+	}
+	// 复用主解析路径（含 above_XXXk 折算与有效性过滤）；applyPricingOverrides
+	// 对已存在条目做的自我修补是幂等的，不会二次改值。
+	if body, err := json.Marshal(leftover); err == nil {
+		if parsed, err := s.parsePricingData(body); err == nil {
+			maps.Copy(data, parsed)
+		}
+	}
+	var missing []string
+	for name := range leftover {
+		if _, ok := data[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return data
+	}
+	sort.Strings(missing)
+	logger.LegacyPrintf("service.pricing", "[Pricing] Warning: override had no effect for %d model(s): %s (unknown model name, or patch-only entry without price fields)", len(missing), strings.Join(missing, ", "))
+	return data
 }
 
 // loadPricingData 从本地文件加载价格数据
@@ -573,12 +1174,14 @@ func (s *PricingService) loadPricingData(filePath string) error {
 		return fmt.Errorf("parse pricing data: %w", err)
 	}
 	pricingData = s.mergeFallbackPricingData(pricingData)
+	pricingData = s.mergeOverrideOnlyModels(pricingData)
 
 	// 计算哈希
 	hash := sha256.Sum256(data)
 	hashStr := hex.EncodeToString(hash[:])
 
 	s.mu.Lock()
+	warnDroppedLongContextLadders(s.pricingData, pricingData)
 	s.pricingData = pricingData
 	s.localHash = hashStr
 
@@ -625,6 +1228,34 @@ func (s *PricingService) mergeFallbackPricingData(data map[string]*LiteLLMModelP
 	return data
 }
 
+// warnDroppedLongContextLadders 对比新旧目录数据：原本带长上下文阶梯的条目在新数据里
+// 丢失阈值时打 WARN。阶梯已完全数据驱动（无代码兜底），数据源一次误提交就会把阶梯
+// 静默变成基础价少收（07-14~08-21 漏收事故的形态），这里是唯一的哨兵。
+// 调用方需持有 s.mu 写锁。
+func warnDroppedLongContextLadders(old, next map[string]*LiteLLMModelPricing) {
+	if len(old) == 0 {
+		return
+	}
+	var dropped []string
+	for name, prev := range old {
+		if prev == nil || prev.LongContextInputTokenThreshold <= 0 {
+			continue
+		}
+		if cur, ok := next[name]; ok && (cur == nil || cur.LongContextInputTokenThreshold <= 0) {
+			dropped = append(dropped, name)
+		}
+	}
+	if len(dropped) == 0 {
+		return
+	}
+	sort.Strings(dropped)
+	total := len(dropped)
+	if total > 20 {
+		dropped = append(dropped[:20], "...")
+	}
+	logger.LegacyPrintf("service.pricing", "[Pricing] Long-context ladder dropped for %d model(s) after reload: %s (verify catalog/override data if unintended)", total, strings.Join(dropped, ", "))
+}
+
 // useFallbackPricing 使用回退价格文件
 func (s *PricingService) useFallbackPricing() error {
 	fallbackFile := s.cfg.Pricing.FallbackFile
@@ -642,7 +1273,7 @@ func (s *PricingService) useFallbackPricing() error {
 	}
 
 	pricingFile := s.getPricingFilePath()
-	if err := os.WriteFile(pricingFile, data, 0644); err != nil {
+	if err := os.WriteFile(pricingFile, data, 0644); err != nil { //nolint:gosec // G703: 路径为配置的数据目录 + 硬编码文件名，非请求输入
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to copy fallback: %v", err)
 	}
 

@@ -117,6 +117,31 @@ func TestAPIKeyService_AutoBinding_OpenAIIngressOpenAIModelKeepsOpenAIDefault(t 
 	require.Equal(t, PlatformOpenAI, key.Group.Platform)
 }
 
+func TestAPIKeyService_AutoBinding_ModelCatalogRequestFallsBackToValidProviderGroup(t *testing.T) {
+	userID := int64(7)
+	openaiGroupID := int64(20)
+	svc := &APIKeyService{groupRepo: &autoRoutingGroupRepoStub{byID: map[int64]*Group{
+		openaiGroupID: {ID: openaiGroupID, Platform: PlatformOpenAI, Status: StatusActive},
+	}}}
+	svc.SetProviderRouting(
+		apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}},
+		&defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeOpenAI: &openaiGroupID}},
+	)
+	key := &APIKey{
+		UserID:           userID,
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+		User:             &User{ID: userID, Status: StatusActive},
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.ModelCatalogRequest, true)
+	ctx = context.WithValue(ctx, ctxkey.IngressProvider, PlatformAnthropic)
+
+	require.NoError(t, svc.applyDefaultFollowGroup(ctx, key))
+	require.NotNil(t, key.GroupID)
+	require.Equal(t, openaiGroupID, *key.GroupID)
+	require.NotNil(t, key.Group)
+	require.Equal(t, PlatformOpenAI, key.Group.Platform)
+}
+
 func TestAPIKeyService_AutoBinding_NoIngressLeavesGroupUnresolved(t *testing.T) {
 	svc := newAutoRoutingService(t, 10, 20)
 	key := &APIKey{

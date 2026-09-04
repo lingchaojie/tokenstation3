@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 
@@ -43,6 +44,24 @@ type defaultAPIKeyGroupSettingsStub struct {
 	calls int
 }
 
+type modelCatalogGroupRepoStub struct {
+	GroupRepository
+	groups map[int64]*Group
+	errs   map[int64]error
+}
+
+func (s *modelCatalogGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
+	if err := s.errs[id]; err != nil {
+		return nil, err
+	}
+	group := s.groups[id]
+	if group == nil {
+		return nil, ErrGroupNotFound
+	}
+	clone := *group
+	return &clone, nil
+}
+
 func (s *defaultAPIKeyGroupSettingsStub) GetDefaultAPIKeyGroupID(_ context.Context, keyType string) (*int64, error) {
 	s.calls++
 	return s.ids[keyType], nil
@@ -67,6 +86,15 @@ type apiKeyProviderRoutingCreateRepoStub struct {
 	exists  bool
 }
 
+type apiKeyAvailableGroupsRepoStub struct {
+	groupRepoStubForGroupUpdate
+	groups []Group
+}
+
+func (s *apiKeyAvailableGroupsRepoStub) ListActive(context.Context) ([]Group, error) {
+	return append([]Group(nil), s.groups...), nil
+}
+
 func (s *apiKeyProviderRoutingCreateRepoStub) Create(_ context.Context, key *APIKey) error {
 	clone := *key
 	s.created = &clone
@@ -79,6 +107,109 @@ func (s *apiKeyProviderRoutingCreateRepoStub) ExistsByKey(context.Context, strin
 
 func (s *apiKeyRepoStubForGroupUpdate) GetWebChatKeyByUserAndGroup(context.Context, int64, int64) (*APIKey, error) {
 	panic("unexpected")
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_UnifiedUsesAuthorizedProviderRoutes(t *testing.T) {
+	userID := int64(42)
+	anthropicID := int64(3)
+	openAIID := int64(6)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{groups: map[int64]*Group{
+		anthropicID: {ID: anthropicID, Platform: PlatformAnthropic, Status: StatusActive},
+		openAIID:    {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive},
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
+		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: openAIID},
+	}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &anthropicID}})
+
+	apiKey := &APIKey{
+		UserID:           userID,
+		User:             &User{ID: userID, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	}
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), apiKey)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{anthropicID, openAIID}, []int64{groups[0].ID, groups[1].ID})
+	require.Nil(t, apiKey.GroupID)
+	require.Nil(t, apiKey.Group)
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_UnifiedSkipsMissingProviderDefault(t *testing.T) {
+	userID := int64(42)
+	openAIID := int64(6)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{groups: map[int64]*Group{
+		openAIID: {ID: openAIID, Platform: PlatformOpenAI, Status: StatusActive},
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
+		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: openAIID},
+	}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{}})
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		UserID:           userID,
+		User:             &User{ID: userID, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{openAIID}, []int64{groups[0].ID})
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_UnifiedSkipsInvalidOrForbiddenProviderGroup(t *testing.T) {
+	userID := int64(42)
+	invalidAnthropicID := int64(3)
+	forbiddenOpenAIID := int64(6)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{groups: map[int64]*Group{
+		invalidAnthropicID: {ID: invalidAnthropicID, Platform: PlatformAnthropic, Status: StatusDisabled},
+		forbiddenOpenAIID:  {ID: forbiddenOpenAIID, Platform: PlatformOpenAI, Status: StatusActive, IsExclusive: true},
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{
+		providerRouteKey(userID, APIKeyTypeOpenAI): {UserID: userID, KeyType: APIKeyTypeOpenAI, GroupID: forbiddenOpenAIID},
+	}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &invalidAnthropicID}})
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		UserID:           userID,
+		User:             &User{ID: userID, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, groups)
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_StaticReturnsCurrentGroupOnly(t *testing.T) {
+	settings := &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{}}
+	group := &Group{ID: 9, Platform: PlatformOpenAI, Status: StatusActive}
+	svc := &APIKeyService{}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{}, settings)
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		GroupBindingMode: APIKeyGroupBindingModeStatic,
+		Group:            group,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []*Group{group}, groups)
+	require.Zero(t, settings.calls)
+}
+
+func TestAPIKeyService_ResolveModelCatalogGroups_PropagatesRepositoryFailure(t *testing.T) {
+	repositoryFailure := errors.New("group repository unavailable")
+	anthropicID := int64(3)
+	svc := &APIKeyService{groupRepo: &modelCatalogGroupRepoStub{errs: map[int64]error{
+		anthropicID: repositoryFailure,
+	}}}
+	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{
+		APIKeyTypeAnthropic: &anthropicID,
+	}})
+
+	groups, err := svc.ResolveModelCatalogGroups(context.Background(), &APIKey{
+		UserID:           42,
+		User:             &User{ID: 42, Status: StatusActive},
+		GroupBindingMode: APIKeyGroupBindingModeAuto,
+	})
+
+	require.Nil(t, groups)
+	require.ErrorIs(t, err, repositoryFailure)
 }
 
 func TestAPIKeyService_ResolveProviderGroup_UsesUserProviderRoute(t *testing.T) {
@@ -113,27 +244,134 @@ func TestAPIKeyService_ResolveProviderGroup_FallsBackToGlobalProviderRoute(t *te
 	require.Equal(t, PlatformAnthropic, group.Platform)
 }
 
-// Mode-agnostic access: a subscription-mode default group must be resolvable even
-// when the user has no group-bound subscription for it (their universal/generic
-// subscription applies at billing time). Previously canUserBindGroup required a
-// group-bound subscription for subscription-type groups and rejected resolution.
-func TestAPIKeyService_ResolveProviderGroup_AllowsSubscriptionModeGroupWithoutGroupBoundSubscription(t *testing.T) {
+func TestAPIKeyService_ResolveProviderGroup_RequiresActiveSubscriptionForSubscriptionGroup(t *testing.T) {
 	userID := int64(42)
 	defaultGroupID := int64(3)
-	svc := &APIKeyService{groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
-		ID:               defaultGroupID,
-		Platform:         PlatformAnthropic,
-		Status:           StatusActive,
-		SubscriptionType: SubscriptionTypeSubscription,
-	}}}
+	svc := &APIKeyService{
+		groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
+			ID:               defaultGroupID,
+			Platform:         PlatformAnthropic,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeSubscription,
+		}},
+		userSubRepo: &userSubRepoStubForGroupUpdate{getActiveErr: ErrSubscriptionNotFound},
+	}
 	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
 
 	groupID, group, err := svc.resolveProviderGroupForCreate(context.Background(), &User{ID: userID, Status: StatusActive}, APIKeyTypeAnthropic)
 
+	require.ErrorIs(t, err, ErrGroupNotAllowed)
+	require.Nil(t, groupID)
+	require.Nil(t, group)
+}
+
+func TestAPIKeyService_ResolveProviderGroup_ActiveSubscriptionStillRequiresCanonicalACL(t *testing.T) {
+	const userID int64 = 42
+	defaultGroupID := int64(3)
+	newService := func() *APIKeyService {
+		svc := &APIKeyService{
+			groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
+				ID:               defaultGroupID,
+				Platform:         PlatformAnthropic,
+				Status:           StatusActive,
+				SubscriptionType: SubscriptionTypeSubscription,
+			}},
+			userSubRepo: &userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: userID, GroupID: defaultGroupID}},
+		}
+		svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
+		return svc
+	}
+
+	for _, tt := range []struct {
+		name          string
+		allowedGroups []int64
+		wantErr       bool
+	}{
+		{name: "listed", allowedGroups: []int64{defaultGroupID}},
+		{name: "unlisted", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &User{ID: userID, Status: StatusActive, AllowedGroups: tt.allowedGroups}
+			task4SetBoolField(user, "RestrictPublicGroups", true)
+
+			groupID, group, err := newService().resolveProviderGroupForCreate(context.Background(), user, APIKeyTypeAnthropic)
+
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrGroupNotAllowed)
+				require.Nil(t, groupID)
+				require.Nil(t, group)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, defaultGroupID, *groupID)
+			require.Equal(t, defaultGroupID, group.ID)
+		})
+	}
+}
+
+func TestAPIKeyService_Create_ActiveSubscriptionStillRequiresCanonicalACL(t *testing.T) {
+	const userID int64 = 42
+	defaultGroupID := int64(3)
+
+	for _, tt := range []struct {
+		name          string
+		allowedGroups []int64
+		wantErr       bool
+	}{
+		{name: "listed", allowedGroups: []int64{defaultGroupID}},
+		{name: "unlisted", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &User{ID: userID, Status: StatusActive, AllowedGroups: tt.allowedGroups}
+			task4SetBoolField(user, "RestrictPublicGroups", true)
+			apiKeyRepo := &apiKeyProviderRoutingCreateRepoStub{}
+			svc := NewAPIKeyService(
+				apiKeyRepo,
+				&apiKeyProviderRoutingUserRepoStub{user: user},
+				&groupRepoStubForGroupUpdate{group: &Group{ID: defaultGroupID, Platform: PlatformAnthropic, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription}},
+				&userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: userID, GroupID: defaultGroupID}},
+				nil, nil, nil,
+			)
+			svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
+			customKey := "subscription-canonical-acl-" + tt.name
+
+			created, err := svc.Create(context.Background(), userID, CreateAPIKeyRequest{Name: tt.name, KeyType: APIKeyTypeAnthropic, CustomKey: &customKey})
+
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrGroupNotAllowed)
+				require.Nil(t, created)
+				require.Nil(t, apiKeyRepo.created)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, defaultGroupID, *created.GroupID)
+			require.NotNil(t, apiKeyRepo.created)
+		})
+	}
+}
+
+func TestAPIKeyService_GetAvailableGroups_ActiveSubscriptionStillRequiresCanonicalACL(t *testing.T) {
+	const userID int64 = 42
+	listedGroupID := int64(3)
+	unlistedGroupID := int64(4)
+	user := &User{ID: userID, Status: StatusActive, AllowedGroups: []int64{listedGroupID}}
+	task4SetBoolField(user, "RestrictPublicGroups", true)
+	svc := NewAPIKeyService(
+		nil,
+		&apiKeyProviderRoutingUserRepoStub{user: user},
+		&apiKeyAvailableGroupsRepoStub{groups: []Group{
+			{ID: listedGroupID, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription},
+			{ID: unlistedGroupID, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription},
+		}},
+		&userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: userID}},
+		nil, nil, nil,
+	)
+
+	groups, err := svc.GetAvailableGroups(context.Background(), userID)
+
 	require.NoError(t, err)
-	require.NotNil(t, groupID)
-	require.Equal(t, defaultGroupID, *groupID)
-	require.NotNil(t, group)
+	require.Len(t, groups, 1)
+	require.Equal(t, listedGroupID, groups[0].ID)
 }
 
 func TestAPIKeyService_ResolveProviderGroup_RejectsMissingDefault(t *testing.T) {

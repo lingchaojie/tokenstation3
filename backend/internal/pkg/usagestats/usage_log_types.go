@@ -209,14 +209,16 @@ type UserBreakdownDimension struct {
 	ModelType    string // "requested", "upstream", or "mapping"
 	Endpoint     string // filter by endpoint value (non-empty to enable)
 	EndpointType string // "inbound", "upstream", or "path"
-	// Additional filter conditions
-	UserID          int64   // filter by user_id (>0 to enable)
-	ExcludedUserIDs []int64 // exclude matching user IDs when non-empty
-	APIKeyID        int64   // filter by api_key_id (>0 to enable)
-	AccountID       int64   // filter by account_id (>0 to enable)
-	RequestType     *int16  // filter by request_type (non-nil to enable)
-	Stream          *bool   // filter by stream flag (non-nil to enable)
-	BillingType     *int8   // filter by billing_type (non-nil to enable)
+	// Additional filter conditions. User ownership/exclusion scope is applied
+	// before the optional observability filters by repository callers.
+	UserID             int64   // filter by user_id (>0 to enable)
+	ExcludedUserIDs    []int64 // exclude matching user IDs when non-empty
+	APIKeyID           int64   // filter by api_key_id (>0 to enable)
+	AccountID          int64   // filter by account_id (>0 to enable)
+	RequestType        *int16  // filter by request_type (non-nil to enable)
+	Stream             *bool   // filter by stream flag (non-nil to enable)
+	NativeCompactionV2 *bool   // filter by native compaction v2 flag (non-nil to enable)
+	BillingType        *int8   // filter by billing_type (non-nil to enable)
 	// SortBy 指定排序列(空 = 默认按 actual_cost)。合法值由 repo 层 allowlist 校验。
 	SortBy string
 }
@@ -297,18 +299,25 @@ type UsageLogFilters struct {
 	ExcludedUserIDs []int64
 	APIKeyID        int64
 	AccountID       int64
+	ChannelID       int64
 	GroupID         int64
 	RequestID       string
 	Model           string
 	// ModelFilterSource controls how Model is matched. Empty preserves raw usage_logs.model semantics.
-	ModelFilterSource     string
-	RequestType           *int16
-	Stream                *bool
-	BillingType           *int8
-	BillingMode           string
-	UpstreamModelMismatch *bool
-	StartTime             *time.Time
-	EndTime               *time.Time
+	ModelFilterSource        string
+	ServiceTier              string
+	ReasoningEffort          string
+	RequestedReasoningEffort string
+	InboundEndpoint          string
+	UpstreamEndpoint         string
+	RequestType              *int16
+	Stream                   *bool
+	NativeCompactionV2       *bool
+	BillingType              *int8
+	BillingMode              string
+	UpstreamModelMismatch    *bool
+	StartTime                *time.Time
+	EndTime                  *time.Time
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
 	ExactTotal bool
 }

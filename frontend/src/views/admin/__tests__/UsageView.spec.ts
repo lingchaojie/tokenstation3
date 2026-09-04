@@ -292,6 +292,71 @@ describe('admin UsageView route filters', () => {
   })
 })
 
+describe('admin UsageView native compaction filter', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockReset().mockResolvedValue({
+      total_requests: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_tokens: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      total_actual_cost: 0,
+      average_duration_ms: 0,
+    })
+    getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockReset().mockResolvedValue({ models: [] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('propagates the filter to list/stats/model/snapshot requests and clears it on reset', async () => {
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    list.mockClear()
+    getStats.mockClear()
+    getModelStats.mockClear()
+    getSnapshotV2.mockClear()
+
+    ;(wrapper.vm as any).filters.native_compaction_v2 = true
+    ;(wrapper.vm as any).applyFilters()
+    await flushPromises()
+
+    expect((wrapper.vm as any).breakdownFilters.native_compaction_v2).toBe(true)
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ native_compaction_v2: true }),
+      expect.anything()
+    )
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: true }))
+    expect(getModelStats).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: true }))
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: true }))
+
+    list.mockClear()
+    getStats.mockClear()
+    getModelStats.mockClear()
+    getSnapshotV2.mockClear()
+
+    ;(wrapper.vm as any).resetFilters()
+    await flushPromises()
+
+    expect((wrapper.vm as any).filters.native_compaction_v2).toBeNull()
+    expect((wrapper.vm as any).breakdownFilters).not.toHaveProperty('native_compaction_v2')
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ native_compaction_v2: null }),
+      expect.anything()
+    )
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: null }))
+    expect(getModelStats).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: null }))
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: null }))
+  })
+})
+
 describe('admin UsageView distribution metric toggles', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -910,7 +975,7 @@ describe('admin UsageView excluded-user propagation', () => {
     vi.useRealTimers()
   })
 
-  it('applies exclusions to every page request and the export list builder', async () => {
+  it('applies exclusions and billing/model filters to every page and chart request', async () => {
     const wrapper = mount(UsageView, {
       global: { stubs: {
         AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
@@ -932,21 +997,26 @@ describe('admin UsageView excluded-user propagation', () => {
 
     const vm = wrapper.vm as any
     vm.filters.exclude_user_ids = [8, 3]
+		vm.filters.model = 'gpt-5.6-sol'
+		vm.filters.billing_mode = 'image'
     expect(vm.breakdownFilters).toEqual(expect.objectContaining({ exclude_user_ids: [8, 3] }))
     vm.activeTab = 'errors'
     vm.applyFilters()
     await flushPromises()
 
-    const excluded = { exclude_user_ids: [8, 3] }
-    expect(list).toHaveBeenCalledWith(expect.objectContaining(excluded), expect.anything())
-    expect(getStats).toHaveBeenCalledWith(expect.objectContaining(excluded))
-    expect(getModelStats).toHaveBeenCalledWith(expect.objectContaining(excluded))
-    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining(excluded))
-    expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining(excluded))
+    const filters = { exclude_user_ids: [8, 3], model: 'gpt-5.6-sol', billing_mode: 'image' }
+    expect(list).toHaveBeenCalledWith(expect.objectContaining(filters), expect.anything())
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining(filters))
+    expect(getModelStats).toHaveBeenCalledWith(expect.objectContaining(filters))
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining(filters))
+		expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining({
+			exclude_user_ids: [8, 3],
+			model: 'gpt-5.6-sol',
+		}))
 
     await vm.exportToExcel()
     expect(adminUsageList).toHaveBeenCalledWith(
-      expect.objectContaining({ ...excluded, page: 1, page_size: 100, exact_total: true }),
+			expect.objectContaining({ ...filters, page: 1, page_size: 100, exact_total: true }),
       expect.anything(),
     )
   })
@@ -1102,9 +1172,15 @@ describe('admin UsageView model audit export', () => {
 		const wrapper = mountRouteFilteredUsageView()
 		vi.advanceTimersByTime(120)
 		await flushPromises()
+		;(wrapper.vm as any).filters.native_compaction_v2 = true
 
 		await (wrapper.vm as any).exportToExcel()
 		await flushPromises()
+
+		expect(exportList).toHaveBeenCalledWith(
+			expect.objectContaining({ native_compaction_v2: true }),
+			expect.anything()
+		)
 
 		const headers = aoaToSheet.mock.calls[0][0][0]
 		expect(headers.slice(4, 8)).toEqual([

@@ -4,6 +4,7 @@ package ent
 
 import (
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"strings"
 	"time"
@@ -57,9 +58,11 @@ type User struct {
 	// BeginnerGuidePromptState holds the value of the "beginner_guide_prompt_state" field.
 	BeginnerGuidePromptState string `json:"beginner_guide_prompt_state,omitempty"`
 	// BeginnerGuideProgress holds the value of the "beginner_guide_progress" field.
-	BeginnerGuideProgress json.RawMessage `json:"beginner_guide_progress,omitempty"`
+	BeginnerGuideProgress jsontext.Value `json:"beginner_guide_progress,omitempty"`
 	// BeginnerGuideCompletedAt holds the value of the "beginner_guide_completed_at" field.
 	BeginnerGuideCompletedAt *time.Time `json:"beginner_guide_completed_at,omitempty"`
+	// RestrictPublicGroups holds the value of the "restrict_public_groups" field.
+	RestrictPublicGroups bool `json:"restrict_public_groups,omitempty"`
 	// BalanceNotifyEnabled holds the value of the "balance_notify_enabled" field.
 	BalanceNotifyEnabled bool `json:"balance_notify_enabled,omitempty"`
 	// SubscriptionBalanceFallbackEnabled holds the value of the "subscription_balance_fallback_enabled" field.
@@ -270,7 +273,7 @@ func (*User) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case user.FieldBeginnerGuideProgress:
 			values[i] = new([]byte)
-		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled, user.FieldSubscriptionBalanceFallbackEnabled:
+		case user.FieldTotpEnabled, user.FieldRestrictPublicGroups, user.FieldBalanceNotifyEnabled, user.FieldSubscriptionBalanceFallbackEnabled:
 			values[i] = new(sql.NullBool)
 		case user.FieldBalance, user.FieldFrozenBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
@@ -434,6 +437,12 @@ func (_m *User) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.BeginnerGuideCompletedAt = new(time.Time)
 				*_m.BeginnerGuideCompletedAt = value.Time
+			}
+		case user.FieldRestrictPublicGroups:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field restrict_public_groups", values[i])
+			} else if value.Valid {
+				_m.RestrictPublicGroups = value.Bool
 			}
 		case user.FieldBalanceNotifyEnabled:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -668,6 +677,9 @@ func (_m *User) String() string {
 		builder.WriteString("beginner_guide_completed_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("restrict_public_groups=")
+	builder.WriteString(fmt.Sprintf("%v", _m.RestrictPublicGroups))
 	builder.WriteString(", ")
 	builder.WriteString("balance_notify_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.BalanceNotifyEnabled))

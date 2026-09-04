@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
@@ -64,10 +63,13 @@ func TestEstimateImageTokensUsesDimensionsNotEncodedLength(t *testing.T) {
 	require.NoError(t, png.Encode(&flatPNG, flat))
 
 	noisy := image.NewRGBA(image.Rect(0, 0, 512, 512))
-	for y := 0; y < 512; y++ {
-		for x := 0; x < 512; x++ {
-			noisy.SetRGBA(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: uint8(x ^ y), A: 255})
-		}
+	// Use deterministic high-entropy bytes. The former x/y/xor pattern became
+	// more compressible than a transparent image with Go 1.27's PNG encoder,
+	// invalidating the fixture's encoded-length precondition.
+	state := uint32(1)
+	for i := range noisy.Pix {
+		state = 1664525*state + 1013904223
+		noisy.Pix[i] = byte(state >> 24)
 	}
 	var noisyPNG bytes.Buffer
 	require.NoError(t, png.Encode(&noisyPNG, noisy))

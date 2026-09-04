@@ -1,0 +1,9 @@
+MATRIX ordinal=6
+MATRIX command=make build-backend
+MATRIX start=2026-09-03T18:00:26.524113921Z
+make[1]: Entering directory '/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/backend'
+CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=0.1.185" -trimpath -o bin/server ./cmd/server
+make[1]: Leaving directory '/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/backend'
+MATRIX end=2026-09-03T18:00:33.933966869Z
+MATRIX exit=0
+MATRIX summary=backend build passed

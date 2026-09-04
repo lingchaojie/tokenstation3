@@ -331,12 +331,12 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, "2026-08-20", resp.Data.UpdatedAt)
-	require.Len(t, resp.Data.Models, 37)
+	require.Equal(t, "2026-09-03", resp.Data.UpdatedAt)
+	require.Len(t, resp.Data.Models, 38)
 	require.Len(t, resp.Data.Providers, 8)
 	require.Equal(t, "anthropic", resp.Data.Providers[0].Key)
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
-	require.Equal(t, 10, resp.Data.Providers[0].ModelCount)
+	require.Equal(t, 11, resp.Data.Providers[0].ModelCount)
 
 	for _, provider := range resp.Data.Providers {
 		key := strings.ToLower(provider.Key)
@@ -397,7 +397,15 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 		}
 	}
 	require.NotEmpty(t, anthropic)
-	require.Equal(t, "claude-opus-5", anthropic[0].ModelName)
+	require.Equal(t, "claude-fable-5-1", anthropic[0].ModelName)
+	require.Equal(t, 0.25, anthropic[0].Pricing.CacheReadPerMillion)
+	require.Equal(t, 2, len(anthropic[0].Pricing.PriceLines))
+	require.Equal(t, "5m cache write", anthropic[0].Pricing.PriceLines[0].Label)
+	require.Equal(t, 12.5, anthropic[0].Pricing.PriceLines[0].Amount)
+	require.Equal(t, "1M tokens", anthropic[0].Pricing.PriceLines[0].Unit)
+	require.Equal(t, "1h cache write", anthropic[0].Pricing.PriceLines[1].Label)
+	require.Equal(t, 20.0, anthropic[0].Pricing.PriceLines[1].Amount)
+	require.Equal(t, "1M tokens", anthropic[0].Pricing.PriceLines[1].Unit)
 	for idx := 1; idx < len(anthropic); idx++ {
 		require.GreaterOrEqual(t, anthropic[idx-1].ReleasedAt, anthropic[idx].ReleasedAt)
 	}

@@ -57,6 +57,8 @@ const (
 	FieldBeginnerGuideProgress = "beginner_guide_progress"
 	// FieldBeginnerGuideCompletedAt holds the string denoting the beginner_guide_completed_at field in the database.
 	FieldBeginnerGuideCompletedAt = "beginner_guide_completed_at"
+	// FieldRestrictPublicGroups holds the string denoting the restrict_public_groups field in the database.
+	FieldRestrictPublicGroups = "restrict_public_groups"
 	// FieldBalanceNotifyEnabled holds the string denoting the balance_notify_enabled field in the database.
 	FieldBalanceNotifyEnabled = "balance_notify_enabled"
 	// FieldSubscriptionBalanceFallbackEnabled holds the string denoting the subscription_balance_fallback_enabled field in the database.
@@ -241,6 +243,7 @@ var Columns = []string{
 	FieldBeginnerGuidePromptState,
 	FieldBeginnerGuideProgress,
 	FieldBeginnerGuideCompletedAt,
+	FieldRestrictPublicGroups,
 	FieldBalanceNotifyEnabled,
 	FieldSubscriptionBalanceFallbackEnabled,
 	FieldBalanceNotifyThresholdType,
@@ -314,6 +317,8 @@ var (
 	DefaultBeginnerGuidePromptState string
 	// BeginnerGuidePromptStateValidator is a validator for the "beginner_guide_prompt_state" field. It is called by the builders before save.
 	BeginnerGuidePromptStateValidator func(string) error
+	// DefaultRestrictPublicGroups holds the default value on creation for the "restrict_public_groups" field.
+	DefaultRestrictPublicGroups bool
 	// DefaultBalanceNotifyEnabled holds the default value on creation for the "balance_notify_enabled" field.
 	DefaultBalanceNotifyEnabled bool
 	// DefaultSubscriptionBalanceFallbackEnabled holds the default value on creation for the "subscription_balance_fallback_enabled" field.
@@ -434,6 +439,11 @@ func ByBeginnerGuidePromptState(opts ...sql.OrderTermOption) OrderOption {
 // ByBeginnerGuideCompletedAt orders the results by the beginner_guide_completed_at field.
 func ByBeginnerGuideCompletedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBeginnerGuideCompletedAt, opts...).ToFunc()
+}
+
+// ByRestrictPublicGroups orders the results by the restrict_public_groups field.
+func ByRestrictPublicGroups(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRestrictPublicGroups, opts...).ToFunc()
 }
 
 // ByBalanceNotifyEnabled orders the results by the balance_notify_enabled field.

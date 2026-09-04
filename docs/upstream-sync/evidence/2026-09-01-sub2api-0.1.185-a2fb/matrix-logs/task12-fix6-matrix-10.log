@@ -1,0 +1,7 @@
+MATRIX ordinal=10
+MATRIX command=/bin/sh deploy/tests/docker-runtime-resources-test.sh
+MATRIX start=2026-09-03T18:00:36.461025810Z
+docker runtime resources test passed
+MATRIX end=2026-09-03T18:00:36.474958566Z
+MATRIX exit=0
+MATRIX summary=runtime resources test passed

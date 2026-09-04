@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 import UserDashboardRecentUsage from './UserDashboardRecentUsage.vue'
+import type { UsageLog } from '@/types'
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -36,7 +37,6 @@ describe('UserDashboardRecentUsage', () => {
     id: 1,
     user_id: 1,
     api_key_id: 1,
-    account_id: null,
     request_id: 'req_1',
     model: 'gpt-5.4',
     group_id: null,
@@ -69,9 +69,10 @@ describe('UserDashboardRecentUsage', () => {
     user_agent: null,
     cache_ttl_overridden: false,
     created_at: '2026-03-08T00:00:00Z',
-  }
+  } satisfies UsageLog
 
   it('shows only the billed actual cost by default', () => {
+		expect(row).not.toHaveProperty('account_id')
     const wrapper = mount(UserDashboardRecentUsage, {
       props: { data: [row], loading: false },
       global: {

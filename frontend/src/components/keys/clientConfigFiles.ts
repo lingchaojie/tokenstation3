@@ -13,6 +13,9 @@ export interface ClientConfigInput {
   allowMessagesDispatch?: boolean
   windowsShell?: WindowsGuideShell
   codexAuthMode?: 'legacy' | 'api-key'
+  codexModel?: string
+  codexReasoningEffort?: string | null
+  codexModelCatalogPath?: string
 }
 
 export interface ClientConfigFile {
@@ -22,15 +25,23 @@ export interface ClientConfigFile {
   hint?: string
 }
 
-function gatewayRoots(baseUrl: string): { bare: string; v1: string } {
-  const bare = baseUrl.trim().replace(/\/v1\/?$/, '').replace(/\/+$/, '')
-  return { bare, v1: `${bare}/v1` }
+function gatewayRoot(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/v1\/?$/, '').replace(/\/+$/, '')
 }
 
 function openCodePath(os: SupportedGuideOS): string {
   return os === 'windows'
     ? '%userprofile%\\.config\\opencode\\opencode.json'
     : '~/.config/opencode/opencode.json'
+}
+
+function escapeTomlBasicString(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
 }
 
 function buildOpenCodeFile(
@@ -106,7 +117,7 @@ Wire API: responses`,
 }
 
 export function buildClientConfigFiles(input: ClientConfigInput): ClientConfigFile[] {
-  const { bare, v1 } = gatewayRoots(input.baseUrl)
+  const bare = gatewayRoot(input.baseUrl)
 
   if (input.client === 'claude_code') {
     const isWindows = input.os === 'windows'
@@ -156,29 +167,29 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   if (input.client === 'opencode') {
     if (input.platform === 'unified') {
       return [
-        buildOpenCodeFile(input, 'anthropic', v1, 'Claude'),
-        buildOpenCodeFile(input, 'openai', v1, 'OpenAI')
+        buildOpenCodeFile(input, 'anthropic', bare, 'Claude'),
+        buildOpenCodeFile(input, 'openai', bare, 'OpenAI')
       ]
     }
     if (input.platform === 'anthropic' || input.platform === 'antigravity') {
-      const endpoint = input.platform === 'antigravity' ? `${bare}/antigravity/v1` : v1
+      const endpoint = input.platform === 'antigravity' ? `${bare}/antigravity` : bare
       return [buildOpenCodeFile(input, 'anthropic', endpoint)]
     }
-    return [buildOpenCodeFile(input, 'openai', v1)]
+    return [buildOpenCodeFile(input, 'openai', bare)]
   }
 
   if (input.client === 'cc_switch') {
     if (input.platform === 'unified') {
       return [
         buildCcSwitchClaudeFile(bare, input.apiKey),
-        buildCcSwitchCodexFile(v1, input.apiKey)
+        buildCcSwitchCodexFile(bare, input.apiKey)
       ]
     }
     if (input.platform === 'anthropic' || input.platform === 'antigravity') {
       const endpoint = input.platform === 'antigravity' ? `${bare}/antigravity` : bare
       return [buildCcSwitchClaudeFile(endpoint, input.apiKey)]
     }
-    return [buildCcSwitchCodexFile(v1, input.apiKey)]
+    return [buildCcSwitchCodexFile(bare, input.apiKey)]
   }
 
   const configDir = input.os === 'windows' ? '%userprofile%\\.codex' : '~/.codex'
@@ -186,17 +197,23 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     ? `requires_openai_auth = false
 http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
     : 'requires_openai_auth = false'
+  const codexModel = escapeTomlBasicString(input.codexModel || 'gpt-5.5')
+  const reasoningEffortLine = input.codexReasoningEffort === null
+    ? ''
+    : `model_reasoning_effort = "${escapeTomlBasicString(input.codexReasoningEffort || 'xhigh')}"\n`
+  const modelCatalogLine = input.codexModelCatalogPath
+    ? `model_catalog_json = "${escapeTomlBasicString(input.codexModelCatalogPath)}"\n`
+    : ''
   const configContent = `model_provider = "linx2ai"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
+model = "${codexModel}"
+review_model = "${codexModel}"
+${reasoningEffortLine}${modelCatalogLine}disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 
 [model_providers.linx2ai]
 name = "linx2ai"
-base_url = "${v1}"
+base_url = "${bare}"
 wire_api = "responses"
 ${providerAuthConfig}
 

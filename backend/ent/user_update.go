@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
@@ -340,13 +340,13 @@ func (_u *UserUpdate) SetNillableBeginnerGuidePromptState(v *string) *UserUpdate
 }
 
 // SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
-func (_u *UserUpdate) SetBeginnerGuideProgress(v json.RawMessage) *UserUpdate {
+func (_u *UserUpdate) SetBeginnerGuideProgress(v jsontext.Value) *UserUpdate {
 	_u.mutation.SetBeginnerGuideProgress(v)
 	return _u
 }
 
 // AppendBeginnerGuideProgress appends value to the "beginner_guide_progress" field.
-func (_u *UserUpdate) AppendBeginnerGuideProgress(v json.RawMessage) *UserUpdate {
+func (_u *UserUpdate) AppendBeginnerGuideProgress(v jsontext.Value) *UserUpdate {
 	_u.mutation.AppendBeginnerGuideProgress(v)
 	return _u
 }
@@ -374,6 +374,20 @@ func (_u *UserUpdate) SetNillableBeginnerGuideCompletedAt(v *time.Time) *UserUpd
 // ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
 func (_u *UserUpdate) ClearBeginnerGuideCompletedAt() *UserUpdate {
 	_u.mutation.ClearBeginnerGuideCompletedAt()
+	return _u
+}
+
+// SetRestrictPublicGroups sets the "restrict_public_groups" field.
+func (_u *UserUpdate) SetRestrictPublicGroups(v bool) *UserUpdate {
+	_u.mutation.SetRestrictPublicGroups(v)
+	return _u
+}
+
+// SetNillableRestrictPublicGroups sets the "restrict_public_groups" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableRestrictPublicGroups(v *bool) *UserUpdate {
+	if v != nil {
+		_u.SetRestrictPublicGroups(*v)
+	}
 	return _u
 }
 
@@ -1235,6 +1249,9 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.BeginnerGuideCompletedAtCleared() {
 		_spec.ClearField(user.FieldBeginnerGuideCompletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RestrictPublicGroups(); ok {
+		_spec.SetField(user.FieldRestrictPublicGroups, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
@@ -2272,13 +2289,13 @@ func (_u *UserUpdateOne) SetNillableBeginnerGuidePromptState(v *string) *UserUpd
 }
 
 // SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
-func (_u *UserUpdateOne) SetBeginnerGuideProgress(v json.RawMessage) *UserUpdateOne {
+func (_u *UserUpdateOne) SetBeginnerGuideProgress(v jsontext.Value) *UserUpdateOne {
 	_u.mutation.SetBeginnerGuideProgress(v)
 	return _u
 }
 
 // AppendBeginnerGuideProgress appends value to the "beginner_guide_progress" field.
-func (_u *UserUpdateOne) AppendBeginnerGuideProgress(v json.RawMessage) *UserUpdateOne {
+func (_u *UserUpdateOne) AppendBeginnerGuideProgress(v jsontext.Value) *UserUpdateOne {
 	_u.mutation.AppendBeginnerGuideProgress(v)
 	return _u
 }
@@ -2306,6 +2323,20 @@ func (_u *UserUpdateOne) SetNillableBeginnerGuideCompletedAt(v *time.Time) *User
 // ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
 func (_u *UserUpdateOne) ClearBeginnerGuideCompletedAt() *UserUpdateOne {
 	_u.mutation.ClearBeginnerGuideCompletedAt()
+	return _u
+}
+
+// SetRestrictPublicGroups sets the "restrict_public_groups" field.
+func (_u *UserUpdateOne) SetRestrictPublicGroups(v bool) *UserUpdateOne {
+	_u.mutation.SetRestrictPublicGroups(v)
+	return _u
+}
+
+// SetNillableRestrictPublicGroups sets the "restrict_public_groups" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableRestrictPublicGroups(v *bool) *UserUpdateOne {
+	if v != nil {
+		_u.SetRestrictPublicGroups(*v)
+	}
 	return _u
 }
 
@@ -3197,6 +3228,9 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if _u.mutation.BeginnerGuideCompletedAtCleared() {
 		_spec.ClearField(user.FieldBeginnerGuideCompletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RestrictPublicGroups(); ok {
+		_spec.SetField(user.FieldRestrictPublicGroups, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)

@@ -89,12 +89,14 @@ func TestOpenAISelectAccountForModelWithExclusions_UpstreamRestrictionSkipsDisal
 func TestIsUpstreamModelRestrictedByChannel_CompactMappingMatchesForwardPath(t *testing.T) {
 	t.Parallel()
 
-	account := &Account{
-		Platform: PlatformOpenAI,
-		Credentials: map[string]any{
-			"model_mapping":         map[string]any{"gpt-5.4-channel": "gpt-5.4-account"},
-			"compact_model_mapping": map[string]any{"gpt-5.4-account": "gpt-5.4-compact"},
-		},
+	newAccount := func() *Account {
+		return &Account{
+			Platform: PlatformOpenAI,
+			Credentials: map[string]any{
+				"model_mapping":         map[string]any{"gpt-5.4-channel": "gpt-5.4-account"},
+				"compact_model_mapping": map[string]any{"gpt-5.4-account": "gpt-5.4-compact"},
+			},
+		}
 	}
 	tests := []struct {
 		name                   string
@@ -117,6 +119,7 @@ func TestIsUpstreamModelRestrictedByChannel_CompactMappingMatchesForwardPath(t *
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			account := newAccount()
 
 			channelSvc := newTestChannelService(makeStandardRepo(Channel{
 				ID:                 1,
@@ -220,19 +223,21 @@ func TestIsUpstreamModelRestrictedByChannel_PassthroughMatchesForwardPath(t *tes
 func TestIsUpstreamModelRestrictedByChannel_PassthroughFlagWithRawChatFallbackMatchesForwardPath(t *testing.T) {
 	t.Parallel()
 
-	account := &Account{
-		Platform: PlatformOpenAI,
-		Type:     AccountTypeAPIKey,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{"gpt-5.4-channel": "gpt-5.4-account"},
-			"compact_model_mapping": map[string]any{
-				"gpt-5.4-account": "gpt-5.4-compact",
+	newAccount := func() *Account {
+		return &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"model_mapping": map[string]any{"gpt-5.4-channel": "gpt-5.4-account"},
+				"compact_model_mapping": map[string]any{
+					"gpt-5.4-account": "gpt-5.4-compact",
+				},
 			},
-		},
-		Extra: map[string]any{
-			"openai_passthrough":         true,
-			"openai_responses_supported": false,
-		},
+			Extra: map[string]any{
+				"openai_passthrough":         true,
+				"openai_responses_supported": false,
+			},
+		}
 	}
 
 	for _, useCompactModelMapping := range []bool{false, true} {
@@ -243,6 +248,7 @@ func TestIsUpstreamModelRestrictedByChannel_PassthroughFlagWithRawChatFallbackMa
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			account := newAccount()
 
 			channelSvc := newTestChannelService(makeStandardRepo(Channel{
 				ID:                 1,

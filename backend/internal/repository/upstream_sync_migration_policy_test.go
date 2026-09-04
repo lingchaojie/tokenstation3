@@ -64,6 +64,9 @@ var upstreamSyncMigrationFilenames = []string{
 	"228_clear_non_grok_video_generation_config.sql",
 	"229_capture_spool_alert_rules.sql",
 	"230_channel_image_input_price.sql",
+	"231_add_usage_log_native_compaction_v2.sql",
+	"232_add_usage_log_requested_reasoning_effort.sql",
+	"233_user_restrict_public_groups.sql",
 }
 
 func TestUpstreamSyncMigrationSequenceStartsAfterLocal190(t *testing.T) {
@@ -185,7 +188,7 @@ CREATE TEMP TABLE groups (
 INSERT INTO groups (id, platform, video_price_480p, video_model_prices) VALUES
     (1, 'openai', 1.25, '{"model": 2.5}'),
     (2, 'grok', 2.25, '{"model": 3.5}'),
-    (3, 'composite', 3.25, '{"model": 4.5}');
+    (3, 'anthropic', 3.25, '{"model": 4.5}');
 `)
 	require.NoError(t, err)
 

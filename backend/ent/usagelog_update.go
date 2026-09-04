@@ -122,6 +122,26 @@ func (_u *UsageLogUpdate) ClearRequestedModel() *UsageLogUpdate {
 	return _u
 }
 
+// SetRequestedReasoningEffort sets the "requested_reasoning_effort" field.
+func (_u *UsageLogUpdate) SetRequestedReasoningEffort(v string) *UsageLogUpdate {
+	_u.mutation.SetRequestedReasoningEffort(v)
+	return _u
+}
+
+// SetNillableRequestedReasoningEffort sets the "requested_reasoning_effort" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableRequestedReasoningEffort(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetRequestedReasoningEffort(*v)
+	}
+	return _u
+}
+
+// ClearRequestedReasoningEffort clears the value of the "requested_reasoning_effort" field.
+func (_u *UsageLogUpdate) ClearRequestedReasoningEffort() *UsageLogUpdate {
+	_u.mutation.ClearRequestedReasoningEffort()
+	return _u
+}
+
 // SetUpstreamModel sets the "upstream_model" field.
 func (_u *UsageLogUpdate) SetUpstreamModel(v string) *UsageLogUpdate {
 	_u.mutation.SetUpstreamModel(v)
@@ -700,6 +720,20 @@ func (_u *UsageLogUpdate) SetNillableStream(v *bool) *UsageLogUpdate {
 	return _u
 }
 
+// SetNativeCompactionV2 sets the "native_compaction_v2" field.
+func (_u *UsageLogUpdate) SetNativeCompactionV2(v bool) *UsageLogUpdate {
+	_u.mutation.SetNativeCompactionV2(v)
+	return _u
+}
+
+// SetNillableNativeCompactionV2 sets the "native_compaction_v2" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableNativeCompactionV2(v *bool) *UsageLogUpdate {
+	if v != nil {
+		_u.SetNativeCompactionV2(*v)
+	}
+	return _u
+}
+
 // SetDurationMs sets the "duration_ms" field.
 func (_u *UsageLogUpdate) SetDurationMs(v int) *UsageLogUpdate {
 	_u.mutation.ResetDurationMs()
@@ -1140,6 +1174,11 @@ func (_u *UsageLogUpdate) check() error {
 			return &ValidationError{Name: "requested_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.requested_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RequestedReasoningEffort(); ok {
+		if err := usagelog.RequestedReasoningEffortValidator(v); err != nil {
+			return &ValidationError{Name: "requested_reasoning_effort", err: fmt.Errorf(`ent: validator failed for field "UsageLog.requested_reasoning_effort": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UpstreamModel(); ok {
 		if err := usagelog.UpstreamModelValidator(v); err != nil {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
@@ -1240,6 +1279,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.RequestedModelCleared() {
 		_spec.ClearField(usagelog.FieldRequestedModel, field.TypeString)
+	}
+	if value, ok := _u.mutation.RequestedReasoningEffort(); ok {
+		_spec.SetField(usagelog.FieldRequestedReasoningEffort, field.TypeString, value)
+	}
+	if _u.mutation.RequestedReasoningEffortCleared() {
+		_spec.ClearField(usagelog.FieldRequestedReasoningEffort, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpstreamModel(); ok {
 		_spec.SetField(usagelog.FieldUpstreamModel, field.TypeString, value)
@@ -1396,6 +1441,9 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Stream(); ok {
 		_spec.SetField(usagelog.FieldStream, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.NativeCompactionV2(); ok {
+		_spec.SetField(usagelog.FieldNativeCompactionV2, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.DurationMs(); ok {
 		_spec.SetField(usagelog.FieldDurationMs, field.TypeInt, value)
@@ -1754,6 +1802,26 @@ func (_u *UsageLogUpdateOne) SetNillableRequestedModel(v *string) *UsageLogUpdat
 // ClearRequestedModel clears the value of the "requested_model" field.
 func (_u *UsageLogUpdateOne) ClearRequestedModel() *UsageLogUpdateOne {
 	_u.mutation.ClearRequestedModel()
+	return _u
+}
+
+// SetRequestedReasoningEffort sets the "requested_reasoning_effort" field.
+func (_u *UsageLogUpdateOne) SetRequestedReasoningEffort(v string) *UsageLogUpdateOne {
+	_u.mutation.SetRequestedReasoningEffort(v)
+	return _u
+}
+
+// SetNillableRequestedReasoningEffort sets the "requested_reasoning_effort" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableRequestedReasoningEffort(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetRequestedReasoningEffort(*v)
+	}
+	return _u
+}
+
+// ClearRequestedReasoningEffort clears the value of the "requested_reasoning_effort" field.
+func (_u *UsageLogUpdateOne) ClearRequestedReasoningEffort() *UsageLogUpdateOne {
+	_u.mutation.ClearRequestedReasoningEffort()
 	return _u
 }
 
@@ -2335,6 +2403,20 @@ func (_u *UsageLogUpdateOne) SetNillableStream(v *bool) *UsageLogUpdateOne {
 	return _u
 }
 
+// SetNativeCompactionV2 sets the "native_compaction_v2" field.
+func (_u *UsageLogUpdateOne) SetNativeCompactionV2(v bool) *UsageLogUpdateOne {
+	_u.mutation.SetNativeCompactionV2(v)
+	return _u
+}
+
+// SetNillableNativeCompactionV2 sets the "native_compaction_v2" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableNativeCompactionV2(v *bool) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetNativeCompactionV2(*v)
+	}
+	return _u
+}
+
 // SetDurationMs sets the "duration_ms" field.
 func (_u *UsageLogUpdateOne) SetDurationMs(v int) *UsageLogUpdateOne {
 	_u.mutation.ResetDurationMs()
@@ -2788,6 +2870,11 @@ func (_u *UsageLogUpdateOne) check() error {
 			return &ValidationError{Name: "requested_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.requested_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RequestedReasoningEffort(); ok {
+		if err := usagelog.RequestedReasoningEffortValidator(v); err != nil {
+			return &ValidationError{Name: "requested_reasoning_effort", err: fmt.Errorf(`ent: validator failed for field "UsageLog.requested_reasoning_effort": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UpstreamModel(); ok {
 		if err := usagelog.UpstreamModelValidator(v); err != nil {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
@@ -2905,6 +2992,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.RequestedModelCleared() {
 		_spec.ClearField(usagelog.FieldRequestedModel, field.TypeString)
+	}
+	if value, ok := _u.mutation.RequestedReasoningEffort(); ok {
+		_spec.SetField(usagelog.FieldRequestedReasoningEffort, field.TypeString, value)
+	}
+	if _u.mutation.RequestedReasoningEffortCleared() {
+		_spec.ClearField(usagelog.FieldRequestedReasoningEffort, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpstreamModel(); ok {
 		_spec.SetField(usagelog.FieldUpstreamModel, field.TypeString, value)
@@ -3061,6 +3154,9 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if value, ok := _u.mutation.Stream(); ok {
 		_spec.SetField(usagelog.FieldStream, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.NativeCompactionV2(); ok {
+		_spec.SetField(usagelog.FieldNativeCompactionV2, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.DurationMs(); ok {
 		_spec.SetField(usagelog.FieldDurationMs, field.TypeInt, value)

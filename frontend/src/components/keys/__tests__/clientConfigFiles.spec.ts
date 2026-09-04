@@ -21,7 +21,7 @@ windows_wsl_setup_acknowledged = true
 
 [model_providers.linx2ai]
 name = "linx2ai"
-base_url = "https://gateway.example.com/v1"
+base_url = "https://gateway.example.com"
 wire_api = "responses"
 requires_openai_auth = false
 
@@ -129,13 +129,14 @@ set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     ])
   })
 
-  it('normalizes a trailing /v1/ to a bare Claude root and one Codex /v1', () => {
+  it('normalizes a trailing /v1/ to the bare gateway root for every generated client', () => {
     const claudeFiles = buildClientConfigFiles(input())
     const codexFiles = buildClientConfigFiles(input({ client: 'codex' }))
+    const openCodeFiles = buildClientConfigFiles(input({ client: 'opencode' }))
+    const ccSwitchFiles = buildClientConfigFiles(input({ client: 'cc_switch' }))
 
-    expect(claudeFiles.every((file) => !file.content.includes('https://gateway.example.com/v1'))).toBe(true)
-    expect(codexFiles[0]?.content).toContain('base_url = "https://gateway.example.com/v1"')
-    expect(codexFiles[0]?.content).not.toContain('/v1/v1')
+    expect([...claudeFiles, ...codexFiles, ...openCodeFiles, ...ccSwitchFiles]
+      .every((file) => !file.content.includes('https://gateway.example.com/v1'))).toBe(true)
   })
 
   it('keeps the Claude key only in its required shell and settings values', () => {
@@ -171,7 +172,7 @@ set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     const parsed = JSON.parse(file?.content ?? '')
     expect(parsed.$schema).toBe('https://opencode.ai/config.json')
     expect(parsed.provider.openai.options).toEqual({
-      baseURL: 'https://gateway.example.com/v1',
+      baseURL: 'https://gateway.example.com',
       apiKey: 'sk-test'
     })
   })
@@ -185,11 +186,11 @@ set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
       '~/.config/opencode/opencode.json (OpenAI)'
     ])
     expect(JSON.parse(files[0]?.content ?? '').provider.anthropic.options).toEqual({
-      baseURL: 'https://gateway.example.com/v1',
+      baseURL: 'https://gateway.example.com',
       apiKey: 'sk-test'
     })
     expect(JSON.parse(files[1]?.content ?? '').provider.openai.options).toEqual({
-      baseURL: 'https://gateway.example.com/v1',
+      baseURL: 'https://gateway.example.com',
       apiKey: 'sk-test'
     })
   })
@@ -210,13 +211,23 @@ API Key: sk-test`,
         content: `App: Codex
 Preset: Custom
 Name: TokenStation
-Endpoint: https://gateway.example.com/v1
+Endpoint: https://gateway.example.com
 API Key: sk-test
 Model: gpt-5.5
 Wire API: responses`,
         hintKey: 'keys.useKeyModal.ccSwitch.hint'
       }
     ])
+  })
+
+  it('uses the Antigravity root for the Anthropic OpenCode provider', () => {
+    const [file] = buildClientConfigFiles(input({
+      client: 'opencode',
+      platform: 'antigravity'
+    }))
+
+    const parsed = JSON.parse(file?.content ?? '')
+    expect(parsed.provider.anthropic.options.baseURL).toBe('https://gateway.example.com/antigravity')
   })
 
   it('builds only the compatible CC Switch target for typed keys', () => {

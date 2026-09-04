@@ -69,6 +69,10 @@ vi.mock('@/stores', () => ({
   }),
 }))
 
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => appState,
+}))
+
 vi.mock('@/api/settings', () => ({
   getPublicModelCatalog: getPublicModelCatalogMock,
   getPublicModelPricing: getPublicModelPricingMock,

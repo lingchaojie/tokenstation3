@@ -1,0 +1,9 @@
+MATRIX ordinal=4
+MATRIX command=go -C backend test -race -tags=unit ./internal/handler ./internal/service ./internal/repository
+MATRIX start=2026-09-03T17:47:56.433557114Z
+ok  	github.com/Wei-Shaw/sub2api/internal/handler	(cached)
+ok  	github.com/Wei-Shaw/sub2api/internal/service	582.343s
+ok  	github.com/Wei-Shaw/sub2api/internal/repository	(cached)
+MATRIX end=2026-09-03T17:57:48.116445656Z
+MATRIX exit=0
+MATRIX summary=required race packages passed without data race

@@ -122,6 +122,7 @@ func provideCleanupWithMinimalDependenciesForTest(t *testing.T, captureSidecarSu
 		nil, // upstreamBillingProbe
 		nil, // ollamaCloudUsage
 		nil, // auditLog
+		nil, // openAIAutoReset
 	)
 
 	return cleanup

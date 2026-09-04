@@ -79,7 +79,7 @@ func TestReadOpenAICompatBufferedTerminalKeepsParserErrorsButAllowsProviderTail(
 				Body:       io.NopCloser(strings.NewReader(tt.body)),
 			}
 
-			finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, "test", "rid")
+			finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -109,7 +109,7 @@ func TestReadOpenAICompatBufferedTerminalAllowsDelayedChunkedTail(t *testing.T) 
 		Body:          body,
 	}
 
-	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, "test", "rid")
+	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
 
 	require.NoError(t, err)
 	require.NotNil(t, finalResponse)
@@ -130,7 +130,7 @@ func TestReadOpenAICompatBufferedTerminalRejectsBufferedPartialTailBeforeClosing
 		Body:          body,
 	}
 
-	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, "test", "rid")
+	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
 
 	require.ErrorContains(t, err, "incomplete provider event")
 	require.Nil(t, finalResponse)
@@ -152,7 +152,7 @@ func TestReadOpenAICompatBufferedTerminalReturnsAfterBoundedTailGrace(t *testing
 	}
 	started := time.Now()
 
-	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, "test", "rid")
+	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
 
 	require.NoError(t, err)
 	require.NotNil(t, finalResponse)
@@ -165,6 +165,7 @@ func TestBufferedResponsesSSEToJSONUsesCompletedAggregateWithoutStrictIntermedia
 	t.Run("native malformed intermediate", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 		resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
 		result, err := (&OpenAIGatewayService{}).handleSSEToJSONWithContext(
 			context.Background(), resp, c, nil, []byte("data: {bad}\n\n"+terminal), "gpt-5", "gpt-5",
@@ -186,9 +187,10 @@ func TestBufferedResponsesSSEToJSONUsesCompletedAggregateWithoutStrictIntermedia
 		}, "\n\n")
 		recorder := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 		resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
-		result, err := (&OpenAIGatewayService{}).handlePassthroughSSEToJSONWithContext(
-			context.Background(), resp, c, []byte(body), "gpt-5", "gpt-5",
+		result, err := (&OpenAIGatewayService{}).handlePassthroughSSEToJSONWithAccountContext(
+			context.Background(), resp, c, nil, []byte(body), "gpt-5", "gpt-5",
 		)
 		require.NoError(t, err)
 		require.NotNil(t, result)

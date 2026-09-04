@@ -13,6 +13,170 @@ func TestDeepSeekOfficialHostRemainsInDeploymentAllowlistExample(t *testing.T) {
 	}
 }
 
+func TestTask3ExcludedProductFilesAreAbsent(t *testing.T) {
+	root := repoRoot(t)
+	for _, path := range []string{
+		"backend/internal/handler/admin/account_upstream_billing_rates.go",
+		"backend/internal/handler/admin/plugin_handler.go",
+		"backend/internal/handler/composite_platform.go",
+		"backend/internal/handler/composite_platform_test.go",
+		"backend/internal/handler/grok_audio.go",
+		"backend/internal/handler/grok_audio_billing_test.go",
+		"backend/internal/repository/composite_model_route_repo.go",
+		"backend/internal/repository/plugin_repo.go",
+		"backend/internal/repository/plugin_repo_integration_test.go",
+		"backend/internal/service/composite_model_route.go",
+		"backend/internal/service/composite_platform.go",
+		"backend/internal/service/composite_platform_test.go",
+		"backend/internal/service/composite_route_resolver.go",
+		"backend/internal/service/composite_route_resolver_test.go",
+		"backend/internal/service/grok_audio.go",
+		"backend/internal/service/grok_audio_test.go",
+		"backend/internal/service/openai_plugin_transport.go",
+		"backend/internal/service/plugin_compatibility.go",
+		"backend/internal/service/plugin_compatibility_test.go",
+		"backend/internal/service/plugin_manager.go",
+		"backend/internal/service/plugin_manager_routing_test.go",
+		"backend/internal/service/plugin_manifest.go",
+		"backend/internal/service/plugin_package.go",
+		"backend/internal/service/plugin_package_test.go",
+		"backend/internal/service/plugin_runtime.go",
+		"backend/internal/service/plugin_runtime_integration_test.go",
+		"backend/internal/service/plugin_security_regression_test.go",
+		"backend/internal/server/routes/composite_platform_test.go",
+		"backend/ent/schema/composite_model_route.go",
+		"backend/ent/compositemodelroute",
+		"backend/pkg/pluginapi",
+		"backend/migrations/218_group_audio_voice_pricing.sql",
+		"backend/migrations/229_plugins.sql",
+		"backend/migrations/230_plugin_artifacts.sql",
+		"backend/migrations/plugins_migration_test.go",
+		"docs/PLUGIN_DEVELOPMENT.md",
+		"frontend/src/api/admin/plugins.ts",
+		"frontend/src/i18n/locales/en/admin/plugins.ts",
+		"frontend/src/i18n/locales/zh/admin/plugins.ts",
+		"frontend/src/views/admin/PluginsView.vue",
+		"frontend/src/views/admin/__tests__/PluginsView.spec.ts",
+	} {
+		if pathHasFiles(t, filepath.Join(root, path)) {
+			t.Errorf("excluded upstream product path must be absent: %s", path)
+		}
+	}
+}
+
+func TestTask3ExcludedProductRegistrationsAreAbsent(t *testing.T) {
+	checks := []struct {
+		path      string
+		forbidden []string
+	}{
+		{path: ".dockerignore", forbidden: []string{"/plugins/"}},
+		{path: ".gitignore", forbidden: []string{"!docs/PLUGIN_DEVELOPMENT.md", "/plugins/"}},
+		{path: "deploy/config.example.yaml", forbidden: []string{"# Local OAuth Transport Plugins (Optional)", "\nplugins:\n"}},
+		{path: "backend/internal/config/config.go", forbidden: []string{
+			"Plugins                 PluginConfig", "type PluginConfig struct", `viper.SetDefault("plugins.data_dir"`,
+		}},
+		{path: "backend/cmd/server/main.go", forbidden: []string{"app.PluginManager"}},
+		{path: "backend/cmd/server/wire.go", forbidden: []string{"*service.PluginManager", "providePluginHostInfo"}},
+		{path: "backend/cmd/server/wire_gen.go", forbidden: []string{
+			"NewPluginRepository", "NewPluginManager", "NewPluginHandler", "providePluginHostInfo", "*service.PluginManager",
+		}},
+		{path: "backend/internal/handler/handler.go", forbidden: []string{"*admin.PluginHandler"}},
+		{path: "backend/internal/handler/wire.go", forbidden: []string{
+			"*admin.PluginHandler", "*service.PluginManager", "SetPluginManager(pluginManager)", "admin.NewPluginHandler",
+		}},
+		{path: "backend/internal/repository/wire.go", forbidden: []string{"NewPluginRepository", "NewCompositeModelRouteRepository"}},
+		{path: "backend/internal/service/wire.go", forbidden: []string{
+			"*PluginManager", "SetPluginManager(pluginManager)", "NewPluginManager", "NewCompositeRouteResolver",
+		}},
+		{path: "backend/internal/domain/constants.go", forbidden: []string{`PlatformComposite = "composite"`}},
+		{path: "backend/internal/server/http.go", forbidden: []string{"*service.CompositeRouteResolver"}},
+		{path: "backend/internal/server/router.go", forbidden: []string{"*service.CompositeRouteResolver"}},
+		{path: "backend/internal/server/routes/admin.go", forbidden: []string{
+			`"/plugin-ui/:token/*path"`, "registerPluginRoutes", `accounts.GET("/upstream-billing-rates"`,
+		}},
+		{path: "backend/internal/server/routes/gateway.go", forbidden: []string{
+			"*service.CompositeRouteResolver", "compositeTarget", "service.PlatformComposite",
+			`gateway.POST("/tts"`, `gateway.POST("/stt"`, `gateway.POST("/custom-voices"`,
+			`gateway.GET("/custom-voices"`, `gateway.GET("/realtime"`,
+			`r.POST("/tts"`, `r.POST("/stt"`, `r.POST("/custom-voices"`,
+			`r.GET("/custom-voices"`, `r.GET("/realtime"`,
+			`gateway.POST("/x_search"`, `r.POST("/x_search"`,
+		}},
+		{path: "backend/internal/handler/gateway_handler.go", forbidden: []string{
+			"ensureCompositeTargetPlatform", "service.PlatformComposite", "compositeAvailableModels",
+		}},
+		{path: "backend/internal/handler/openai_gateway_handler.go", forbidden: []string{"service.PlatformComposite"}},
+		{path: "backend/internal/service/gateway_service.go", forbidden: []string{
+			"compositeModelOwnershipCachePrefix", "resolveCompositeModelOwnership", "CompositeModelOwnership",
+		}},
+		{path: "backend/internal/service/gateway_scheduling.go", forbidden: []string{"CompositeRouteSourceFromContext"}},
+		{path: "backend/internal/service/model_plaza_service.go", forbidden: []string{"PlatformComposite"}},
+		{path: "backend/internal/service/openai_codex_model_metadata.go", forbidden: []string{"CompositeModelRoute", "PlatformComposite"}},
+		{path: "backend/internal/service/openai_codex_models_service.go", forbidden: []string{
+			"CompositeModelRoute", "PlatformComposite", "resolveCodexCompositeModelTarget", "codexCompositeRouteMatchesModel",
+		}},
+		{path: "backend/internal/service/openai_messages_dispatch.go", forbidden: []string{"PlatformComposite"}},
+		{path: "backend/internal/handler/dto/types.go", forbidden: []string{
+			"AudioRealtimePricePerMin", "AudioTTSPricePerMillionChars", "AudioSTTPricePerHour",
+		}},
+		{path: "backend/internal/service/group.go", forbidden: []string{
+			"AudioRealtimePricePerMin", "AudioTTSPricePerMillionChars", "AudioSTTPricePerHour",
+		}},
+		{path: "backend/internal/service/billing_service.go", forbidden: []string{
+			"defaultAudioRealtimePricePerMin", "defaultAudioTTSPricePerMillionChars", "defaultAudioSTTPricePerHour", "CalculateAudioCost",
+		}},
+		{path: "frontend/src/api/admin/index.ts", forbidden: []string{"pluginsAPI", "'./plugins'"}},
+		{path: "frontend/src/api/admin/settings.ts", forbidden: []string{"plugin_management_enabled"}},
+		{path: "frontend/src/router/index.ts", forbidden: []string{"AdminPlugins", "PluginsView.vue"}},
+		{path: "frontend/src/components/layout/AppSidebar.vue", forbidden: []string{"flagPluginManagement", "'/admin/plugins'"}},
+		{path: "frontend/src/stores/app.ts", forbidden: []string{"plugin_management_enabled"}},
+		{path: "frontend/src/types/index.ts", forbidden: []string{"plugin_management_enabled", "upstream_billing_rate_sync_enabled"}},
+		{path: "frontend/src/utils/featureFlags.ts", forbidden: []string{"pluginManagement", "plugin_management_enabled"}},
+		{path: "frontend/src/views/admin/SettingsView.vue", forbidden: []string{"plugin_management_enabled", "features.pluginManagement"}},
+		{path: "frontend/src/components/keys/UseKeyModal.vue", forbidden: []string{"case 'composite':", "platform === 'composite'"}},
+		{path: "frontend/src/views/admin/groupsMessagesDispatch.ts", forbidden: []string{`platform === "composite"`}},
+		{path: "frontend/src/i18n/locales/en/admin/index.ts", forbidden: []string{"'./plugins'"}},
+		{path: "frontend/src/i18n/locales/zh/admin/index.ts", forbidden: []string{"'./plugins'"}},
+		{path: "backend/internal/service/upstream_billing_probe.go", forbidden: []string{
+			"UpstreamBillingRateSyncEnabledExtraKey", "upstream_billing_rate_sync_applied",
+		}},
+		{path: "backend/internal/service/admin_account.go", forbidden: []string{"UpstreamBillingRateSync"}},
+		{path: "backend/internal/repository/account_repo.go", forbidden: []string{"upstream_billing_rate_sync_enabled"}},
+		{path: "backend/internal/handler/admin/account_handler.go", forbidden: []string{`json:"upstream_billing_rate_sync_enabled"`}},
+		{path: "frontend/src/components/account/EditAccountModal.vue", forbidden: []string{"upstream_billing_rate_sync_enabled"}},
+		{path: "frontend/src/views/admin/AccountsView.vue", forbidden: []string{"upstream_billing_rate_sync_enabled"}},
+		{path: "frontend/src/views/admin/__tests__/AccountsView.bulkEdit.spec.ts", forbidden: []string{
+			"getUpstreamBillingRatesWithEtag", "UpstreamBillingRatesResponse", `"/admin/accounts/upstream-billing-rates"`,
+		}},
+		{path: "frontend/src/api/admin/accounts.ts", forbidden: []string{"getUpstreamBillingRatesWithEtag", "UpstreamBillingRatesResponse", `"/admin/accounts/upstream-billing-rates"`}},
+	}
+
+	t.Run("source_and_ui", func(t *testing.T) {
+		for _, check := range checks {
+			if check.path == "backend/cmd/server/wire_gen.go" {
+				continue
+			}
+			body := readRepoFile(t, check.path)
+			for _, token := range check.forbidden {
+				if strings.Contains(body, token) {
+					t.Errorf("excluded product registration %q remains in %s", token, check.path)
+				}
+			}
+		}
+	})
+
+	t.Run("generated_wire", func(t *testing.T) {
+		body := readRepoFile(t, "backend/cmd/server/wire_gen.go")
+		for _, token := range []string{
+			"NewPluginRepository", "NewPluginManager", "NewPluginHandler", "providePluginHostInfo", "*service.PluginManager",
+		} {
+			if strings.Contains(body, token) {
+				t.Errorf("excluded product registration %q remains in backend/cmd/server/wire_gen.go", token)
+			}
+		}
+	})
+}
+
 func TestTask8DeferredGrokProductSurfacesAreAbsent(t *testing.T) {
 	root := repoRoot(t)
 	for _, path := range []string{
