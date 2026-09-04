@@ -66,14 +66,14 @@ var (
 		SupportsPromptCaching:           true,
 	}
 	openAIGPT56SolFallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:                   5e-06,
-		InputCostPerTokenPriority:           1e-05,
-		OutputCostPerToken:                  3e-05,
-		OutputCostPerTokenPriority:          6e-05,
-		CacheCreationInputTokenCost:         6.25e-06,
-		CacheCreationInputTokenCostPriority: 1.25e-05,
-		CacheReadInputTokenCost:             5e-07,
-		CacheReadInputTokenCostPriority:     1e-06,
+		InputCostPerToken:                   4e-06,
+		InputCostPerTokenPriority:           8e-06,
+		OutputCostPerToken:                  2e-05,
+		OutputCostPerTokenPriority:          4e-05,
+		CacheCreationInputTokenCost:         5e-06,
+		CacheCreationInputTokenCostPriority: 1e-05,
+		CacheReadInputTokenCost:             4e-07,
+		CacheReadInputTokenCostPriority:     8e-07,
 		SupportsServiceTier:                 true,
 		LiteLLMProvider:                     "openai",
 		Mode:                                "chat",
@@ -611,6 +611,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 	if err := json.Unmarshal(body, &rawData); err != nil {
 		return nil, fmt.Errorf("parse raw JSON: %w", err)
 	}
+	applyBuiltInPricingCorrections(rawData)
 	overrides := s.loadPricingOverrideEntries()
 	rawData = s.applyPricingOverrides(rawData)
 
@@ -738,6 +739,62 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 	}
 
 	return result, nil
+}
+
+// applyBuiltInPricingCorrections fixes known stale catalog values before the
+// operator override file is merged. Corrections are guarded by the exact legacy
+// value, so a future catalog price change is preserved automatically.
+func applyBuiltInPricingCorrections(rawData map[string]json.RawMessage) {
+	correctLegacyGPT56SolPricing(rawData)
+}
+
+func correctLegacyGPT56SolPricing(rawData map[string]json.RawMessage) {
+	rawEntry, ok := rawData["gpt-5.6-sol"]
+	if !ok {
+		return
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(rawEntry, &fields); err != nil || fields == nil {
+		return
+	}
+
+	type correction struct {
+		legacy  float64
+		current float64
+	}
+	corrections := map[string]correction{
+		"input_cost_per_token":                                       {legacy: 5e-6, current: 4e-6},
+		"input_cost_per_token_priority":                              {legacy: 10e-6, current: 8e-6},
+		"input_cost_per_token_above_272k_tokens":                     {legacy: 10e-6, current: 8e-6},
+		"output_cost_per_token":                                      {legacy: 30e-6, current: 20e-6},
+		"output_cost_per_token_priority":                             {legacy: 60e-6, current: 40e-6},
+		"output_cost_per_token_above_272k_tokens":                    {legacy: 45e-6, current: 30e-6},
+		"cache_creation_input_token_cost":                            {legacy: 6.25e-6, current: 5e-6},
+		"cache_creation_input_token_cost_priority":                   {legacy: 12.5e-6, current: 10e-6},
+		"cache_creation_input_token_cost_above_272k_tokens":          {legacy: 12.5e-6, current: 10e-6},
+		"cache_creation_input_token_cost_above_272k_tokens_priority": {legacy: 25e-6, current: 20e-6},
+		"cache_read_input_token_cost":                                {legacy: 0.5e-6, current: 0.4e-6},
+		"cache_read_input_token_cost_priority":                       {legacy: 1e-6, current: 0.8e-6},
+		"cache_read_input_token_cost_above_272k_tokens":              {legacy: 1e-6, current: 0.8e-6},
+		"cache_read_input_token_cost_above_272k_tokens_priority":     {legacy: 2e-6, current: 1.6e-6},
+	}
+
+	changed := false
+	for key, priceCorrection := range corrections {
+		value, exists := fields[key].(float64)
+		if !exists || value != priceCorrection.legacy {
+			continue
+		}
+		fields[key] = priceCorrection.current
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	corrected, err := json.Marshal(fields)
+	if err == nil {
+		rawData["gpt-5.6-sol"] = corrected
+	}
 }
 
 // rejectDuplicatePricingModelKeys rejects duplicate top-level model names.

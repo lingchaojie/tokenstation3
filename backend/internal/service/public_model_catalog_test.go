@@ -163,7 +163,7 @@ func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 	}
 
 	expected := map[string]expectation{
-		"gpt-5.6-sol":   {displayName: "GPT-5.6 Sol", input: 5, cacheRead: 0.5, output: 30},
+		"gpt-5.6-sol":   {displayName: "GPT-5.6 Sol", input: 4, cacheRead: 0.4, output: 20},
 		"gpt-5.6-terra": {displayName: "GPT-5.6 Terra", input: 2.5, cacheRead: 0.25, output: 15},
 		"gpt-5.6-luna":  {displayName: "GPT-5.6 Luna", input: 1, cacheRead: 0.1, output: 6},
 	}

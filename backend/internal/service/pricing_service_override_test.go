@@ -73,6 +73,31 @@ func TestPricingOverride_FieldLevelMergeKeepsOtherFields(t *testing.T) {
 	require.InDelta(t, 5.0/3.0, patched.LongContextInputCostMultiplier, 1e-9)
 }
 
+func TestPricingOverride_GPT56SolCustomPriceBeatsLegacyCatalogCorrection(t *testing.T) {
+	svc := newPricingServiceWithOverride(t, `{"gpt-5.6-sol": {
+		"input_cost_per_token": 9e-06,
+		"output_cost_per_token": 27e-06}}`)
+	data, err := svc.parsePricingData([]byte(`{"gpt-5.6-sol": {
+		"litellm_provider": "openai",
+		"mode": "chat",
+		"input_cost_per_token": 5e-06,
+		"input_cost_per_token_priority": 10e-06,
+		"output_cost_per_token": 30e-06,
+		"output_cost_per_token_priority": 60e-06,
+		"cache_read_input_token_cost": 0.5e-06,
+		"cache_read_input_token_cost_priority": 1e-06}}`))
+	require.NoError(t, err)
+
+	pricing := data["gpt-5.6-sol"]
+	require.NotNil(t, pricing)
+	require.InDelta(t, 9e-6, pricing.InputCostPerToken, 1e-12, "operator input override must win")
+	require.InDelta(t, 27e-6, pricing.OutputCostPerToken, 1e-12, "operator output override must win")
+	require.InDelta(t, 8e-6, pricing.InputCostPerTokenPriority, 1e-12, "unoverridden legacy Fast input must be corrected")
+	require.InDelta(t, 40e-6, pricing.OutputCostPerTokenPriority, 1e-12, "unoverridden legacy Fast output must be corrected")
+	require.InDelta(t, 0.4e-6, pricing.CacheReadInputTokenCost, 1e-12)
+	require.InDelta(t, 0.8e-6, pricing.CacheReadInputTokenCostPriority, 1e-12)
+}
+
 func TestPricingOverride_NullFieldValueRemovesField(t *testing.T) {
 	svc := newPricingServiceWithOverride(t, `{"gpt-5.5": {
 		"input_cost_per_token_above_272k_tokens": null,
