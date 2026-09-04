@@ -74,8 +74,16 @@ func TestGatewayServiceCalculateTokenCost_KiroAutoUsesConservativeFallback(t *te
 	}, 1.1)
 	require.NoError(t, err)
 
-	cost := svc.calculateTokenCost(context.Background(), result, &APIKey{}, "auto", 1.1, time.Time{}, &recordUsageOpts{IsKiroAccount: true})
+	cost := svc.calculateTokenCost(context.Background(), result, &APIKey{}, "auto", 1.1, time.Time{}, &recordUsageOpts{IsKiroDirect: true})
 	require.NotNil(t, cost)
 	require.InDelta(t, expected.ActualCost, cost.ActualCost, 1e-12)
 	require.InDelta(t, expected.TotalCost, cost.TotalCost, 1e-12)
+}
+
+func TestGatewayServiceCalculateTokenCost_KiroRelayDoesNotUseDirectFallback(t *testing.T) {
+	cfg := &config.Config{}
+	svc := &GatewayService{billingService: NewBillingService(cfg, nil)}
+	result := &ForwardResult{Model: "unknown-relay-model", Usage: ClaudeUsage{InputTokens: 20, OutputTokens: 10}}
+	cost := svc.calculateTokenCost(context.Background(), result, &APIKey{}, result.Model, 1, time.Time{}, &recordUsageOpts{IsKiroDirect: false})
+	require.Nil(t, cost)
 }

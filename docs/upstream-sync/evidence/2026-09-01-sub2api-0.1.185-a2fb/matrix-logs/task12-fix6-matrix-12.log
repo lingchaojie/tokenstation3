@@ -1,0 +1,10 @@
+MATRIX ordinal=12
+MATRIX command=pnpm --dir frontend lint:check
+MATRIX start=2026-09-03T18:00:36.512613846Z
+
+> sub2api-frontend@1.0.0 lint:check /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend
+> eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts
+
+MATRIX end=2026-09-03T18:01:14.067483582Z
+MATRIX exit=0
+MATRIX summary=frontend lint passed

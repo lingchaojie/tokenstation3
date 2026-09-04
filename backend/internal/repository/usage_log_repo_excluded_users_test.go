@@ -80,7 +80,7 @@ func TestUsageLogRepositoryGetUsageTrendWithUsageFiltersExcludedUsers(t *testing
 }
 
 func TestShouldUsePreaggregatedTrendExcludedUsers(t *testing.T) {
-	require.False(t, shouldUsePreaggregatedTrend("day", 0, 0, 0, 0, "", nil, nil, nil, "", []int64{7, 2, 7}, nil))
+	require.False(t, shouldUsePreaggregatedTrend("day", UsageLogFilters{ExcludedUserIDs: []int64{7, 2, 7}}))
 }
 
 func TestUsageLogRepositoryGetModelStatsWithUsageFiltersExcludedUsers(t *testing.T) {

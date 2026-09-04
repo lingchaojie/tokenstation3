@@ -140,7 +140,15 @@ func (s *GatewayService) forwardBedrock(
 			if streamResult == nil {
 				return failedForwardResultForError(c, resp, reqModel, mappedModel, true, startTime, err), err
 			}
-			result := streamErrorForwardResult(ctx, c, resp, reqModel, mappedModel, startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput, err)
+			if !streamResult.clientVisibleOutput && !streamResult.semanticOutput && !streamResult.clientDisconnect && !isClientCausalCancellation(ctx, err, streamResult.clientDisconnect) {
+				failure := newIncompleteProviderStreamFailover(resp, "Bedrock stream failed before semantic output: "+sanitizeStreamError(err))
+				failure.Stage = GatewayFailureStageInference
+				failure.Scope = GatewayFailureScopeProvider
+				failure.NextAccountAction = NextAccountRetry
+				failure.RetryableOnSameAccount = false
+				return nil, errors.Join(failure, err)
+			}
+			result := streamErrorForwardResult(ctx, c, resp, reqModel, mappedModel, startTime, streamResult.usage, streamResult.firstTokenMs, streamResult.clientDisconnect, streamResult.semanticOutput || streamResult.clientVisibleOutput, err)
 			if result != nil {
 				result.CaptureResponseComplete = streamResult.responseComplete
 			}
@@ -208,25 +216,9 @@ func (s *GatewayService) executeBedrockUpstream(
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
-			safeErr := sanitizeUpstreamErrorMessage(err.Error())
-			setOpsUpstreamError(c, 0, safeErr, "")
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: 0,
-				UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
-				Kind:               "request_error",
-				Message:            safeErr,
+			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
 			})
-			c.JSON(http.StatusBadGateway, gin.H{
-				"type": "error",
-				"error": gin.H{
-					"type":    "upstream_error",
-					"message": "Upstream request failed",
-				},
-			})
-			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 		}
 		beginCaptureResponse(c, resp,
 			s.cfg != nil && s.cfg.Gateway.Capture.Enabled && CaptureMayApplyFor(c, string(account.Platform)),

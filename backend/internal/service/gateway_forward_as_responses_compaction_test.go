@@ -174,6 +174,9 @@ func TestHandleResponsesCompactionResponse_PreOutputHeartbeatRemainsFailoverSafe
 		)),
 		c, "gpt-5.6-sol", "claude-haiku-4-5", nil, time.Now(), true, true,
 	)
+	// A pre-output failover intentionally leaves the keepalive available for the
+	// next attempt. Stop it before directly inspecting ResponseRecorder.Body.
+	stop()
 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
@@ -327,29 +330,41 @@ func TestForwardAsResponses_CompactionHeartbeatErrorsUseSingleTerminalSSE(t *tes
 	}
 
 	tests := []struct {
-		name     string
-		account  *Account
-		parsed   *ParsedRequest
-		response *http.Response
-		err      error
+		name             string
+		account          *Account
+		parsed           *ParsedRequest
+		response         *http.Response
+		err              error
+		wantCommitted    bool
+		wantFailedEvents int
+		wantTypedFailure bool
+		wantRetryNext    bool
 	}{
 		{
-			name:    "relay transport error",
-			account: relayAccount(),
-			parsed:  &ParsedRequest{},
-			err:     fmt.Errorf("dial failed"),
+			name:             "relay transport error",
+			account:          relayAccount(),
+			parsed:           &ParsedRequest{},
+			err:              fmt.Errorf("dial failed"),
+			wantFailedEvents: 0,
+			wantTypedFailure: true,
+			wantRetryNext:    true,
 		},
 		{
-			name:     "relay non-failover HTTP error",
-			account:  relayAccount(),
-			parsed:   &ParsedRequest{},
-			response: newJSONResponse(http.StatusBadRequest, `{"message":"rejected"}`),
+			name:             "relay non-failover HTTP error",
+			account:          relayAccount(),
+			parsed:           &ParsedRequest{},
+			response:         newJSONResponse(http.StatusBadRequest, `{"message":"rejected"}`),
+			wantCommitted:    true,
+			wantFailedEvents: 1,
+			wantTypedFailure: true,
 		},
 		{
-			name:    "direct transport error",
-			account: directAccount(),
-			parsed:  &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}},
-			err:     fmt.Errorf("dial failed"),
+			name:             "direct transport error",
+			account:          directAccount(),
+			parsed:           &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}},
+			err:              fmt.Errorf("dial failed"),
+			wantCommitted:    true,
+			wantFailedEvents: 1,
 		},
 	}
 
@@ -373,12 +388,23 @@ func TestForwardAsResponses_CompactionHeartbeatErrorsUseSingleTerminalSSE(t *tes
 			}
 
 			_, err := svc.ForwardAsResponses(c.Request.Context(), c, tt.account, body, tt.parsed)
+			// A failover-safe heartbeat intentionally stays live for the next
+			// production attempt. This standalone fixture has no next attempt, so
+			// join it before inspecting the recorder.
+			stop()
 
 			require.Error(t, err)
-			require.True(t, IsResponseCommitted(c))
+			require.Equal(t, tt.wantCommitted, IsResponseCommitted(c))
+			var failoverErr *UpstreamFailoverError
+			if tt.wantTypedFailure {
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, tt.wantRetryNext, failoverErr.ShouldRetryNextAccount())
+			} else {
+				require.NotErrorAs(t, err, &failoverErr)
+			}
 			responseBody := rec.Body.String()
 			require.Contains(t, responseBody, ": keepalive\n\n")
-			require.Equal(t, 1, strings.Count(responseBody, "event: response.failed"))
+			require.Equal(t, tt.wantFailedEvents, strings.Count(responseBody, "event: response.failed"))
 			require.NotContains(t, responseBody, "\n\n{\"error\":")
 		})
 	}

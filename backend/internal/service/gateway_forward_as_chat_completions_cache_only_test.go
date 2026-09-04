@@ -14,7 +14,6 @@ import (
 
 func TestHandleCCBufferedFromAnthropic_PreservesCacheOnlyUsage(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

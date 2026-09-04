@@ -1,0 +1,13 @@
+MATRIX ordinal=1
+MATRIX command=make check-generate
+MATRIX start=2026-09-03T17:44:36.458936601Z
+make[1]: Entering directory '/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/backend'
+go generate ./ent
+go generate ./cmd/server
+wire: github.com/Wei-Shaw/sub2api/cmd/server: wrote /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/backend/cmd/server/wire_gen.go
+wire: github.com/Wei-Shaw/sub2api/cmd/server: wrote /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/backend/cmd/server/wire_gen.go
+git diff --exit-code -- ent cmd/server/wire_gen.go cmd/server/wire_gen_test.go
+make[1]: Leaving directory '/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/backend'
+MATRIX end=2026-09-03T17:45:01.886440643Z
+MATRIX exit=0
+MATRIX summary=generated files unchanged

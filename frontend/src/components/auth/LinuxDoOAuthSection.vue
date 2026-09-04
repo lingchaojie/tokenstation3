@@ -47,6 +47,7 @@ import { resolveAffiliateReferralCode, storeOAuthAffiliateCode } from '@/utils/o
 const props = withDefaults(defineProps<{
   disabled?: boolean
   affCode?: string
+  promoCode?: string
   showDivider?: boolean
 }>(), {
   showDivider: true
@@ -59,6 +60,11 @@ function startLogin(): void {
   storeOAuthAffiliateCode(resolveAffiliateReferralCode(props.affCode, route.query.aff, route.query.aff_code))
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
   const normalized = apiBase.replace(/\/$/, '')
-  window.location.href = `${normalized}/auth/oauth/linuxdo/start?redirect=${encodeURIComponent(redirectTo)}`
+  const params = new URLSearchParams({ redirect: redirectTo })
+  const promoCode = props.promoCode?.trim()
+  if (promoCode) {
+    params.set('promo_code', promoCode)
+  }
+  window.location.href = `${normalized}/auth/oauth/linuxdo/start?${params.toString()}`
 }
 </script>

@@ -493,11 +493,20 @@ func (s *APIKeyService) incrementAPIKeyErrorCount(ctx context.Context, userID in
 }
 
 // canUserBindGroup 检查用户是否可以绑定指定分组
-// 对于订阅类型分组：检查用户是否有有效订阅
-// 对于标准类型分组：使用原有的 AllowedGroups 和 IsExclusive 逻辑
-func (s *APIKeyService) canUserBindGroup(_ context.Context, user *User, group *Group) bool {
-	// 模式无关：分组的订阅/计费模式不再决定访问权限。
-	// 非独占分组对所有人开放；独占分组按用户白名单(AllowedGroups)控制。
+// 订阅类型分组先检查有效订阅；所有分组最终统一走用户级 CanBindGroup 授权。
+func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group *Group) bool {
+	if user == nil || group == nil || !group.IsActive() {
+		return false
+	}
+	// 订阅分组保留既有语义：有效订阅是额外的服务/仓储门禁。
+	if group.IsSubscriptionType() {
+		if s.userSubRepo == nil {
+			return false
+		}
+		if _, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID); err != nil {
+			return false
+		}
+	}
 	return user.CanBindGroup(group.ID, group.IsExclusive)
 }
 
@@ -785,7 +794,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 			return nil, fmt.Errorf("get group: %w", err)
 		}
 
-		// 检查用户是否可以绑定该分组
+		// 活跃/订阅门禁由服务层负责；标准分组的用户级授权统一走 CanBindGroup。
 		if !s.canUserBindGroup(ctx, user, group) {
 			return nil, ErrGroupNotAllowed
 		}
@@ -1409,10 +1418,11 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 		return nil, fmt.Errorf("list active groups: %w", err)
 	}
 
-	// 过滤出用户有权限的分组（模式无关，见 canUserBindGroup）
+	// 过滤出用户有权限的分组。ListActive 提供生命周期门禁，
+	// canUserBindGroup 提供订阅门禁和标准分组的统一用户级授权。
 	availableGroups := make([]Group, 0)
 	for _, group := range allGroups {
-		if s.canUserBindGroupInternal(user, &group) {
+		if s.canUserBindGroup(ctx, user, &group) {
 			availableGroups = append(availableGroups, group)
 		}
 	}
@@ -1421,10 +1431,6 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 }
 
 // canUserBindGroupInternal 内部方法，检查用户是否可以绑定分组（模式无关，见 canUserBindGroup）
-func (s *APIKeyService) canUserBindGroupInternal(user *User, group *Group) bool {
-	return user.CanBindGroup(group.ID, group.IsExclusive)
-}
-
 func (s *APIKeyService) SearchAPIKeys(ctx context.Context, userID int64, keyword string, limit int) ([]APIKey, error) {
 	keys, err := s.apiKeyRepo.SearchAPIKeys(ctx, userID, keyword, limit)
 	if err != nil {
@@ -1433,20 +1439,21 @@ func (s *APIKeyService) SearchAPIKeys(ctx context.Context, userID int64, keyword
 	return keys, nil
 }
 
-// GetUserAllowedGroupIDSet 返回 user_allowed_groups 授权给该用户的专属分组 ID 集合。
+// GetUserGroupVisibility 返回 user_allowed_groups 授权给该用户的分组 ID 集合，
+// 以及该用户是否开启了公开分组限制。开启时公开分组的可见性也要落在该集合内。
 //
 // 与 GetAvailableGroups 的区别：这里是「橱窗」语义（模型广场用），不检查订阅有效性，
 // 也不关心分组是否活跃——仅回答"哪些专属分组对该用户可见"。返回值恒非 nil。
-func (s *APIKeyService) GetUserAllowedGroupIDSet(ctx context.Context, userID int64) (map[int64]struct{}, error) {
+func (s *APIKeyService) GetUserGroupVisibility(ctx context.Context, userID int64) (map[int64]struct{}, bool, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, false, fmt.Errorf("get user: %w", err)
 	}
 	allowed := make(map[int64]struct{}, len(user.AllowedGroups))
 	for _, id := range user.AllowedGroups {
 		allowed[id] = struct{}{}
 	}
-	return allowed, nil
+	return allowed, user.RestrictPublicGroups, nil
 }
 
 // GetUserGroupRates 获取用户的专属分组倍率配置

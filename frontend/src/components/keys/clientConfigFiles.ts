@@ -13,6 +13,9 @@ export interface ClientConfigInput {
   allowMessagesDispatch?: boolean
   windowsShell?: WindowsGuideShell
   codexAuthMode?: 'legacy' | 'api-key'
+  codexModel?: string
+  codexReasoningEffort?: string | null
+  codexModelCatalogPath?: string
 }
 
 export interface ClientConfigFile {
@@ -30,6 +33,15 @@ function openCodePath(os: SupportedGuideOS): string {
   return os === 'windows'
     ? '%userprofile%\\.config\\opencode\\opencode.json'
     : '~/.config/opencode/opencode.json'
+}
+
+function escapeTomlBasicString(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
 }
 
 function buildOpenCodeFile(
@@ -185,11 +197,17 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     ? `requires_openai_auth = false
 http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
     : 'requires_openai_auth = false'
+  const codexModel = escapeTomlBasicString(input.codexModel || 'gpt-5.5')
+  const reasoningEffortLine = input.codexReasoningEffort === null
+    ? ''
+    : `model_reasoning_effort = "${escapeTomlBasicString(input.codexReasoningEffort || 'xhigh')}"\n`
+  const modelCatalogLine = input.codexModelCatalogPath
+    ? `model_catalog_json = "${escapeTomlBasicString(input.codexModelCatalogPath)}"\n`
+    : ''
   const configContent = `model_provider = "linx2ai"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
+model = "${codexModel}"
+review_model = "${codexModel}"
+${reasoningEffortLine}${modelCatalogLine}disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 

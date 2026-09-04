@@ -11,7 +11,8 @@ const {
   listEnabledDefinitions,
   getBatchUserAttributes,
   getAPIKeyRoutes,
-  updateAPIKeyRoutes
+  updateAPIKeyRoutes,
+  getPlatformQuotas
 } = vi.hoisted(() => ({
   listUsers: vi.fn(),
   getAllGroups: vi.fn(),
@@ -19,7 +20,8 @@ const {
   listEnabledDefinitions: vi.fn(),
   getBatchUserAttributes: vi.fn(),
   getAPIKeyRoutes: vi.fn(),
-  updateAPIKeyRoutes: vi.fn()
+  updateAPIKeyRoutes: vi.fn(),
+  getPlatformQuotas: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -29,7 +31,8 @@ vi.mock('@/api/admin', () => ({
       toggleStatus: vi.fn(),
       delete: vi.fn(),
       getAPIKeyRoutes,
-      updateAPIKeyRoutes
+      updateAPIKeyRoutes,
+      getPlatformQuotas
     },
     groups: {
       getAll: getAllGroups
@@ -136,6 +139,9 @@ const DataTableStub = {
         <slot :name="'header-' + col.key" :column="col" />
       </template>
       <div v-for="row in data" :key="row.id">
+		<div :data-test="'groups-' + row.id">
+		  <slot name="cell-groups" :row="row" />
+		</div>
         <slot name="cell-last_used_at" :value="row.last_used_at" :row="row" />
         <slot name="cell-actions" :row="row" />
       </div>
@@ -171,6 +177,7 @@ describe('admin UsersView', () => {
     getBatchUserAttributes.mockReset()
     getAPIKeyRoutes.mockReset()
     updateAPIKeyRoutes.mockReset()
+    getPlatformQuotas.mockReset()
 
     listUsers.mockResolvedValue({
       items: [createAdminUser()],
@@ -185,6 +192,7 @@ describe('admin UsersView', () => {
     getBatchUserAttributes.mockResolvedValue({ values: {} })
     getAPIKeyRoutes.mockResolvedValue({ anthropic: null, openai: null })
     updateAPIKeyRoutes.mockResolvedValue({ anthropic: null, openai: null })
+    getPlatformQuotas.mockResolvedValue({ platform_quotas: [] })
   })
 
   it('loads groups before opening the provider route configuration modal from the user action menu', async () => {
@@ -254,6 +262,72 @@ describe('admin UsersView', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('previews public groups according to each user public-group restriction', async () => {
+    localStorage.setItem('user-hidden-columns', JSON.stringify([]))
+    localStorage.setItem('user-column-settings-version', '5')
+    const unrestricted = {
+      ...createAdminUser({ id: 41, email: 'unrestricted@example.com', allowed_groups: [] }),
+      restrict_public_groups: false
+    } as AdminUser
+    const restrictedListed = {
+      ...createAdminUser({ id: 42, email: 'listed@example.com', allowed_groups: [7] }),
+      restrict_public_groups: true
+    } as AdminUser
+    const restrictedUnlisted = {
+      ...createAdminUser({ id: 43, email: 'unlisted@example.com', allowed_groups: [] }),
+      restrict_public_groups: true
+    } as AdminUser
+    listUsers.mockResolvedValue({
+      items: [unrestricted, restrictedListed, restrictedUnlisted],
+      total: 3,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    getAllGroups.mockResolvedValue([
+      createAdminGroup({ id: 7, name: 'Public Listed' }),
+      createAdminGroup({ id: 8, name: 'Public Unlisted' })
+    ])
+
+    const wrapper = mount(UsersView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: {
+            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
+          },
+          DataTable: DataTableStub,
+          Pagination: true,
+          ConfirmDialog: true,
+          EmptyState: true,
+          GroupBadge: true,
+          Select: true,
+          UserAttributesConfigModal: true,
+          UserConcurrencyCell: true,
+          UserCreateModal: true,
+          UserEditModal: true,
+          BulkEditUserModal: BulkEditUserModalStub,
+          UserApiKeysModal: true,
+          UserAllowedGroupsModal: true,
+          UserBalanceModal: true,
+          UserBalanceHistoryModal: true,
+          GroupReplaceModal: true,
+          Icon: true,
+          Teleport: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="groups-41"]').text()).toContain('Public Listed')
+    expect(wrapper.get('[data-test="groups-41"]').text()).toContain('Public Unlisted')
+    expect(wrapper.get('[data-test="groups-42"]').text()).toContain('Public Listed')
+    expect(wrapper.get('[data-test="groups-42"]').text()).not.toContain('Public Unlisted')
+    expect(wrapper.get('[data-test="groups-43"]').text()).not.toContain('Public Listed')
+    expect(wrapper.get('[data-test="groups-43"]').text()).not.toContain('Public Unlisted')
   })
 
   it('shows active, used, and created activity columns in order and requests last_used_at sort', async () => {
@@ -410,7 +484,6 @@ describe('admin UsersView', () => {
           UserAllowedGroupsModal: true,
           UserBalanceModal: true,
           UserBalanceHistoryModal: true,
-          UserPlatformQuotaModal: true,
           GroupReplaceModal: true,
           Icon: true,
           Teleport: true

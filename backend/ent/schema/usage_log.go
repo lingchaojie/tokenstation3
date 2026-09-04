@@ -47,6 +47,12 @@ func (UsageLog) Fields() []ent.Field {
 			MaxLen(100).
 			Optional().
 			Nillable(),
+		// RequestedReasoningEffort preserves the client value before policy/model
+		// remapping. NULL means it was absent or predates this dual-write.
+		field.String("requested_reasoning_effort").
+			MaxLen(20).
+			Optional().
+			Nillable(),
 		// UpstreamModel stores the actual upstream model name when model mapping
 		// is applied. NULL means no mapping — the requested model was used as-is.
 		field.String("upstream_model").
@@ -131,6 +137,9 @@ func (UsageLog) Fields() []ent.Field {
 			Default(0),
 		field.Bool("stream").
 			Default(false),
+		field.Bool("native_compaction_v2").
+			Default(false).
+			Comment("Whether the request used native OpenAI remote compaction v2"),
 		field.Int("duration_ms").
 			Optional().
 			Nillable(),

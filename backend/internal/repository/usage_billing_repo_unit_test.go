@@ -24,6 +24,60 @@ const (
 	userExistsForBillingSQL     = `(?s)SELECT 1\s+FROM users\s+WHERE id = \$1 AND deleted_at IS NULL`
 )
 
+func TestUsageBillingDedup_RejectsReusedIdentityWithDifferentFingerprint(t *testing.T) {
+	ctx := context.Background()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	mock.ExpectQuery(`(?s)INSERT INTO usage_billing_dedup.*ON CONFLICT.*RETURNING id`).
+		WithArgs("req-dedup", int64(7), "new-fingerprint").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`(?s)SELECT request_fingerprint.*FROM usage_billing_dedup.*WHERE request_id = \$1 AND api_key_id = \$2`).
+		WithArgs("req-dedup", int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint"}).AddRow("old-fingerprint"))
+	mock.ExpectRollback()
+
+	applied, err := (&usageBillingRepository{}).claimUsageBillingRequest(ctx, tx, "req-dedup", 7, "new-fingerprint")
+	require.False(t, applied)
+	require.ErrorIs(t, err, service.ErrUsageBillingRequestConflict)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageBillingRetry_RollsBackFailedClaimBeforeRetry(t *testing.T) {
+	ctx := context.Background()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	repo := &usageBillingRepository{db: db}
+	cmd := &service.UsageBillingCommand{RequestID: "req-retry", APIKeyID: 7, UserID: 42, RequestFingerprint: "retry-fingerprint"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)INSERT INTO usage_billing_dedup.*RETURNING id`).
+		WithArgs("req-retry", int64(7), "retry-fingerprint").
+		WillReturnError(context.DeadlineExceeded)
+	mock.ExpectRollback()
+	_, err = repo.Apply(ctx, cmd)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)INSERT INTO usage_billing_dedup.*RETURNING id`).
+		WithArgs("req-retry", int64(7), "retry-fingerprint").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	mock.ExpectQuery(`(?s)SELECT request_fingerprint.*FROM usage_billing_dedup_archive`).
+		WithArgs("req-retry", int64(7)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectCommit()
+	result, err := repo.Apply(ctx, cmd)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDeductUsageBillingBalance_UsesSufficientBalanceGuard(t *testing.T) {
 	ctx := context.Background()
 	db, mock, err := sqlmock.New()

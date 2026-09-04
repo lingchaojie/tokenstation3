@@ -80,6 +80,256 @@ func TestUsageBillingRepositoryApply_DeduplicatesBalanceBilling(t *testing.T) {
 	require.Equal(t, 1, dedupCount)
 }
 
+func TestUsageBillingRepositoryApply_DedupConcurrentRetryBillsOnce(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewUsageBillingRepository(client, integrationDB)
+	rewardRepo := NewRewardCreditRepository(client, integrationDB)
+	user := mustCreateUser(t, client, &service.User{
+		Email: fmt.Sprintf("usage-billing-concurrent-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Balance: 100,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID: user.ID, Key: "sk-usage-billing-concurrent-" + uuid.NewString(), Name: "billing-concurrent", Quota: 100,
+	})
+	reward, err := rewardRepo.Grant(ctx, service.RewardCreditGrant{
+		UserID: user.ID, CreditType: service.RewardCreditDailyCheckIn, SourceKey: "task5-concurrent:" + uuid.NewString(),
+		Amount: 10, GrantedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	require.NoError(t, err)
+
+	requestID := uuid.NewString()
+	base := service.UsageBillingCommand{
+		RequestID: requestID, APIKeyID: apiKey.ID, UserID: user.ID,
+		BalanceCost: 1.25, APIKeyQuotaCost: 1.25, APIKeyRateLimitCost: 1.25,
+	}
+	type applyResult struct {
+		result *service.UsageBillingApplyResult
+		err    error
+	}
+	results := make(chan applyResult, 2)
+	for range 2 {
+		cmd := base
+		go func() {
+			result, err := repo.Apply(ctx, &cmd)
+			results <- applyResult{result: result, err: err}
+		}()
+	}
+	applied := 0
+	for range 2 {
+		got := <-results
+		require.NoError(t, got.err)
+		require.NotNil(t, got.result)
+		if got.result.Applied {
+			applied++
+		}
+	}
+	require.Equal(t, 1, applied)
+
+	var balance, quotaUsed, usage5h float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT quota_used, usage_5h FROM api_keys WHERE id = $1", apiKey.ID).Scan(&quotaUsed, &usage5h))
+	require.InDelta(t, 108.75, balance, 0.000001)
+	require.InDelta(t, 1.25, quotaUsed, 0.000001)
+	require.InDelta(t, 1.25, usage5h, 0.000001)
+	var dedupCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_billing_dedup WHERE request_id = $1 AND api_key_id = $2", requestID, apiKey.ID).Scan(&dedupCount))
+	require.Equal(t, 1, dedupCount)
+	var rewardRemaining, eventAmount float64
+	var eventCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT remaining_amount FROM user_reward_credits WHERE id = $1", reward.CreditID).Scan(&rewardRemaining))
+	require.InDelta(t, 8.75, rewardRemaining, 0.000001)
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		"SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM user_reward_credit_events WHERE request_id = $1 AND event_type = 'consume'", requestID,
+	).Scan(&eventCount, &eventAmount))
+	require.Equal(t, 1, eventCount, "same billing identity must create one reward ledger event")
+	require.InDelta(t, 1.25, eventAmount, 0.000001)
+
+	independent := base
+	independent.RequestID = uuid.NewString()
+	result, err := repo.Apply(ctx, &independent)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+	require.InDelta(t, 107.50, balance, 0.000001)
+}
+
+func TestUsageBillingRepositoryApply_RetryAfterInjectedFailureRollsBackAllEffects(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewUsageBillingRepository(client, integrationDB)
+	user := mustCreateUser(t, client, &service.User{
+		Email: fmt.Sprintf("usage-billing-rollback-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Balance: 100,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID: user.ID, Key: "sk-usage-billing-rollback-" + uuid.NewString(), Name: "billing-rollback", Quota: 100,
+	})
+
+	triggerName := "task5_usage_billing_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	_, err := integrationDB.ExecContext(ctx, fmt.Sprintf(`
+		CREATE FUNCTION pg_temp.%s_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.id = %d THEN RAISE EXCEPTION 'task5 injected quota failure'; END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER %s BEFORE UPDATE ON api_keys FOR EACH ROW EXECUTE FUNCTION pg_temp.%s_fn()
+	`, triggerName, apiKey.ID, triggerName, triggerName))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON api_keys", triggerName))
+	})
+
+	requestID := uuid.NewString()
+	cmd := &service.UsageBillingCommand{
+		RequestID: requestID, APIKeyID: apiKey.ID, UserID: user.ID,
+		BalanceCost: 2, APIKeyQuotaCost: 2, APIKeyRateLimitCost: 2,
+	}
+	_, err = repo.Apply(ctx, cmd)
+	require.ErrorContains(t, err, "task5 injected quota failure")
+
+	var balance, quotaUsed, usage5h float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT quota_used, usage_5h FROM api_keys WHERE id = $1", apiKey.ID).Scan(&quotaUsed, &usage5h))
+	require.InDelta(t, 100, balance, 0.000001)
+	require.InDelta(t, 0, quotaUsed, 0.000001)
+	require.InDelta(t, 0, usage5h, 0.000001)
+	var dedupCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_billing_dedup WHERE request_id = $1 AND api_key_id = $2", requestID, apiKey.ID).Scan(&dedupCount))
+	require.Zero(t, dedupCount)
+
+	_, err = integrationDB.ExecContext(ctx, fmt.Sprintf("DROP TRIGGER %s ON api_keys", triggerName))
+	require.NoError(t, err)
+	result, err := repo.Apply(ctx, cmd)
+	require.NoError(t, err)
+	require.True(t, result.Applied, "retry after rollback must be able to claim and bill the identity")
+}
+
+func TestUsageBillingRepositoryApply_FinalEffectFailureRollsBackAtomicityMatrix(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewUsageBillingRepository(client, integrationDB)
+
+	installOutboxFailure := func(t *testing.T, accountID int64) func() {
+		t.Helper()
+		suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+		functionName := "task5_billing_outbox_fail_fn_" + suffix
+		triggerName := "task5_billing_outbox_fail_tr_" + suffix
+		_, err := integrationDB.ExecContext(ctx, fmt.Sprintf(`
+			CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+				IF NEW.account_id = %d THEN RAISE EXCEPTION 'task5 injected final outbox failure'; END IF;
+				RETURN NEW;
+			END $$;
+			CREATE TRIGGER %s BEFORE INSERT ON scheduler_outbox FOR EACH ROW EXECUTE FUNCTION %s()
+		`, functionName, accountID, triggerName, functionName))
+		require.NoError(t, err)
+		return func() {
+			_, _ = integrationDB.ExecContext(context.Background(), fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON scheduler_outbox", triggerName))
+			_, _ = integrationDB.ExecContext(context.Background(), fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName))
+		}
+	}
+
+	assertCommonState := func(t *testing.T, requestID string, apiKeyID, accountID int64, wantAPIQuota, wantRate, wantAccountQuota float64, wantOutbox, wantDedup int) {
+		t.Helper()
+		var apiQuota, rate, accountQuota float64
+		var outbox, dedup int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT quota_used, usage_5h FROM api_keys WHERE id = $1", apiKeyID).Scan(&apiQuota, &rate))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COALESCE((extra->>'quota_used')::numeric, 0) FROM accounts WHERE id = $1", accountID).Scan(&accountQuota))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM scheduler_outbox WHERE event_type = $1 AND account_id = $2", service.SchedulerOutboxEventAccountChanged, accountID).Scan(&outbox))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_billing_dedup WHERE request_id = $1 AND api_key_id = $2", requestID, apiKeyID).Scan(&dedup))
+		require.InDelta(t, wantAPIQuota, apiQuota, 0.000001)
+		require.InDelta(t, wantRate, rate, 0.000001)
+		require.InDelta(t, wantAccountQuota, accountQuota, 0.000001)
+		require.Equal(t, wantOutbox, outbox)
+		require.Equal(t, wantDedup, dedup)
+	}
+
+	t.Run("reward ledger balance and quotas roll back before retry", func(t *testing.T) {
+		user := mustCreateUser(t, client, &service.User{Email: "task5-atomic-reward-" + uuid.NewString() + "@example.com", PasswordHash: "hash", Balance: 100})
+		apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-task5-atomic-reward-" + uuid.NewString(), Name: "atomic-reward", Quota: 100})
+		account := mustCreateAccount(t, client, &service.Account{Name: "task5-atomic-reward-" + uuid.NewString(), Type: service.AccountTypeAPIKey, Extra: map[string]any{"quota_limit": 1.0}})
+		reward, err := NewRewardCreditRepository(client, integrationDB).Grant(ctx, service.RewardCreditGrant{
+			UserID: user.ID, CreditType: service.RewardCreditDailyCheckIn, SourceKey: "task5-atomic:" + uuid.NewString(), Amount: 10,
+			GrantedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
+		require.NoError(t, err)
+		requestID := "task5-atomic-reward-" + uuid.NewString()
+		cmd := &service.UsageBillingCommand{
+			RequestID: requestID, APIKeyID: apiKey.ID, UserID: user.ID, AccountID: account.ID, AccountType: service.AccountTypeAPIKey,
+			BalanceCost: 2, APIKeyQuotaCost: 2, APIKeyRateLimitCost: 2, AccountQuotaCost: 2,
+		}
+		dropFailure := installOutboxFailure(t, account.ID)
+		t.Cleanup(dropFailure)
+		_, err = repo.Apply(ctx, cmd)
+		require.ErrorContains(t, err, "task5 injected final outbox failure")
+
+		var balance, remaining float64
+		var eventCount int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT remaining_amount FROM user_reward_credits WHERE id = $1", reward.CreditID).Scan(&remaining))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM user_reward_credit_events WHERE request_id = $1 AND event_type = 'consume'", requestID).Scan(&eventCount))
+		require.InDelta(t, 110, balance, 0.000001)
+		require.InDelta(t, 10, remaining, 0.000001)
+		require.Zero(t, eventCount)
+		assertCommonState(t, requestID, apiKey.ID, account.ID, 0, 0, 0, 0, 0)
+
+		dropFailure()
+		result, err := repo.Apply(ctx, cmd)
+		require.NoError(t, err)
+		require.True(t, result.Applied)
+		replay, err := repo.Apply(ctx, cmd)
+		require.NoError(t, err)
+		require.False(t, replay.Applied)
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT remaining_amount FROM user_reward_credits WHERE id = $1", reward.CreditID).Scan(&remaining))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM user_reward_credit_events WHERE request_id = $1 AND event_type = 'consume'", requestID).Scan(&eventCount))
+		require.InDelta(t, 108, balance, 0.000001)
+		require.InDelta(t, 8, remaining, 0.000001)
+		require.Equal(t, 1, eventCount)
+		assertCommonState(t, requestID, apiKey.ID, account.ID, 2, 2, 2, 1, 1)
+	})
+
+	t.Run("subscription and quotas roll back before retry", func(t *testing.T) {
+		user := mustCreateUser(t, client, &service.User{Email: "task5-atomic-subscription-" + uuid.NewString() + "@example.com", PasswordHash: "hash", Balance: 100})
+		group := mustCreateGroup(t, client, &service.Group{Name: "task5-atomic-subscription-" + uuid.NewString(), Platform: service.PlatformAnthropic, SubscriptionType: service.SubscriptionTypeSubscription})
+		apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, GroupID: &group.ID, Key: "sk-task5-atomic-subscription-" + uuid.NewString(), Name: "atomic-subscription", Quota: 100})
+		limit := 100.0
+		subscription := mustCreateSubscription(t, client, &service.UserSubscription{UserID: user.ID, GroupID: group.ID, SevenDayLimitUSD: &limit})
+		account := mustCreateAccount(t, client, &service.Account{Name: "task5-atomic-subscription-" + uuid.NewString(), Type: service.AccountTypeAPIKey, Extra: map[string]any{"quota_limit": 1.0}})
+		requestID := "task5-atomic-subscription-" + uuid.NewString()
+		cmd := &service.UsageBillingCommand{
+			RequestID: requestID, APIKeyID: apiKey.ID, UserID: user.ID, AccountID: account.ID, AccountType: service.AccountTypeAPIKey,
+			SubscriptionID: &subscription.ID, SubscriptionCost: 2, SubscriptionSevenDayLimitUSD: &limit,
+			APIKeyQuotaCost: 2, APIKeyRateLimitCost: 2, AccountQuotaCost: 2,
+		}
+		dropFailure := installOutboxFailure(t, account.ID)
+		t.Cleanup(dropFailure)
+		_, err := repo.Apply(ctx, cmd)
+		require.ErrorContains(t, err, "task5 injected final outbox failure")
+
+		var balance, daily, weekly, monthly float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&balance))
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT daily_usage_usd, weekly_usage_usd, monthly_usage_usd FROM user_subscriptions WHERE id = $1", subscription.ID).Scan(&daily, &weekly, &monthly))
+		require.InDelta(t, 100, balance, 0.000001)
+		require.InDelta(t, 0, daily, 0.000001)
+		require.InDelta(t, 0, weekly, 0.000001)
+		require.InDelta(t, 0, monthly, 0.000001)
+		assertCommonState(t, requestID, apiKey.ID, account.ID, 0, 0, 0, 0, 0)
+
+		dropFailure()
+		result, err := repo.Apply(ctx, cmd)
+		require.NoError(t, err)
+		require.True(t, result.Applied)
+		replay, err := repo.Apply(ctx, cmd)
+		require.NoError(t, err)
+		require.False(t, replay.Applied)
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT daily_usage_usd, weekly_usage_usd, monthly_usage_usd FROM user_subscriptions WHERE id = $1", subscription.ID).Scan(&daily, &weekly, &monthly))
+		require.InDelta(t, 2, daily, 0.000001)
+		require.InDelta(t, 2, weekly, 0.000001)
+		require.InDelta(t, 2, monthly, 0.000001)
+		assertCommonState(t, requestID, apiKey.ID, account.ID, 2, 2, 2, 1, 1)
+	})
+}
+
 func TestUsageBillingRepositoryApply_AllowsPostUsageBalanceOverdraft(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)

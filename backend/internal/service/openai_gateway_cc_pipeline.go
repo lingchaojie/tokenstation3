@@ -145,16 +145,44 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	if account.Platform != PlatformGrok && !tempUnscheduled {
 		shouldDisable = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 	}
-	failure := newOpenAIUpstreamFailoverError(
+	failure := s.newOpenAIAccountFailoverError(
+		account,
 		resp.StatusCode,
 		resp.Header,
 		respBody,
 		upstreamMsg,
+		shouldDisable,
 		!shouldDisable && account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 		resp,
 		string(account.Platform),
 	)
 	failure.CaptureResponseIncomplete = !openAIUpstreamErrorResponseComplete(resp, respBody, openAIUpstreamErrorBodyReadLimitForConfig(s.cfg))
+	return failure
+}
+
+// newOpenAIStreamFailoverErrorFromResponseWithModel preserves both upstream's
+// canonical-model classification and the local wire metadata needed by capture.
+func (s *OpenAIGatewayService) newOpenAIStreamFailoverErrorFromResponseWithModel(
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	requestID string,
+	payload []byte,
+	message string,
+	canonicalModel string,
+	resp *http.Response,
+) *UpstreamFailoverError {
+	var headers http.Header
+	if resp != nil {
+		headers = resp.Header
+	}
+	failure := s.newOpenAIStreamFailoverErrorWithModel(c, account, passthrough, requestID, payload, message, canonicalModel, headers)
+	if resp != nil {
+		failure.RequestHeaders = captureRequestHeadersFromResponse(resp)
+		failure.ResponseHeaders = resp.Header.Clone()
+		failure.UpstreamEndpoint = captureEndpointFromResponse(resp)
+		failure.HasUpstreamHTTPResponse = true
+	}
 	return failure
 }
 
@@ -209,6 +237,10 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
+	// 记录本次实际选择的协议端点，供错误日志和用量日志在没有
+	// OpenAIForwardResult（例如 503/传输失败）时使用。每次发送都覆盖，
+	// 避免 Gin context 在账号 failover 尝试之间残留旧端点。
+	SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Authorization", "Bearer "+bearerToken)
@@ -246,7 +278,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 		proxyURL = account.Proxy.URL()
 	}
 	s.prepareOpenAIHTTPCaptureAttempt(c, account, upstreamReq, body)
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
@@ -445,6 +477,7 @@ func (s *stagedConvertedStream) close() error {
 // 记入 Warn 日志。
 func (s *OpenAIGatewayService) scanCCStream(
 	ctx context.Context,
+	c *gin.Context,
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
@@ -487,6 +520,12 @@ func (s *OpenAIGatewayService) scanCCStream(
 		if openAIChatPayloadContainsAudio([]byte(payload)) {
 			st.Err = newOpenAIIncompleteChatStreamFailover(resp, "chat completions audio output is not supported by the Messages/Responses compatibility bridge")
 			return st
+		}
+		// 观察上游 CC chunk 回显的 model / service_tier（计费以回显为准）。
+		// CC chunk 无 type 字段，按 untyped payload 观察（上游约束：只有终止
+		// 事件与无类型 body 报告实际处理档位）。
+		if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+			observer.ObserveOpenAI([]byte(payload), "")
 		}
 
 		usageValue := gjson.Get(payload, "usage")
@@ -597,6 +636,11 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	}
 	if sawUsageObject {
 		ccResp.Usage = parsedUsage.chatUsage()
+	}
+	// 观察上游 CC JSON 回显的 model / service_tier（计费以回显为准）。
+	// CC JSON 无 type 字段，按 untyped payload 观察（上游约束）。
+	if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+		observer.ObserveOpenAI(respBody, "")
 	}
 
 	return &ccResp, parsedUsage, sawUsageObject, nil

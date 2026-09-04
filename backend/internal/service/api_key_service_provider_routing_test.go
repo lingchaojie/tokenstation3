@@ -86,6 +86,15 @@ type apiKeyProviderRoutingCreateRepoStub struct {
 	exists  bool
 }
 
+type apiKeyAvailableGroupsRepoStub struct {
+	groupRepoStubForGroupUpdate
+	groups []Group
+}
+
+func (s *apiKeyAvailableGroupsRepoStub) ListActive(context.Context) ([]Group, error) {
+	return append([]Group(nil), s.groups...), nil
+}
+
 func (s *apiKeyProviderRoutingCreateRepoStub) Create(_ context.Context, key *APIKey) error {
 	clone := *key
 	s.created = &clone
@@ -235,27 +244,134 @@ func TestAPIKeyService_ResolveProviderGroup_FallsBackToGlobalProviderRoute(t *te
 	require.Equal(t, PlatformAnthropic, group.Platform)
 }
 
-// Mode-agnostic access: a subscription-mode default group must be resolvable even
-// when the user has no group-bound subscription for it (their universal/generic
-// subscription applies at billing time). Previously canUserBindGroup required a
-// group-bound subscription for subscription-type groups and rejected resolution.
-func TestAPIKeyService_ResolveProviderGroup_AllowsSubscriptionModeGroupWithoutGroupBoundSubscription(t *testing.T) {
+func TestAPIKeyService_ResolveProviderGroup_RequiresActiveSubscriptionForSubscriptionGroup(t *testing.T) {
 	userID := int64(42)
 	defaultGroupID := int64(3)
-	svc := &APIKeyService{groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
-		ID:               defaultGroupID,
-		Platform:         PlatformAnthropic,
-		Status:           StatusActive,
-		SubscriptionType: SubscriptionTypeSubscription,
-	}}}
+	svc := &APIKeyService{
+		groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
+			ID:               defaultGroupID,
+			Platform:         PlatformAnthropic,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeSubscription,
+		}},
+		userSubRepo: &userSubRepoStubForGroupUpdate{getActiveErr: ErrSubscriptionNotFound},
+	}
 	svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
 
 	groupID, group, err := svc.resolveProviderGroupForCreate(context.Background(), &User{ID: userID, Status: StatusActive}, APIKeyTypeAnthropic)
 
+	require.ErrorIs(t, err, ErrGroupNotAllowed)
+	require.Nil(t, groupID)
+	require.Nil(t, group)
+}
+
+func TestAPIKeyService_ResolveProviderGroup_ActiveSubscriptionStillRequiresCanonicalACL(t *testing.T) {
+	const userID int64 = 42
+	defaultGroupID := int64(3)
+	newService := func() *APIKeyService {
+		svc := &APIKeyService{
+			groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
+				ID:               defaultGroupID,
+				Platform:         PlatformAnthropic,
+				Status:           StatusActive,
+				SubscriptionType: SubscriptionTypeSubscription,
+			}},
+			userSubRepo: &userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: userID, GroupID: defaultGroupID}},
+		}
+		svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
+		return svc
+	}
+
+	for _, tt := range []struct {
+		name          string
+		allowedGroups []int64
+		wantErr       bool
+	}{
+		{name: "listed", allowedGroups: []int64{defaultGroupID}},
+		{name: "unlisted", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &User{ID: userID, Status: StatusActive, AllowedGroups: tt.allowedGroups}
+			task4SetBoolField(user, "RestrictPublicGroups", true)
+
+			groupID, group, err := newService().resolveProviderGroupForCreate(context.Background(), user, APIKeyTypeAnthropic)
+
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrGroupNotAllowed)
+				require.Nil(t, groupID)
+				require.Nil(t, group)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, defaultGroupID, *groupID)
+			require.Equal(t, defaultGroupID, group.ID)
+		})
+	}
+}
+
+func TestAPIKeyService_Create_ActiveSubscriptionStillRequiresCanonicalACL(t *testing.T) {
+	const userID int64 = 42
+	defaultGroupID := int64(3)
+
+	for _, tt := range []struct {
+		name          string
+		allowedGroups []int64
+		wantErr       bool
+	}{
+		{name: "listed", allowedGroups: []int64{defaultGroupID}},
+		{name: "unlisted", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &User{ID: userID, Status: StatusActive, AllowedGroups: tt.allowedGroups}
+			task4SetBoolField(user, "RestrictPublicGroups", true)
+			apiKeyRepo := &apiKeyProviderRoutingCreateRepoStub{}
+			svc := NewAPIKeyService(
+				apiKeyRepo,
+				&apiKeyProviderRoutingUserRepoStub{user: user},
+				&groupRepoStubForGroupUpdate{group: &Group{ID: defaultGroupID, Platform: PlatformAnthropic, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription}},
+				&userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: userID, GroupID: defaultGroupID}},
+				nil, nil, nil,
+			)
+			svc.SetProviderRouting(apiKeyProviderRouteRepoStub{routes: map[string]*UserAPIKeyRoute{}}, &defaultAPIKeyGroupSettingsStub{ids: map[string]*int64{APIKeyTypeAnthropic: &defaultGroupID}})
+			customKey := "subscription-canonical-acl-" + tt.name
+
+			created, err := svc.Create(context.Background(), userID, CreateAPIKeyRequest{Name: tt.name, KeyType: APIKeyTypeAnthropic, CustomKey: &customKey})
+
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrGroupNotAllowed)
+				require.Nil(t, created)
+				require.Nil(t, apiKeyRepo.created)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, defaultGroupID, *created.GroupID)
+			require.NotNil(t, apiKeyRepo.created)
+		})
+	}
+}
+
+func TestAPIKeyService_GetAvailableGroups_ActiveSubscriptionStillRequiresCanonicalACL(t *testing.T) {
+	const userID int64 = 42
+	listedGroupID := int64(3)
+	unlistedGroupID := int64(4)
+	user := &User{ID: userID, Status: StatusActive, AllowedGroups: []int64{listedGroupID}}
+	task4SetBoolField(user, "RestrictPublicGroups", true)
+	svc := NewAPIKeyService(
+		nil,
+		&apiKeyProviderRoutingUserRepoStub{user: user},
+		&apiKeyAvailableGroupsRepoStub{groups: []Group{
+			{ID: listedGroupID, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription},
+			{ID: unlistedGroupID, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription},
+		}},
+		&userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: userID}},
+		nil, nil, nil,
+	)
+
+	groups, err := svc.GetAvailableGroups(context.Background(), userID)
+
 	require.NoError(t, err)
-	require.NotNil(t, groupID)
-	require.Equal(t, defaultGroupID, *groupID)
-	require.NotNil(t, group)
+	require.Len(t, groups, 1)
+	require.Equal(t, listedGroupID, groups[0].ID)
 }
 
 func TestAPIKeyService_ResolveProviderGroup_RejectsMissingDefault(t *testing.T) {

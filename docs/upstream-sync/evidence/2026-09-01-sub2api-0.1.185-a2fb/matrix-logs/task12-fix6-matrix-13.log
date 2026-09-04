@@ -1,0 +1,10 @@
+MATRIX ordinal=13
+MATRIX command=pnpm --dir frontend typecheck
+MATRIX start=2026-09-03T18:01:14.073228563Z
+
+> sub2api-frontend@1.0.0 typecheck /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend
+> vue-tsc --noEmit
+
+MATRIX end=2026-09-03T18:02:09.026816153Z
+MATRIX exit=0
+MATRIX summary=frontend typecheck passed

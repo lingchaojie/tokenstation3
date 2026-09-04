@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
@@ -288,7 +288,7 @@ func (_c *UserCreate) SetNillableBeginnerGuidePromptState(v *string) *UserCreate
 }
 
 // SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
-func (_c *UserCreate) SetBeginnerGuideProgress(v json.RawMessage) *UserCreate {
+func (_c *UserCreate) SetBeginnerGuideProgress(v jsontext.Value) *UserCreate {
 	_c.mutation.SetBeginnerGuideProgress(v)
 	return _c
 }
@@ -303,6 +303,20 @@ func (_c *UserCreate) SetBeginnerGuideCompletedAt(v time.Time) *UserCreate {
 func (_c *UserCreate) SetNillableBeginnerGuideCompletedAt(v *time.Time) *UserCreate {
 	if v != nil {
 		_c.SetBeginnerGuideCompletedAt(*v)
+	}
+	return _c
+}
+
+// SetRestrictPublicGroups sets the "restrict_public_groups" field.
+func (_c *UserCreate) SetRestrictPublicGroups(v bool) *UserCreate {
+	_c.mutation.SetRestrictPublicGroups(v)
+	return _c
+}
+
+// SetNillableRestrictPublicGroups sets the "restrict_public_groups" field if the given value is not nil.
+func (_c *UserCreate) SetNillableRestrictPublicGroups(v *bool) *UserCreate {
+	if v != nil {
+		_c.SetRestrictPublicGroups(*v)
 	}
 	return _c
 }
@@ -721,6 +735,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultBeginnerGuidePromptState
 		_c.mutation.SetBeginnerGuidePromptState(v)
 	}
+	if _, ok := _c.mutation.RestrictPublicGroups(); !ok {
+		v := user.DefaultRestrictPublicGroups
+		_c.mutation.SetRestrictPublicGroups(v)
+	}
 	if _, ok := _c.mutation.BalanceNotifyEnabled(); !ok {
 		v := user.DefaultBalanceNotifyEnabled
 		_c.mutation.SetBalanceNotifyEnabled(v)
@@ -826,6 +844,9 @@ func (_c *UserCreate) check() error {
 		if err := user.BeginnerGuidePromptStateValidator(v); err != nil {
 			return &ValidationError{Name: "beginner_guide_prompt_state", err: fmt.Errorf(`ent: validator failed for field "User.beginner_guide_prompt_state": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.RestrictPublicGroups(); !ok {
+		return &ValidationError{Name: "restrict_public_groups", err: errors.New(`ent: missing required field "User.restrict_public_groups"`)}
 	}
 	if _, ok := _c.mutation.BalanceNotifyEnabled(); !ok {
 		return &ValidationError{Name: "balance_notify_enabled", err: errors.New(`ent: missing required field "User.balance_notify_enabled"`)}
@@ -955,6 +976,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.BeginnerGuideCompletedAt(); ok {
 		_spec.SetField(user.FieldBeginnerGuideCompletedAt, field.TypeTime, value)
 		_node.BeginnerGuideCompletedAt = &value
+	}
+	if value, ok := _c.mutation.RestrictPublicGroups(); ok {
+		_spec.SetField(user.FieldRestrictPublicGroups, field.TypeBool, value)
+		_node.RestrictPublicGroups = value
 	}
 	if value, ok := _c.mutation.BalanceNotifyEnabled(); ok {
 		_spec.SetField(user.FieldBalanceNotifyEnabled, field.TypeBool, value)
@@ -1545,7 +1570,7 @@ func (u *UserUpsert) UpdateBeginnerGuidePromptState() *UserUpsert {
 }
 
 // SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
-func (u *UserUpsert) SetBeginnerGuideProgress(v json.RawMessage) *UserUpsert {
+func (u *UserUpsert) SetBeginnerGuideProgress(v jsontext.Value) *UserUpsert {
 	u.Set(user.FieldBeginnerGuideProgress, v)
 	return u
 }
@@ -1577,6 +1602,18 @@ func (u *UserUpsert) UpdateBeginnerGuideCompletedAt() *UserUpsert {
 // ClearBeginnerGuideCompletedAt clears the value of the "beginner_guide_completed_at" field.
 func (u *UserUpsert) ClearBeginnerGuideCompletedAt() *UserUpsert {
 	u.SetNull(user.FieldBeginnerGuideCompletedAt)
+	return u
+}
+
+// SetRestrictPublicGroups sets the "restrict_public_groups" field.
+func (u *UserUpsert) SetRestrictPublicGroups(v bool) *UserUpsert {
+	u.Set(user.FieldRestrictPublicGroups, v)
+	return u
+}
+
+// UpdateRestrictPublicGroups sets the "restrict_public_groups" field to the value that was provided on create.
+func (u *UserUpsert) UpdateRestrictPublicGroups() *UserUpsert {
+	u.SetExcluded(user.FieldRestrictPublicGroups)
 	return u
 }
 
@@ -2042,7 +2079,7 @@ func (u *UserUpsertOne) UpdateBeginnerGuidePromptState() *UserUpsertOne {
 }
 
 // SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
-func (u *UserUpsertOne) SetBeginnerGuideProgress(v json.RawMessage) *UserUpsertOne {
+func (u *UserUpsertOne) SetBeginnerGuideProgress(v jsontext.Value) *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.SetBeginnerGuideProgress(v)
 	})
@@ -2080,6 +2117,20 @@ func (u *UserUpsertOne) UpdateBeginnerGuideCompletedAt() *UserUpsertOne {
 func (u *UserUpsertOne) ClearBeginnerGuideCompletedAt() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.ClearBeginnerGuideCompletedAt()
+	})
+}
+
+// SetRestrictPublicGroups sets the "restrict_public_groups" field.
+func (u *UserUpsertOne) SetRestrictPublicGroups(v bool) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetRestrictPublicGroups(v)
+	})
+}
+
+// UpdateRestrictPublicGroups sets the "restrict_public_groups" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateRestrictPublicGroups() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateRestrictPublicGroups()
 	})
 }
 
@@ -2729,7 +2780,7 @@ func (u *UserUpsertBulk) UpdateBeginnerGuidePromptState() *UserUpsertBulk {
 }
 
 // SetBeginnerGuideProgress sets the "beginner_guide_progress" field.
-func (u *UserUpsertBulk) SetBeginnerGuideProgress(v json.RawMessage) *UserUpsertBulk {
+func (u *UserUpsertBulk) SetBeginnerGuideProgress(v jsontext.Value) *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.SetBeginnerGuideProgress(v)
 	})
@@ -2767,6 +2818,20 @@ func (u *UserUpsertBulk) UpdateBeginnerGuideCompletedAt() *UserUpsertBulk {
 func (u *UserUpsertBulk) ClearBeginnerGuideCompletedAt() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.ClearBeginnerGuideCompletedAt()
+	})
+}
+
+// SetRestrictPublicGroups sets the "restrict_public_groups" field.
+func (u *UserUpsertBulk) SetRestrictPublicGroups(v bool) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetRestrictPublicGroups(v)
+	})
+}
+
+// UpdateRestrictPublicGroups sets the "restrict_public_groups" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateRestrictPublicGroups() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateRestrictPublicGroups()
 	})
 }
 

@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-const { copyToClipboardMock } = vi.hoisted(() => ({
-  copyToClipboardMock: vi.fn().mockResolvedValue(true)
+const { copyToClipboardMock, saveAsMock } = vi.hoisted(() => ({
+  copyToClipboardMock: vi.fn().mockResolvedValue(true),
+  saveAsMock: vi.fn()
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -16,6 +17,10 @@ vi.mock('@/composables/useClipboard', () => ({
   useClipboard: () => ({
     copyToClipboard: copyToClipboardMock
   })
+}))
+
+vi.mock('file-saver', () => ({
+  saveAs: saveAsMock
 }))
 
 import UseKeyModal from '../UseKeyModal.vue'
@@ -101,7 +106,21 @@ function expectCodexFileContract(wrapper: VueWrapper, expectedBaseUrl: string) {
   expect(JSON.parse(authJson)).toEqual({ OPENAI_API_KEY: 'sk-test' })
 }
 
+function readBlobAsText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => resolve(String(reader.result || '')))
+    reader.addEventListener('error', () => reject(reader.error))
+    reader.readAsText(blob)
+  })
+}
+
 describe('UseKeyModal', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    saveAsMock.mockClear()
+  })
+
   it.each([
     {
       name: 'Claude Unix',
@@ -184,7 +203,12 @@ describe('UseKeyModal', () => {
       platform: 'unified',
       apiKey: 'sk-test',
       baseUrl: 'https://gateway.example.com/v1/',
-      windowsShell
+      windowsShell,
+      codexModelCatalogPath: client === 'codex'
+        ? os === 'windows'
+          ? '%userprofile%\\.codex\\codex-models.json'
+          : '~/.codex/codex-models.json'
+        : undefined
     }).map(({ path, content }) => ({ path, content }))
 
     expect(generatedFiles(wrapper)).toEqual(expected)
@@ -356,6 +380,7 @@ describe('UseKeyModal', () => {
     expect(configToml).toContain('http_headers = { "x-openai-actor-authorization" = "local-image-extension" }')
     expect(configToml).not.toContain('env_key')
     expect(configToml).not.toContain('image_generation')
+    expect(configToml).not.toContain('experimental_bearer_token')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
 
@@ -1080,5 +1105,60 @@ describe('UseKeyModal', () => {
     expect(mythos.limit).toEqual({ context: 1048576, output: 128000 })
     expect(mythos.options.thinking).toEqual({ type: 'adaptive' })
     expect(mythos.options.thinking).not.toHaveProperty('budgetTokens')
+  })
+
+  it('derives OpenAI Codex reasoning effort from the selected catalog descriptor', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        models: [
+          {
+            slug: 'glm-5.3',
+            default_reasoning_level: 'none',
+            supported_reasoning_levels: [{ effort: 'none' }]
+          }
+        ]
+      })
+    }))
+
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-openai-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    await wrapper.get('[data-testid="codex-model-catalog-fetch"]').trigger('click')
+    await flushPromises()
+
+    const configToml = wrapper.findAll('pre code')
+      .map((code) => code.text())
+      .find((content) => content.includes('model_provider = "linx2ai"'))
+    expect(configToml).toContain('model = "glm-5.3"')
+    expect(configToml).toContain('model_catalog_json = "~/.codex/codex-models.json"')
+    expect(configToml).not.toContain('model_reasoning_effort')
+
+    const downloadButton = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.codexModelCatalog.download')
+    )
+    expect(downloadButton).toBeDefined()
+    await downloadButton!.trigger('click')
+
+    expect(saveAsMock).toHaveBeenCalledTimes(1)
+    expect(saveAsMock.mock.calls[0]?.[1]).toBe('codex-models.json')
+    await expect(readBlobAsText(saveAsMock.mock.calls[0]?.[0] as Blob)).resolves.toContain('glm-5.3')
   })
 })

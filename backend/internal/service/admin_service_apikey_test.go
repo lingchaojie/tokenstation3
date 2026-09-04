@@ -36,6 +36,8 @@ type userRepoStubForGroupUpdate struct {
 	removeGroupCalled bool
 	removedUserID     int64
 	removedGroupID    int64
+	user              *User
+	getByIDErr        error
 }
 
 func (s *userRepoStubForGroupUpdate) AddGroupToAllowedGroups(_ context.Context, userID int64, groupID int64) error {
@@ -49,8 +51,15 @@ func (s *userRepoStubForGroupUpdate) Create(context.Context, *User) error { pani
 func (s *userRepoStubForGroupUpdate) CreateWithEmailAliasGuard(context.Context, *User) error {
 	panic("unexpected")
 }
-func (s *userRepoStubForGroupUpdate) GetByID(context.Context, int64) (*User, error) {
-	panic("unexpected")
+func (s *userRepoStubForGroupUpdate) GetByID(_ context.Context, userID int64) (*User, error) {
+	if s.getByIDErr != nil {
+		return nil, s.getByIDErr
+	}
+	if s.user == nil {
+		return &User{ID: userID}, nil
+	}
+	clone := *s.user
+	return &clone, nil
 }
 func (s *userRepoStubForGroupUpdate) GetByEmail(context.Context, string) (*User, error) {
 	panic("unexpected")
@@ -178,6 +187,9 @@ func (s *apiKeyRepoStubForGroupUpdate) GetByID(_ context.Context, _ int64) (*API
 		return nil, s.getErr
 	}
 	clone := *s.key
+	if clone.User == nil {
+		clone.User = &User{ID: clone.UserID}
+	}
 	return &clone, nil
 }
 func (s *apiKeyRepoStubForGroupUpdate) Update(_ context.Context, key *APIKey, fields APIKeyUpdateFields) error {
@@ -697,6 +709,79 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_NonExclusiveGroup_NoAllowedGroupU
 	require.False(t, got.AutoGrantedGroupAccess)
 }
 
+func TestAdminService_AdminUpdateAPIKeyGroupID_PublicGroupRequiresCanonicalUserACL(t *testing.T) {
+	const groupID int64 = 10
+	for _, tt := range []struct {
+		name          string
+		allowedGroups []int64
+		wantReason    string
+	}{
+		{name: "restricted listed", allowedGroups: []int64{groupID}},
+		{name: "restricted unlisted", wantReason: "GROUP_ACCESS_DENIED"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &User{ID: 42, AllowedGroups: tt.allowedGroups}
+			task4SetBoolField(user, "RestrictPublicGroups", true)
+			apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: &APIKey{ID: 1, UserID: user.ID, Key: "sk-test"}}
+			svc := &adminServiceImpl{
+				apiKeyRepo: apiKeyRepo,
+				groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
+					ID: groupID, Name: "Public", Status: StatusActive, SubscriptionType: SubscriptionTypeStandard,
+				}},
+				userRepo: &userRepoStubForGroupUpdate{user: user},
+			}
+
+			got, err := svc.AdminUpdateAPIKeyGroupID(context.Background(), 1, int64Ptr(groupID))
+
+			if tt.wantReason != "" {
+				require.Nil(t, got)
+				require.Equal(t, tt.wantReason, infraerrors.Reason(err))
+				require.Nil(t, apiKeyRepo.updated)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, groupID, *got.APIKey.GroupID)
+		})
+	}
+}
+
+func TestAdminService_AdminUpdateAPIKeyGroupID_ActiveSubscriptionStillRequiresCanonicalUserACL(t *testing.T) {
+	const groupID int64 = 10
+	for _, tt := range []struct {
+		name          string
+		allowedGroups []int64
+		wantReason    string
+	}{
+		{name: "restricted listed", allowedGroups: []int64{groupID}},
+		{name: "restricted unlisted", wantReason: "GROUP_ACCESS_DENIED"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &User{ID: 42, AllowedGroups: tt.allowedGroups}
+			task4SetBoolField(user, "RestrictPublicGroups", true)
+			apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: &APIKey{ID: 1, UserID: user.ID, Key: "sk-test"}}
+			svc := &adminServiceImpl{
+				apiKeyRepo: apiKeyRepo,
+				groupRepo: &groupRepoStubForGroupUpdate{group: &Group{
+					ID: groupID, Name: "Subscription", Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription,
+				}},
+				userRepo:    &userRepoStubForGroupUpdate{user: user},
+				userSubRepo: &userSubRepoStubForGroupUpdate{getActiveSub: &UserSubscription{UserID: user.ID, GroupID: groupID}},
+			}
+
+			got, err := svc.AdminUpdateAPIKeyGroupID(context.Background(), 1, int64Ptr(groupID))
+
+			if tt.wantReason != "" {
+				require.Nil(t, got)
+				require.Equal(t, tt.wantReason, infraerrors.Reason(err))
+				require.Nil(t, apiKeyRepo.updated)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, groupID, *got.APIKey.GroupID)
+		})
+	}
+}
+
 func TestAdminService_AdminUpdateAPIKeyGroupID_SubscriptionGroup_Blocked(t *testing.T) {
 	existing := &APIKey{ID: 1, UserID: 42, Key: "sk-test", GroupID: nil}
 	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
@@ -732,7 +817,7 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_SubscriptionGroup_AllowsActiveSub
 	existing := &APIKey{ID: 1, UserID: 42, Key: "sk-test", GroupID: nil}
 	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
 	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 10, Name: "Sub", Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeSubscription}}
-	userRepo := &userRepoStubForGroupUpdate{}
+	userRepo := &userRepoStubForGroupUpdate{user: &User{ID: 42, AllowedGroups: []int64{10}}}
 	userSubRepo := &userSubRepoStubForGroupUpdate{
 		getActiveSub: &UserSubscription{ID: 99, UserID: 42, GroupID: 10},
 	}

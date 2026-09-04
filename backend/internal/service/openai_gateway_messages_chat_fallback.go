@@ -173,16 +173,17 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	c.JSON(http.StatusOK, anthropicResp)
 
 	return &OpenAIForwardResult{
-		RequestID:               requestID,
-		Usage:                   parsedUsage.Usage,
-		Model:                   originalModel,
-		BillingModel:            billingModel,
-		UpstreamModel:           upstreamModel,
-		ReasoningEffort:         reasoningEffort,
-		ServiceTier:             serviceTier,
-		Stream:                  false,
-		Duration:                time.Since(startTime),
-		CaptureResponseComplete: true,
+		RequestID:                   requestID,
+		Usage:                       parsedUsage.Usage,
+		Model:                       originalModel,
+		BillingModel:                billingModel,
+		UpstreamModel:               upstreamModel,
+		ReasoningEffort:             reasoningEffort,
+		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		Stream:                      false,
+		Duration:                    time.Since(startTime),
+		CaptureResponseComplete:     true,
 	}, nil
 }
 
@@ -229,20 +230,21 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		return semanticOutput, nil
 	}
 
-	scan := s.scanCCStream(ctx, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
+	scan := s.scanCCStream(ctx, c, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
 	result := &OpenAIForwardResult{
-		RequestID:               requestID,
-		Usage:                   scan.Usage,
-		Model:                   originalModel,
-		BillingModel:            billingModel,
-		UpstreamModel:           upstreamModel,
-		ReasoningEffort:         reasoningEffort,
-		ServiceTier:             serviceTier,
-		Stream:                  true,
-		Duration:                time.Since(startTime),
-		FirstTokenMs:            scan.FirstTokenMs,
-		ClientDisconnect:        clientDisconnected,
-		CaptureResponseComplete: scan.SawDone,
+		RequestID:                   requestID,
+		Usage:                       scan.Usage,
+		Model:                       originalModel,
+		BillingModel:                billingModel,
+		UpstreamModel:               upstreamModel,
+		ReasoningEffort:             reasoningEffort,
+		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		Stream:                      true,
+		Duration:                    time.Since(startTime),
+		FirstTokenMs:                scan.FirstTokenMs,
+		ClientDisconnect:            clientDisconnected,
+		CaptureResponseComplete:     scan.SawDone,
 	}
 	if scan.Err != nil {
 		var failoverErr *UpstreamFailoverError

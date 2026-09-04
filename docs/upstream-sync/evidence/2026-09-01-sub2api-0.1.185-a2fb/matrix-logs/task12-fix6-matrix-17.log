@@ -1,0 +1,23 @@
+MATRIX ordinal=17
+MATRIX command=make test-frontend-webchat
+MATRIX start=2026-09-03T18:06:00.834459867Z
+
+ RUN  v2.1.9 /home/alvin/tokenstation3/.worktrees/upstream-sub2api-20260901-a2fb/frontend
+
+ ✓ src/utils/__tests__/webChatAttachmentAccept.spec.ts (2 tests) 6ms
+ ✓ src/utils/__tests__/webChatModelName.spec.ts (18 tests) 14ms
+ ✓ src/components/chat/__tests__/chatStore.spec.ts (18 tests) 85ms
+Browserslist: browsers data (caniuse-lite) is 9 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+ ✓ src/components/chat/__tests__/MessageList.spec.ts (9 tests) 227ms
+ ✓ src/components/chat/__tests__/ChatView.spec.ts (28 tests) 552ms
+
+ Test Files  5 passed (5)
+      Tests  75 passed (75)
+   Start at  02:06:01
+   Duration  4.85s (transform 2.88s, setup 751ms, collect 5.18s, tests 884ms, environment 3.55s, prepare 539ms)
+
+MATRIX end=2026-09-03T18:06:06.885511701Z
+MATRIX exit=0
+MATRIX summary=frontend WebChat tests passed

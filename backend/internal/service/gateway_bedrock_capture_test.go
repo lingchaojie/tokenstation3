@@ -264,6 +264,64 @@ func TestGatewayService_BedrockClientDisconnectDoesNotHideProviderReadError(t *t
 	require.False(t, result.CaptureResponseComplete)
 }
 
+// A nonsemantic Bedrock frame can commit client-visible bytes before the
+// downstream write reports a disconnect. The gateway must keep draining the
+// provider for usage; a later provider read error must not turn those collected
+// billable units into a capture-only failure merely because no text/tool delta
+// was successfully written.
+func TestGatewayService_BedrockVisibleNonSemanticDisconnectKeepsLaterUsageBillable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &bedrockPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
+
+	inbound := []byte(`{"model":"anthropic.claude-3-5-sonnet-20240620-v1:0","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(inbound), PlatformAnthropic)
+	require.NoError(t, err)
+
+	var frames bytes.Buffer
+	for _, event := range []string{
+		`{"type":"message_start","message":{"id":"msg_bedrock_usage_after_disconnect","type":"message","role":"assistant","model":"bedrock","content":[],"usage":{"input_tokens":3,"output_tokens":0}}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}`,
+	} {
+		_, _ = frames.Write(buildBedrockServiceChunkFrame(t, event))
+	}
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     {"application/vnd.amazon.eventstream"},
+			"X-Amzn-Requestid": {"bedrock-visible-usage-id"},
+		},
+		Body: &bedrockFramesThenError{frames: bytes.NewReader(frames.Bytes()), err: io.ErrUnexpectedEOF},
+	}}
+	svc := &GatewayService{
+		cfg:              &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+		deferredService:  &DeferredService{},
+	}
+	account := &Account{
+		ID: 815, Name: "bedrock-visible-usage", Platform: PlatformAnthropic,
+		Type: AccountTypeBedrock, Concurrency: 1,
+		Credentials: map[string]any{
+			"auth_mode": "apikey", "api_key": "bedrock-provider-secret", "aws_region": "us-east-1",
+		},
+		Status: StatusActive, Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.Equal(t, 3, result.Usage.InputTokens)
+	require.Equal(t, 4, result.Usage.OutputTokens)
+	require.False(t, result.UpstreamFailed, "client-visible partial usage remains eligible for accounting")
+	require.True(t, result.CaptureTerminalError)
+	require.False(t, result.CaptureResponseComplete)
+}
+
 func TestGatewayService_BedrockProviderDeadlineAfterDisconnectAbortsTerminalDisabledCapture(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

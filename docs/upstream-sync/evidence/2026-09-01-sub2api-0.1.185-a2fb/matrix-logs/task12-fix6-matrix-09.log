@@ -1,0 +1,7 @@
+MATRIX ordinal=9
+MATRIX command=/bin/sh deploy/tests/docker-compose-security-test.sh
+MATRIX start=2026-09-03T18:00:36.433565497Z
+docker compose security test passed
+MATRIX end=2026-09-03T18:00:36.455916526Z
+MATRIX exit=0
+MATRIX summary=compose security test passed

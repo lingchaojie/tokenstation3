@@ -15,16 +15,22 @@ import (
 
 type dashboardUsageRepoCapture struct {
 	service.UsageLogRepository
-	trendRequestType *int16
-	trendStream      *bool
-	modelRequestType *int16
-	modelStream      *bool
-	trendMismatch    *bool
-	modelMismatch    *bool
-	groupMismatch    *bool
-	rankingLimit     int
-	ranking          []usagestats.UserSpendingRankingItem
-	rankingTotal     float64
+	trendFilters          usagestats.UsageLogFilters
+	modelFilters          usagestats.UsageLogFilters
+	groupFilters          usagestats.UsageLogFilters
+	trendRequestType      *int16
+	trendStream           *bool
+	trendNativeCompaction *bool
+	modelRequestType      *int16
+	modelStream           *bool
+	modelNativeCompaction *bool
+	groupNativeCompaction *bool
+	trendMismatch         *bool
+	modelMismatch         *bool
+	groupMismatch         *bool
+	rankingLimit          int
+	ranking               []usagestats.UserSpendingRankingItem
+	rankingTotal          float64
 }
 
 func (s *dashboardUsageRepoCapture) GetUsageTrendWithUsageFilters(
@@ -33,8 +39,10 @@ func (s *dashboardUsageRepoCapture) GetUsageTrendWithUsageFilters(
 	granularity string,
 	filters usagestats.UsageLogFilters,
 ) ([]usagestats.TrendDataPoint, error) {
+	s.trendFilters = filters
 	s.trendRequestType = filters.RequestType
 	s.trendStream = filters.Stream
+	s.trendNativeCompaction = filters.NativeCompactionV2
 	s.trendMismatch = filters.UpstreamModelMismatch
 	return []usagestats.TrendDataPoint{}, nil
 }
@@ -60,8 +68,10 @@ func (s *dashboardUsageRepoCapture) GetModelStatsWithUsageFiltersBySource(
 	filters usagestats.UsageLogFilters,
 	source string,
 ) ([]usagestats.ModelStat, error) {
+	s.modelFilters = filters
 	s.modelRequestType = filters.RequestType
 	s.modelStream = filters.Stream
+	s.modelNativeCompaction = filters.NativeCompactionV2
 	s.modelMismatch = filters.UpstreamModelMismatch
 	return []usagestats.ModelStat{}, nil
 }
@@ -71,6 +81,8 @@ func (s *dashboardUsageRepoCapture) GetGroupStatsWithUsageFilters(
 	startTime, endTime time.Time,
 	filters usagestats.UsageLogFilters,
 ) ([]usagestats.GroupStat, error) {
+	s.groupFilters = filters
+	s.groupNativeCompaction = filters.NativeCompactionV2
 	s.groupMismatch = filters.UpstreamModelMismatch
 	return []usagestats.GroupStat{}, nil
 }
@@ -110,6 +122,7 @@ func newDashboardRequestTypeTestRouter(repo *dashboardUsageRepoCapture) *gin.Eng
 	router.GET("/admin/dashboard/trend", handler.GetUsageTrend)
 	router.GET("/admin/dashboard/models", handler.GetModelStats)
 	router.GET("/admin/dashboard/groups", handler.GetGroupStats)
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
 	router.GET("/admin/dashboard/users-ranking", handler.GetUserSpendingRanking)
 	return router
 }
@@ -206,6 +219,154 @@ func TestDashboardModelStatsValidModelSource(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestDashboardNativeCompactionFilterPropagatesAlongsideTransport(t *testing.T) {
+	resetDashboardReadCachesForTest()
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+
+	for _, path := range []string{
+		"/admin/dashboard/trend?request_type=stream&native_compaction_v2=true",
+		"/admin/dashboard/models?request_type=stream&native_compaction_v2=true",
+		"/admin/dashboard/groups?request_type=stream&native_compaction_v2=true",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, path)
+	}
+
+	require.NotNil(t, repo.trendNativeCompaction)
+	require.True(t, *repo.trendNativeCompaction)
+	require.NotNil(t, repo.modelNativeCompaction)
+	require.True(t, *repo.modelNativeCompaction)
+	require.NotNil(t, repo.groupNativeCompaction)
+	require.True(t, *repo.groupNativeCompaction)
+	require.NotNil(t, repo.trendRequestType)
+	require.Equal(t, int16(service.RequestTypeStream), *repo.trendRequestType)
+}
+
+func TestDashboardNativeCompactionFilterRejectsInvalidBoolean(t *testing.T) {
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+
+	for _, path := range []string{
+		"/admin/dashboard/trend?native_compaction_v2=invalid",
+		"/admin/dashboard/models?native_compaction_v2=invalid",
+		"/admin/dashboard/groups?native_compaction_v2=invalid",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code, path)
+	}
+}
+
+func TestDashboardSnapshotNativeCompactionFilterPropagatesAlongsideTransport(t *testing.T) {
+	resetDashboardReadCachesForTest()
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/dashboard/snapshot-v2?include_stats=false&include_trend=true&include_model_stats=true&include_group_stats=true&request_type=stream&native_compaction_v2=true",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, repo.trendNativeCompaction)
+	require.True(t, *repo.trendNativeCompaction)
+	require.NotNil(t, repo.modelNativeCompaction)
+	require.True(t, *repo.modelNativeCompaction)
+	require.NotNil(t, repo.groupNativeCompaction)
+	require.True(t, *repo.groupNativeCompaction)
+	require.NotNil(t, repo.trendRequestType)
+	require.Equal(t, int16(service.RequestTypeStream), *repo.trendRequestType)
+}
+
+func TestDashboardSnapshotNativeCompactionFilterRejectsInvalidBoolean(t *testing.T) {
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/dashboard/snapshot-v2?include_stats=false&native_compaction_v2=invalid",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestDashboardFiltersPropagateModelSourceAndBillingMode(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+
+	for _, path := range []string{
+		"/admin/dashboard/trend?model=gpt-5.6-sol&billing_mode=image",
+		"/admin/dashboard/models?model=gpt-5.6-sol&model_source=upstream&billing_mode=image",
+		"/admin/dashboard/groups?model=gpt-5.6-sol&billing_mode=image",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, path)
+	}
+
+	require.Equal(t, "gpt-5.6-sol", repo.trendFilters.Model)
+	require.Equal(t, usagestats.ModelSourceRequested, repo.trendFilters.ModelFilterSource)
+	require.Equal(t, "image", repo.trendFilters.BillingMode)
+	require.Equal(t, "gpt-5.6-sol", repo.modelFilters.Model)
+	require.Equal(t, usagestats.ModelSourceUpstream, repo.modelFilters.ModelFilterSource)
+	require.Equal(t, "image", repo.modelFilters.BillingMode)
+	require.Equal(t, "gpt-5.6-sol", repo.groupFilters.Model)
+	require.Equal(t, usagestats.ModelSourceRequested, repo.groupFilters.ModelFilterSource)
+	require.Equal(t, "image", repo.groupFilters.BillingMode)
+}
+
+func TestDashboardSnapshotPropagatesModelSourceAndBillingMode(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/admin/dashboard/snapshot-v2?include_stats=false&include_trend=true&include_model_stats=true&include_group_stats=true&model=gpt-5.6-sol&billing_mode=video",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	for _, filters := range []usagestats.UsageLogFilters{repo.trendFilters, repo.modelFilters, repo.groupFilters} {
+		require.Equal(t, "gpt-5.6-sol", filters.Model)
+		require.Equal(t, usagestats.ModelSourceRequested, filters.ModelFilterSource)
+		require.Equal(t, "video", filters.BillingMode)
+	}
+}
+
+func TestDashboardRejectsInvalidBillingMode(t *testing.T) {
+	repo := &dashboardUsageRepoCapture{}
+	router := newDashboardRequestTypeTestRouter(repo)
+
+	for _, path := range []string{
+		"/admin/dashboard/trend?billing_mode=invalid",
+		"/admin/dashboard/models?billing_mode=invalid",
+		"/admin/dashboard/groups?billing_mode=invalid",
+		"/admin/dashboard/snapshot-v2?include_stats=false&billing_mode=invalid",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code, path)
+	}
 }
 
 func TestDashboardModelAuditFilterPropagatesToTrendModelAndGroupQueries(t *testing.T) {

@@ -297,7 +297,7 @@ func TestCalculateStatsCost_TokenBilling_WithImageInput(t *testing.T) {
 	require.InDelta(t, 9.1, *result, 1e-12)
 }
 
-func TestCalculateStatsCost_TokenBilling_ImageInputFallsBackToInputPrice(t *testing.T) {
+func TestCalculateStatsCost_TokenBilling_MissingImageInputPriceFailsClosed(t *testing.T) {
 	pricing := &ChannelModelPricing{
 		BillingMode: BillingModeToken,
 		InputPrice:  testPtrFloat64(0.001),
@@ -309,11 +309,10 @@ func TestCalculateStatsCost_TokenBilling_ImageInputFallsBackToInputPrice(t *test
 
 	result := calculateStatsCost(pricing, tokens, 1)
 
-	require.NotNil(t, result)
-	require.InDelta(t, 1.0, *result, 1e-12)
+	require.Nil(t, result)
 }
 
-func TestCalculateStatsCost_TokenBilling_ZeroImageInputPriceFallsBackToInputPrice(t *testing.T) {
+func TestCalculateStatsCost_TokenBilling_ExplicitZeroImageInputPriceIsFree(t *testing.T) {
 	pricing := &ChannelModelPricing{
 		BillingMode:     BillingModeToken,
 		InputPrice:      testPtrFloat64(0.001),
@@ -327,7 +326,8 @@ func TestCalculateStatsCost_TokenBilling_ZeroImageInputPriceFallsBackToInputPric
 	result := calculateStatsCost(pricing, tokens, 1)
 
 	require.NotNil(t, result)
-	require.InDelta(t, 1.0, *result, 1e-12)
+	// 100 text tokens are billed; 900 image tokens have an explicit free price.
+	require.InDelta(t, 0.1, *result, 1e-12)
 }
 
 func TestCalculateStatsCost_TokenIntervalPreservesImageInputPrice(t *testing.T) {
@@ -353,7 +353,7 @@ func TestCalculateStatsCost_TokenBilling_PartialPricesNil(t *testing.T) {
 	pricing := &ChannelModelPricing{
 		BillingMode: BillingModeToken,
 		InputPrice:  testPtrFloat64(0.001),
-		// OutputPrice, CacheWritePrice, etc. are all nil → treated as 0
+		// OutputPrice and CacheWritePrice are absent but used below.
 	}
 	tokens := UsageTokens{
 		InputTokens:         100,
@@ -361,9 +361,7 @@ func TestCalculateStatsCost_TokenBilling_PartialPricesNil(t *testing.T) {
 		CacheCreationTokens: 200,
 	}
 	result := calculateStatsCost(pricing, tokens, 1)
-	require.NotNil(t, result)
-	// Only input contributes: 100*0.001 = 0.1
-	require.InDelta(t, 0.1, *result, 1e-12)
+	require.Nil(t, result)
 }
 
 func TestCalculateStatsCost_TokenBilling_AllTokensZero(t *testing.T) {
@@ -421,8 +419,8 @@ func TestCalculateStatsCost_PerRequestBilling_PriceZero(t *testing.T) {
 		PerRequestPrice: testPtrFloat64(0),
 	}
 	result := calculateStatsCost(pricing, UsageTokens{}, 1)
-	// price == 0 → condition *pricing.PerRequestPrice > 0 is false → returns nil
-	require.Nil(t, result)
+	require.NotNil(t, result)
+	require.Zero(t, *result)
 }
 
 func TestCalculateStatsCost_ImageBilling(t *testing.T) {
@@ -894,7 +892,7 @@ func TestResolveAccountStatsCost_LongContextProviderPricingPrecedesApplyPricing(
 	require.InDelta(t, 0.233, *result, 1e-12)
 }
 
-func TestResolveAccountStatsCost_ApplyPricingToAccountStats_ZeroTotalCost_ReturnsNil(t *testing.T) {
+func TestResolveAccountStatsCost_ApplyPricingToAccountStats_ZeroTotalCostPreservesResolvedFreePrice(t *testing.T) {
 	channel := &Channel{
 		ID:                         1,
 		Status:                     StatusActive,
@@ -908,7 +906,8 @@ func TestResolveAccountStatsCost_ApplyPricingToAccountStats_ZeroTotalCost_Return
 		1, 10, "claude-sonnet-4",
 		UsageTokens{}, 1, 0.0, "", // totalCost = 0
 	)
-	require.Nil(t, result)
+	require.NotNil(t, result)
+	require.Zero(t, *result)
 }
 
 func TestResolveAccountStatsCost_FallsBackToLiteLLM(t *testing.T) {

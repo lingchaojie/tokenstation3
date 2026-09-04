@@ -3,7 +3,8 @@
     <div class="linear-usage-page">
     <TablePageLayout>
       <template #actions>
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div class="w-full space-y-4">
+          <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <!-- Total Requests -->
           <div class="linx-panel p-4">
           <div class="flex items-center gap-3">
@@ -97,6 +98,49 @@
             </div>
           </div>
         </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <ModelDistributionChart
+              v-model:metric="modelDistributionMetric"
+              :model-stats="requestedModelStats"
+              :loading="modelStatsLoading"
+              :show-source-toggle="false"
+              :show-metric-toggle="true"
+              :enable-breakdown="false"
+              :show-account-cost="false"
+              :start-date="startDate"
+              :end-date="endDate"
+            />
+            <GroupDistributionChart
+              v-model:metric="groupDistributionMetric"
+              :group-stats="groupStats"
+              :loading="chartsLoading"
+              :show-metric-toggle="true"
+              :enable-breakdown="false"
+              :show-account-cost="false"
+              :start-date="startDate"
+              :end-date="endDate"
+            />
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <EndpointDistributionChart
+              v-model:source="endpointDistributionSource"
+              v-model:metric="endpointDistributionMetric"
+              :endpoint-stats="inboundEndpointStats"
+              :upstream-endpoint-stats="[]"
+              :endpoint-path-stats="[]"
+              :loading="endpointStatsLoading"
+              :show-source-toggle="false"
+              :show-metric-toggle="true"
+              :enable-breakdown="false"
+              :title="t('usage.endpointDistribution')"
+              :start-date="startDate"
+              :end-date="endDate"
+            />
+            <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
+          </div>
         </div>
       </template>
 
@@ -131,7 +175,6 @@
               </div>
             </template>
             <template v-else>
-              <!-- API Key Filter -->
               <div class="min-w-[180px]">
                 <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>
                 <Select
@@ -140,6 +183,34 @@
                   :placeholder="t('usage.allApiKeys')"
                   @change="applyFilters"
                 />
+              </div>
+              <div class="min-w-[180px]">
+                <label class="input-label">{{ t('usage.model') }}</label>
+                <Select v-model="filters.model" :options="modelOptions" searchable @change="applyFilters" />
+              </div>
+              <div class="min-w-[180px]">
+                <label class="input-label">{{ t('admin.usage.group') }}</label>
+                <Select v-model="filters.group_id" :options="groupOptions" searchable @change="applyFilters" />
+              </div>
+              <div class="min-w-[160px]">
+                <label class="input-label">{{ t('usage.type') }}</label>
+                <Select v-model="filters.request_type" :options="requestTypeOptions" @change="applyFilters" />
+              </div>
+              <div class="min-w-[180px]">
+                <label class="input-label">{{ t('usage.compactionFilter') }}</label>
+                <Select v-model="filters.native_compaction_v2" :options="compactionOptions" @change="applyFilters" />
+              </div>
+              <div class="min-w-[180px]">
+                <label class="input-label">{{ t('admin.usage.billingType') }}</label>
+                <Select v-model="filters.billing_type" :options="billingTypeOptions" @change="applyFilters" />
+              </div>
+              <div class="min-w-[180px]">
+                <label class="input-label">{{ t('admin.usage.billingMode') }}</label>
+                <Select v-model="filters.billing_mode" :options="billingModeOptions" @change="applyFilters" />
+              </div>
+              <div class="min-w-[140px]">
+                <label class="input-label">{{ t('admin.dashboard.granularity') }}</label>
+                <Select v-model="granularity" :options="granularityOptions" @change="loadChartData" />
               </div>
             </template>
 
@@ -163,6 +234,8 @@
               </button>
               <div class="relative" ref="columnDropdownRef">
                 <button
+                  type="button"
+                  data-testid="usage-column-settings"
                   @click="showColumnDropdown = !showColumnDropdown"
                   class="btn btn-secondary px-2 md:px-3"
                   :title="t('admin.users.columnSettings')"
@@ -178,6 +251,7 @@
                     v-for="col in currentToggleableColumns"
                     :key="col.key"
                     type="button"
+                    :data-testid="`usage-column-toggle-${col.key}`"
                     @click="toggleCurrentColumn(col.key)"
                     class="flex w-full items-center justify-between px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
                   >
@@ -253,7 +327,7 @@
           </template>
 
           <template #cell-reasoning_effort="{ row }">
-            <span class="text-sm text-gray-900 dark:text-white">
+            <span data-testid="reasoning-effort-cell" class="text-sm text-gray-900 dark:text-white">
               {{ formatReasoningEffort(row.reasoning_effort) }}
             </span>
           </template>
@@ -662,7 +736,7 @@
 import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
-import { usageAPI, keysAPI } from '@/api'
+import { keysAPI, usageAPI, userGroupsAPI } from '@/api'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
@@ -670,16 +744,31 @@ import Pagination from '@/components/common/Pagination.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
+import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
+import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'
+import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
+import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import Icon from '@/components/icons/Icon.vue'
 import UserErrorRequestsTable from '@/components/user/UserErrorRequestsTable.vue'
-import type { UsageLog, ApiKey, UsageQueryParams, UsageStatsResponse, UserErrorRequest } from '@/types'
+import type {
+  ApiKey,
+  EndpointStat,
+  Group,
+  GroupStat,
+  ModelStat,
+  TrendDataPoint,
+  UsageLog,
+  UsageQueryParams,
+  UsageStatsResponse,
+  UserErrorRequest,
+} from '@/types'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatCacheTokens } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
-import { resolveUsageRequestType } from '@/utils/usageRequestType'
+import { requestTypeToLegacyStream, resolveUsageRequestType } from '@/utils/usageRequestType'
 import { getBillingTypeBadgeClass, getBillingTypeLabel } from '@/utils/billingType'
 import {
   BILLING_MODE_TOKEN,
@@ -704,7 +793,13 @@ import { COMMON_ERROR_STATUS_CODES } from '@/utils/errorBadges'
 const { t } = useI18n()
 const appStore = useAppStore()
 
+type DistributionMetric = 'tokens' | 'actual_cost'
+type EndpointSource = 'inbound' | 'upstream' | 'path'
+
 let abortController: AbortController | null = null
+let chartReqSeq = 0
+let statsReqSeq = 0
+let modelStatsReqSeq = 0
 
 // Tooltip state
 const tooltipVisible = ref(false)
@@ -718,6 +813,17 @@ const tokenTooltipData = ref<UsageLog | null>(null)
 
 // Usage stats from API
 const usageStats = ref<UsageStatsResponse | null>(null)
+const trendData = ref<TrendDataPoint[]>([])
+const requestedModelStats = ref<ModelStat[]>([])
+const groupStats = ref<GroupStat[]>([])
+const inboundEndpointStats = ref<EndpointStat[]>([])
+const chartsLoading = ref(false)
+const modelStatsLoading = ref(false)
+const endpointStatsLoading = ref(false)
+const modelDistributionMetric = ref<DistributionMetric>('tokens')
+const groupDistributionMetric = ref<DistributionMetric>('tokens')
+const endpointDistributionMetric = ref<DistributionMetric>('tokens')
+const endpointDistributionSource = ref<EndpointSource>('inbound')
 
 // 缓存命中率 = cache_read / (input + cache_read)
 // 分母为 0（无任何输入）时显示 '-'
@@ -826,6 +932,8 @@ const loadSavedErrColumns = () => {
 
 const usageLogs = ref<UsageLog[]>([])
 const apiKeys = ref<ApiKey[]>([])
+const groups = ref<Group[]>([])
+const modelOptionValues = ref<string[]>([])
 const loading = ref(false)
 const exporting = ref(false)
 
@@ -838,6 +946,38 @@ const apiKeyOptions = computed(() => {
     }))
   ]
 })
+
+const groupOptions = computed<SelectOption[]>(() => [
+  { value: null, label: t('admin.usage.allGroups') },
+  ...groups.value.map((group) => ({ value: group.id, label: group.name })),
+])
+const modelOptions = computed<SelectOption[]>(() => [
+  { value: null, label: t('admin.usage.allModels') },
+  ...modelOptionValues.value.map((model) => ({ value: model, label: model })),
+])
+const requestTypeOptions = computed<SelectOption[]>(() => [
+  { value: null, label: t('admin.usage.allTypes') },
+  { value: 'ws_v2', label: t('usage.ws') },
+  { value: 'live', label: t('usage.live') },
+  { value: 'stream', label: t('usage.stream') },
+  { value: 'sync', label: t('usage.sync') },
+])
+const compactionOptions = computed<SelectOption[]>(() => [
+  { value: null, label: t('usage.allCompactionTypes') },
+  { value: true, label: t('usage.compactionOnly') },
+])
+const billingTypeOptions = computed<SelectOption[]>(() => [
+  { value: null, label: t('admin.usage.allBillingTypes') },
+  { value: 0, label: t('admin.usage.billingTypeBalance') },
+  { value: 1, label: t('admin.usage.billingTypeSubscription') },
+])
+const billingModeOptions = computed<SelectOption[]>(() => [
+  { value: null, label: t('admin.usage.allBillingModes') },
+  { value: 'token', label: t('admin.usage.billingModeToken') },
+  { value: 'per_request', label: t('admin.usage.billingModePerRequest') },
+  { value: 'image', label: t('admin.usage.billingModeImage') },
+  { value: 'video', label: t('admin.usage.billingModeVideo') },
+])
 
 // Helper function to format date in local timezone
 const formatLocalDate = (date: Date): string => {
@@ -853,15 +993,29 @@ weekAgo.setDate(weekAgo.getDate() - 6)
 const startDate = ref(formatLocalDate(weekAgo))
 const endDate = ref(formatLocalDate(now))
 
+const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
+  const startTime = new Date(`${start}T00:00:00`).getTime()
+  const endTime = new Date(`${end}T00:00:00`).getTime()
+  return Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24)) <= 1 ? 'hour' : 'day'
+}
+
+const granularity = ref<'day' | 'hour'>(getGranularityForRange(startDate.value, endDate.value))
+const granularityOptions = computed<SelectOption[]>(() => [
+  { value: 'day', label: t('admin.dashboard.day') },
+  { value: 'hour', label: t('admin.dashboard.hour') },
+])
+
 const filters = ref<UsageQueryParams>({
   api_key_id: undefined,
-  start_date: undefined,
-  end_date: undefined
+  start_date: startDate.value,
+  end_date: endDate.value,
+  model: undefined,
+  group_id: undefined,
+  request_type: undefined,
+  native_compaction_v2: null,
+  billing_type: null,
+  billing_mode: null,
 })
-
-// Initialize filters with date range
-filters.value.start_date = startDate.value
-filters.value.end_date = endDate.value
 
 // Handle date range change from DateRangePicker
 const onDateRangeChange = (range: {
@@ -873,6 +1027,7 @@ const onDateRangeChange = (range: {
   endDate.value = range.endDate
   filters.value.start_date = range.startDate
   filters.value.end_date = range.endDate
+  granularity.value = getGranularityForRange(range.startDate, range.endDate)
   applyFilters()
 }
 
@@ -901,6 +1056,7 @@ const formatUserAgent = (ua: string): string => {
 const getRequestTypeLabel = (log: UsageLog): string => {
   const requestType = resolveUsageRequestType(log)
   if (requestType === 'cyber') return t('usage.cyber')
+  if (requestType === 'live') return t('usage.live')
   if (requestType === 'ws_v2') return t('usage.ws')
   if (requestType === 'stream') return t('usage.stream')
   if (requestType === 'sync') return t('usage.sync')
@@ -910,6 +1066,7 @@ const getRequestTypeLabel = (log: UsageLog): string => {
 const getRequestTypeBadgeClass = (log: UsageLog): string => {
   const requestType = resolveUsageRequestType(log)
   if (requestType === 'cyber') return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+  if (requestType === 'live') return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200'
   if (requestType === 'ws_v2') return 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200'
   if (requestType === 'stream') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
   if (requestType === 'sync') return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
@@ -920,6 +1077,7 @@ const getRequestTypeBadgeClass = (log: UsageLog): string => {
 const getRequestTypeExportText = (log: UsageLog): string => {
   const requestType = resolveUsageRequestType(log)
   if (requestType === 'cyber') return 'Cyber'
+  if (requestType === 'live') return 'Live'
   if (requestType === 'ws_v2') return 'WS'
   if (requestType === 'stream') return 'Stream'
   if (requestType === 'sync') return 'Sync'
@@ -947,10 +1105,21 @@ type UsageTableQueryParams = UsageQueryParams & {
   sort_order?: 'asc' | 'desc'
 }
 
+const normalizedFilters = computed<UsageQueryParams>(() => {
+  const requestType = filters.value.request_type
+  const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
+  return {
+    ...filters.value,
+    start_date: startDate.value,
+    end_date: endDate.value,
+    stream: legacyStream === null ? undefined : legacyStream,
+  }
+})
+
 const buildUsageQueryParams = (page: number, pageSize: number): UsageTableQueryParams => ({
   page,
   page_size: pageSize,
-  ...filters.value,
+  ...normalizedFilters.value,
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })
@@ -999,17 +1168,81 @@ const loadApiKeys = async () => {
   }
 }
 
-const loadUsageStats = async () => {
+const loadGroups = async () => {
   try {
-    const apiKeyId = filters.value.api_key_id ? Number(filters.value.api_key_id) : undefined
-    const stats = await usageAPI.getStatsByDateRange(
-      filters.value.start_date || startDate.value,
-      filters.value.end_date || endDate.value,
-      apiKeyId
-    )
-    usageStats.value = stats
+    groups.value = await userGroupsAPI.getAvailable()
   } catch (error) {
+    console.error('Failed to load available groups:', error)
+  }
+}
+
+const loadUsageStats = async () => {
+  const seq = ++statsReqSeq
+  endpointStatsLoading.value = true
+  try {
+    const stats = await usageAPI.getStats(normalizedFilters.value)
+    if (seq !== statsReqSeq) return
+    usageStats.value = stats
+    inboundEndpointStats.value = stats.endpoints || []
+  } catch (error) {
+    if (seq !== statsReqSeq) return
     console.error('Failed to load usage stats:', error)
+    inboundEndpointStats.value = []
+  } finally {
+    if (seq === statsReqSeq) endpointStatsLoading.value = false
+  }
+}
+
+const refreshModelOptions = (models: ModelStat[]) => {
+  const values = new Set(modelOptionValues.value)
+  models.forEach((item) => {
+    if (item.model) values.add(item.model)
+  })
+  if (filters.value.model) values.add(filters.value.model)
+  modelOptionValues.value = Array.from(values).sort()
+}
+
+const loadModelStats = async () => {
+  const seq = ++modelStatsReqSeq
+  modelStatsLoading.value = true
+  try {
+    const response = await usageAPI.getDashboardModels({
+      ...normalizedFilters.value,
+      model_source: 'requested',
+    })
+    if (seq !== modelStatsReqSeq) return
+    requestedModelStats.value = response.models || []
+    refreshModelOptions(response.models || [])
+  } catch (error) {
+    if (seq !== modelStatsReqSeq) return
+    console.error('Failed to load model stats:', error)
+    requestedModelStats.value = []
+  } finally {
+    if (seq === modelStatsReqSeq) modelStatsLoading.value = false
+  }
+}
+
+const loadChartData = async () => {
+  const seq = ++chartReqSeq
+  chartsLoading.value = true
+  try {
+    const snapshot = await usageAPI.getDashboardSnapshotV2({
+      ...normalizedFilters.value,
+      granularity: granularity.value,
+      include_trend: true,
+      include_model_stats: false,
+      include_group_stats: true,
+    })
+    if (seq !== chartReqSeq) return
+    trendData.value = snapshot.trend || []
+    groupStats.value = snapshot.groups || []
+  } catch (error) {
+    if (seq !== chartReqSeq) return
+    console.error('Failed to load chart data:', error)
+    trendData.value = []
+    groupStats.value = []
+  } finally {
+    if (seq === chartReqSeq) chartsLoading.value = false
   }
 }
 
@@ -1017,6 +1250,8 @@ const applyFilters = () => {
   pagination.page = 1
   void loadUsageLogs()
   void loadUsageStats()
+  void loadModelStats()
+  void loadChartData()
   errorPage.value = 1
   if (activeTab.value === 'errors') {
     void loadErrors()
@@ -1038,7 +1273,13 @@ const resetFilters = () => {
   filters.value = {
     api_key_id: undefined,
     start_date: undefined,
-    end_date: undefined
+    end_date: undefined,
+    model: undefined,
+    group_id: undefined,
+    request_type: undefined,
+    native_compaction_v2: null,
+    billing_type: null,
+    billing_mode: null,
   }
   // Reset date range to default (last 7 days)
   const now = new Date()
@@ -1048,11 +1289,14 @@ const resetFilters = () => {
   endDate.value = formatLocalDate(now)
   filters.value.start_date = startDate.value
   filters.value.end_date = endDate.value
+  granularity.value = getGranularityForRange(startDate.value, endDate.value)
   pagination.page = 1
   errorFilter.value = { model: '', category: '', api_key_id: null, status_code: null }
   errorPage.value = 1
   void loadUsageLogs()
   void loadUsageStats()
+  void loadModelStats()
+  void loadChartData()
   if (activeTab.value === 'errors') void loadErrors()
   else {
     errorRows.value = []
@@ -1343,8 +1587,11 @@ onMounted(() => {
   loadSavedColumns()
   loadSavedErrColumns()
   void loadApiKeys()
+  void loadGroups()
   void loadUsageLogs()
   void loadUsageStats()
+  void loadModelStats()
+  void loadChartData()
   document.addEventListener('click', handleColumnClickOutside)
 })
 

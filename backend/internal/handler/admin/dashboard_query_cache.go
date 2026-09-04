@@ -30,6 +30,7 @@ type dashboardTrendCacheKey struct {
 	BillingMode           string  `json:"billing_mode,omitempty"`
 	RequestType           *int16  `json:"request_type"`
 	Stream                *bool   `json:"stream"`
+	NativeCompactionV2    *bool   `json:"native_compaction_v2"`
 	BillingType           *int8   `json:"billing_type"`
 	ExcludedUserIDs       []int64 `json:"excluded_user_ids,omitempty"`
 	UpstreamModelMismatch *bool   `json:"upstream_model_mismatch"`
@@ -48,6 +49,7 @@ type dashboardModelGroupCacheKey struct {
 	BillingMode           string  `json:"billing_mode,omitempty"`
 	RequestType           *int16  `json:"request_type"`
 	Stream                *bool   `json:"stream"`
+	NativeCompactionV2    *bool   `json:"native_compaction_v2"`
 	BillingType           *int8   `json:"billing_type"`
 	ExcludedUserIDs       []int64 `json:"excluded_user_ids,omitempty"`
 	UpstreamModelMismatch *bool   `json:"upstream_model_mismatch"`
@@ -103,6 +105,7 @@ func (h *DashboardHandler) getUsageTrendCached(
 		BillingMode:           filters.BillingMode,
 		RequestType:           filters.RequestType,
 		Stream:                filters.Stream,
+		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
 		ExcludedUserIDs:       usagestats.NormalizeExcludedUserIDs(filters.ExcludedUserIDs),
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
@@ -136,6 +139,7 @@ func (h *DashboardHandler) getModelStatsCached(
 		BillingMode:           filters.BillingMode,
 		RequestType:           filters.RequestType,
 		Stream:                filters.Stream,
+		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
 		ExcludedUserIDs:       usagestats.NormalizeExcludedUserIDs(filters.ExcludedUserIDs),
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
@@ -167,6 +171,7 @@ func (h *DashboardHandler) getGroupStatsCached(
 		BillingMode:           filters.BillingMode,
 		RequestType:           filters.RequestType,
 		Stream:                filters.Stream,
+		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
 		ExcludedUserIDs:       usagestats.NormalizeExcludedUserIDs(filters.ExcludedUserIDs),
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,

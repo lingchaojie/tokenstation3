@@ -1,0 +1,7 @@
+MATRIX ordinal=7
+MATRIX command=/bin/bash -n deploy/apple-container.sh
+MATRIX start=2026-09-03T18:00:33.939504651Z
+MATRIX evidence=syntax produced no diagnostics
+MATRIX end=2026-09-03T18:00:33.945822431Z
+MATRIX exit=0
+MATRIX summary=apple container script syntax passed

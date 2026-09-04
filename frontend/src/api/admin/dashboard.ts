@@ -53,11 +53,14 @@ export interface TrendParams {
   exclude_user_ids?: number[]
   api_key_id?: number
   model?: string
+	model_source?: 'requested' | 'upstream' | 'mapping'
   account_id?: number
   group_id?: number
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
+	billing_mode?: string
 	upstream_model_mismatch?: boolean
 }
 
@@ -92,7 +95,9 @@ export interface ModelStatsParams {
   group_id?: number
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
+	billing_mode?: string
 	upstream_model_mismatch?: boolean
 }
 
@@ -122,9 +127,13 @@ export interface GroupStatsParams {
   api_key_id?: number
   account_id?: number
   group_id?: number
+	model?: string
+	model_source?: 'requested' | 'upstream' | 'mapping'
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
+	billing_mode?: string
 	upstream_model_mismatch?: boolean
 }
 
@@ -189,6 +198,7 @@ export interface UserBreakdownParams {
   account_id?: number
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
 }
 

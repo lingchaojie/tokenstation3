@@ -26,6 +26,8 @@ const (
 	FieldModel = "model"
 	// FieldRequestedModel holds the string denoting the requested_model field in the database.
 	FieldRequestedModel = "requested_model"
+	// FieldRequestedReasoningEffort holds the string denoting the requested_reasoning_effort field in the database.
+	FieldRequestedReasoningEffort = "requested_reasoning_effort"
 	// FieldUpstreamModel holds the string denoting the upstream_model field in the database.
 	FieldUpstreamModel = "upstream_model"
 	// FieldUpstreamResponseModel holds the string denoting the upstream_response_model field in the database.
@@ -82,6 +84,8 @@ const (
 	FieldBillingType = "billing_type"
 	// FieldStream holds the string denoting the stream field in the database.
 	FieldStream = "stream"
+	// FieldNativeCompactionV2 holds the string denoting the native_compaction_v2 field in the database.
+	FieldNativeCompactionV2 = "native_compaction_v2"
 	// FieldDurationMs holds the string denoting the duration_ms field in the database.
 	FieldDurationMs = "duration_ms"
 	// FieldFirstTokenMs holds the string denoting the first_token_ms field in the database.
@@ -174,6 +178,7 @@ var Columns = []string{
 	FieldRequestID,
 	FieldModel,
 	FieldRequestedModel,
+	FieldRequestedReasoningEffort,
 	FieldUpstreamModel,
 	FieldUpstreamResponseModel,
 	FieldUpstreamModelMismatch,
@@ -202,6 +207,7 @@ var Columns = []string{
 	FieldAccountRateMultiplier,
 	FieldBillingType,
 	FieldStream,
+	FieldNativeCompactionV2,
 	FieldDurationMs,
 	FieldFirstTokenMs,
 	FieldUserAgent,
@@ -238,6 +244,8 @@ var (
 	ModelValidator func(string) error
 	// RequestedModelValidator is a validator for the "requested_model" field. It is called by the builders before save.
 	RequestedModelValidator func(string) error
+	// RequestedReasoningEffortValidator is a validator for the "requested_reasoning_effort" field. It is called by the builders before save.
+	RequestedReasoningEffortValidator func(string) error
 	// UpstreamModelValidator is a validator for the "upstream_model" field. It is called by the builders before save.
 	UpstreamModelValidator func(string) error
 	// UpstreamResponseModelValidator is a validator for the "upstream_response_model" field. It is called by the builders before save.
@@ -284,6 +292,8 @@ var (
 	DefaultBillingType int8
 	// DefaultStream holds the default value on creation for the "stream" field.
 	DefaultStream bool
+	// DefaultNativeCompactionV2 holds the default value on creation for the "native_compaction_v2" field.
+	DefaultNativeCompactionV2 bool
 	// UserAgentValidator is a validator for the "user_agent" field. It is called by the builders before save.
 	UserAgentValidator func(string) error
 	// IPAddressValidator is a validator for the "ip_address" field. It is called by the builders before save.
@@ -346,6 +356,11 @@ func ByModel(opts ...sql.OrderTermOption) OrderOption {
 // ByRequestedModel orders the results by the requested_model field.
 func ByRequestedModel(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRequestedModel, opts...).ToFunc()
+}
+
+// ByRequestedReasoningEffort orders the results by the requested_reasoning_effort field.
+func ByRequestedReasoningEffort(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRequestedReasoningEffort, opts...).ToFunc()
 }
 
 // ByUpstreamModel orders the results by the upstream_model field.
@@ -486,6 +501,11 @@ func ByBillingType(opts ...sql.OrderTermOption) OrderOption {
 // ByStream orders the results by the stream field.
 func ByStream(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStream, opts...).ToFunc()
+}
+
+// ByNativeCompactionV2 orders the results by the native_compaction_v2 field.
+func ByNativeCompactionV2(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNativeCompactionV2, opts...).ToFunc()
 }
 
 // ByDurationMs orders the results by the duration_ms field.

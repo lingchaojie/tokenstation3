@@ -1,0 +1,7 @@
+MATRIX ordinal=5
+MATRIX command=go -C backend run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.0 run --timeout=30m ./...
+MATRIX start=2026-09-03T17:57:48.122621837Z
+0 issues.
+MATRIX end=2026-09-03T18:00:26.517463542Z
+MATRIX exit=0
+MATRIX summary=backend lint passed with zero issues

@@ -47,4 +47,20 @@ describe('OAuth login sections', () => {
     )
     expect(window.sessionStorage.getItem('oauth_aff_code')).toBe('AFF456')
   })
+
+  it('includes a trimmed promo code in the LinuxDo OAuth request', async () => {
+    const wrapper = mount(LinuxDoOAuthSection, {
+      props: {
+        affCode: 'AFF456',
+        promoCode: ' PROMO789 '
+      }
+    })
+
+    await wrapper.get('button').trigger('click')
+
+    expect(locationState.current.href).toBe(
+      '/api/v1/auth/oauth/linuxdo/start?redirect=%2Fbilling%3Fplan%3Dpro&promo_code=PROMO789'
+    )
+    expect(window.sessionStorage.getItem('oauth_aff_code')).toBe('AFF456')
+  })
 })

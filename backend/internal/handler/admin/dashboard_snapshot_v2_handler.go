@@ -42,9 +42,12 @@ type dashboardSnapshotV2Filters struct {
 	AccountID             int64
 	GroupID               int64
 	Model                 string
+	ModelSource           string
 	RequestType           *int16
 	Stream                *bool
+	NativeCompactionV2    *bool
 	BillingType           *int8
+	BillingMode           string
 	ExcludedUserIDs       []int64
 	UpstreamModelMismatch *bool
 }
@@ -58,9 +61,12 @@ type dashboardSnapshotV2CacheKey struct {
 	AccountID             int64   `json:"account_id"`
 	GroupID               int64   `json:"group_id"`
 	Model                 string  `json:"model"`
+	ModelSource           string  `json:"model_source"`
 	RequestType           *int16  `json:"request_type"`
 	Stream                *bool   `json:"stream"`
+	NativeCompactionV2    *bool   `json:"native_compaction_v2"`
 	BillingType           *int8   `json:"billing_type"`
+	BillingMode           string  `json:"billing_mode"`
 	ExcludedUserIDs       []int64 `json:"excluded_user_ids,omitempty"`
 	UpstreamModelMismatch *bool   `json:"upstream_model_mismatch"`
 	IncludeStats          bool    `json:"include_stats"`
@@ -105,9 +111,12 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		AccountID:             filters.AccountID,
 		GroupID:               filters.GroupID,
 		Model:                 filters.Model,
+		ModelSource:           filters.ModelSource,
 		RequestType:           filters.RequestType,
 		Stream:                filters.Stream,
+		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
+		BillingMode:           filters.BillingMode,
 		ExcludedUserIDs:       usagestats.NormalizeExcludedUserIDs(filters.ExcludedUserIDs),
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
 		IncludeStats:          includeStats,
@@ -170,9 +179,12 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 		AccountID:             filters.AccountID,
 		GroupID:               filters.GroupID,
 		Model:                 filters.Model,
+		ModelFilterSource:     usagestats.NormalizeModelSource(filters.ModelSource),
 		RequestType:           filters.RequestType,
 		Stream:                filters.Stream,
+		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
+		BillingMode:           filters.BillingMode,
 		ExcludedUserIDs:       filters.ExcludedUserIDs,
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
 	}
@@ -208,7 +220,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			startTime,
 			endTime,
 			usageFilters,
-			usagestats.ModelSourceRequested,
+			filters.ModelSource,
 		)
 		if err != nil {
 			return nil, errors.New("failed to get model statistics")
@@ -247,7 +259,12 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 	}
 	filters := &dashboardSnapshotV2Filters{
 		Model:           strings.TrimSpace(c.Query("model")),
+		ModelSource:     usagestats.ModelSourceRequested,
 		ExcludedUserIDs: excludedUserIDs,
+	}
+	filters.ModelSource, err = parseDashboardModelSource(c)
+	if err != nil {
+		return nil, err
 	}
 
 	if userIDStr := strings.TrimSpace(c.Query("user_id")); userIDStr != "" {
@@ -294,6 +311,14 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 		filters.Stream = &streamVal
 	}
 
+	if nativeCompactionV2Str := strings.TrimSpace(c.Query("native_compaction_v2")); nativeCompactionV2Str != "" {
+		value, err := strconv.ParseBool(nativeCompactionV2Str)
+		if err != nil {
+			return nil, err
+		}
+		filters.NativeCompactionV2 = &value
+	}
+
 	if billingTypeStr := strings.TrimSpace(c.Query("billing_type")); billingTypeStr != "" {
 		v, err := strconv.ParseInt(billingTypeStr, 10, 8)
 		if err != nil {
@@ -301,6 +326,10 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 		}
 		bt := int8(v)
 		filters.BillingType = &bt
+	}
+	filters.BillingMode, err = parseDashboardBillingMode(c)
+	if err != nil {
+		return nil, err
 	}
 
 	if mismatchStr := strings.TrimSpace(c.Query("upstream_model_mismatch")); mismatchStr != "" {

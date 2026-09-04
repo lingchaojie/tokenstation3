@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
@@ -78,6 +79,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 	reqModel := modelResult.String()
 	service.SetCaptureRequestedModel(c, reqModel)
+	bindRequestedReasoningEffort(c, body, reqModel)
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
 		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", invalidStreamFieldTypeMessage)
@@ -173,6 +175,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		if err != nil {
 			if len(fs.FailedAccountIDs) == 0 {
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, groupPlatform)
+				cls = classifySelectionFailureError(err, cls)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				}
@@ -291,12 +294,11 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			accountReleaseFunc()
 		}
 
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		submitForwardCapture := func(result *service.ForwardResult) {
+			h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
+		}
 		submitForwardUsage := func(result *service.ForwardResult) {
-			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-			if result.UpstreamFailed {
-				h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
-				return
-			}
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
 			requestPayloadHash := result.UpstreamRequestHash
@@ -315,17 +317,19 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
 			}
 			if !h.validateGatewayUsagePricing(c, usageInput) {
-				h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
 				return
 			}
-			h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, usageInput); err != nil {
 					reqLog.Error("gateway.cc.record_usage_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
 			})
 		}
-		newGatewayForwardSideEffectSubmitter(submitForwardUsage).Submit(result)
+		newGatewayForwardSideEffectSubmitterWithEffects(
+			submitForwardCapture,
+			submitForwardUsage,
+			func(result *service.ForwardResult) bool { return !result.UpstreamFailed },
+		).Submit(result)
 
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
@@ -401,6 +405,14 @@ func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *serv
 	if lastErr != nil && lastErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(lastErr)
 		h.chatCompletionsErrorResponse(c, status, "server_error", message)
+		return
+	}
+	if lastErr != nil && lastErr.IsOpenAICapacityShed() && strings.TrimSpace(lastErr.ClientMessage) != "" {
+		status := lastErr.ClientStatusCode
+		if status <= 0 {
+			status = http.StatusServiceUnavailable
+		}
+		h.chatCompletionsErrorResponse(c, status, "server_error", lastErr.ClientMessage)
 		return
 	}
 	statusCode := http.StatusBadGateway

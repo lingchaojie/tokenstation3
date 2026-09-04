@@ -431,6 +431,15 @@ func TestAddToDirective(t *testing.T) {
 		assert.Contains(t, result, "script-src")
 		assert.Contains(t, result, "https://example.com")
 	})
+
+	t.Run("does_not_match_a_directive_name_suffix", func(t *testing.T) {
+		policy := "default-src 'none'; child-frame-src https://legacy.example.com"
+		result := addToDirective(policy, "frame-src", "'self'")
+
+		assert.Equal(t, 1, countDirectiveValue(result, "frame-src", "'self'"))
+		assert.Equal(t, 0, countDirectiveValue(result, "child-frame-src", "'self'"))
+		assert.Equal(t, 1, countDirectiveValue(result, "child-frame-src", "https://legacy.example.com"))
+	})
 }
 
 // Benchmark tests
