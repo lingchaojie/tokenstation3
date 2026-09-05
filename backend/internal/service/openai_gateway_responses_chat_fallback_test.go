@@ -67,6 +67,7 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.Equal(t, "priority", *result.ServiceTier)
 	require.Equal(t, "default", result.UpstreamResponseServiceTier)
 	require.False(t, result.Stream)
+	require.Equal(t, upstream.resp.Header, result.UpstreamHeaders)
 	require.True(t, result.CaptureResponseComplete, "successful full-body JSON read proves non-stream completion")
 }
 
@@ -208,6 +209,8 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	require.Equal(t, 2, result.Usage.ImageOutputTokens)
 	require.Zero(t, result.Usage.KiroCredits)
 	require.True(t, result.Stream)
+	require.Equal(t, upstream.resp.Header, result.UpstreamHeaders)
+	require.True(t, result.CaptureResponseComplete)
 	require.NotNil(t, result.FirstTokenMs)
 	require.Nil(t, result.UpstreamRequest)
 	require.Nil(t, result.CaptureResponse)

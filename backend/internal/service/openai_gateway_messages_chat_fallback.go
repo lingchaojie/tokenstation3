@@ -81,7 +81,16 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		chatBody = normalizedBody
 	}
 	if account.Platform == PlatformOpenAI {
-		if policyBody, changed := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, chatBody); changed {
+		policyBody, changed, policyErr := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, chatBody)
+		if policyErr != nil {
+			var overLimit *ReasoningEffortOverLimitError
+			if errors.As(policyErr, &overLimit) {
+				MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+				writeAnthropicError(c, http.StatusForbidden, "forbidden_error", overLimit.Error())
+			}
+			return nil, policyErr
+		}
+		if changed {
 			chatBody = policyBody
 			if effectiveEffort := strings.TrimSpace(gjson.GetBytes(chatBody, "reasoning_effort").String()); effectiveEffort != "" {
 				reasoningEffort = &effectiveEffort
@@ -174,6 +183,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 
 	return &OpenAIForwardResult{
 		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
 		Usage:                       parsedUsage.Usage,
 		Model:                       originalModel,
 		BillingModel:                billingModel,
@@ -233,6 +243,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	scan := s.scanCCStream(ctx, c, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
 	result := &OpenAIForwardResult{
 		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
 		Usage:                       scan.Usage,
 		Model:                       originalModel,
 		BillingModel:                billingModel,

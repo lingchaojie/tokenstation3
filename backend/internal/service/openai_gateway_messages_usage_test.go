@@ -96,7 +96,7 @@ func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(
 
 	payload := `{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"glm-5.2","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"cache_creation_input_tokens":6,"cache_read_input_tokens":4,"_sub2api_kiro_credits":0.17}}`
 	resp := &http.Response{
-		Header: make(http.Header),
+		Header: http.Header{"X-Provider-Request-Id": {"rid-cc-anthropic"}},
 		Body: io.NopCloser(strings.NewReader(
 			"data: " + payload + "\n\ndata: [DONE]\n\n",
 		)),
@@ -121,6 +121,8 @@ func TestStreamChatCompletionsAsAnthropicPreservesRawUsageAliasesAndKiroCredits(
 	require.Equal(t, 6, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
 	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
+	require.Equal(t, "rid-cc-anthropic", result.UpstreamHeaders.Get("X-Provider-Request-Id"))
+	require.True(t, result.CaptureResponseComplete)
 
 	wire := recorder.Body.String()
 	require.Contains(t, wire, `"cache_creation_input_tokens":6`)

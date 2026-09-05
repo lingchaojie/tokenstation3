@@ -220,5 +220,40 @@ describe('PaymentStatusPanel', () => {
     expect(verifyOrder).toHaveBeenCalledWith('sub2_20260420abcd1234')
     expect(wrapper.text()).toContain('payment.result.success')
     expect(wrapper.emitted('success')).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it.each(['alipay', 'wxpay', 'ikunpay', 'easypay'])('actively verifies pending %s orders without retrying within 15 seconds', async (paymentType) => {
+    pollOrderStatus.mockResolvedValue({ ...orderFactory('PENDING'), payment_type: paymentType })
+    verifyOrder.mockResolvedValue({ data: { ...orderFactory('PENDING'), payment_type: paymentType } })
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://pay.example.com/qr/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType,
+        orderType: 'balance',
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(verifyOrder).toHaveBeenCalledTimes(1)
+    expect(verifyOrder).toHaveBeenCalledWith('sub2_20260420abcd1234')
+
+    await vi.advanceTimersByTimeAsync(12000)
+    await flushPromises()
+    expect(verifyOrder).toHaveBeenCalledTimes(1)
+    expect(cancelOrder).not.toHaveBeenCalled()
+    expect(wrapper.emitted('success')).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(verifyOrder).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
   })
 })

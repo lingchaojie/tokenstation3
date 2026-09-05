@@ -87,9 +87,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		}
 	}
 
-	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
-	if fingerprint != nil {
-		body = syncBillingHeaderVersion(body, fingerprint.UserAgent)
+	// Mimicry may override the cached User-Agent later, even without a fingerprint.
+	if billingUA := effectiveBillingUserAgent(tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
+		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
@@ -169,12 +169,6 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// （user-agent/x-stainless-*/x-app/Accept/x-stainless-helper-method/x-client-request-id）
 	if tokenType == "oauth" && mimicClaudeCode {
 		applyClaudeCodeMimicHeaders(req, reqStream)
-		// Default mimic headers fill the full Claude Code header surface, but
-		// account-level fingerprint cache remains the source of truth for the
-		// UA/X-Stainless identity once it has learned a newer real CLI.
-		if fingerprint != nil {
-			s.identityService.ApplyFingerprint(req, fingerprint)
-		}
 	}
 
 	// 写入最终 anthropic-beta header

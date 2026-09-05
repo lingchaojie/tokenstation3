@@ -82,6 +82,7 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 			sql.NullString{},
 			sql.NullFloat64{},
 			sql.NullFloat64{},
+			sql.NullString{String: "upstream-lookup", Valid: true},
 			sql.NullString{},
 			false,
 			createdAt,
@@ -99,6 +100,7 @@ func TestUsageLogRepository_GetByRequestIDAndAPIKeyID(t *testing.T) {
 	require.Equal(t, "client:webchat-message-101", got.RequestID)
 	require.Equal(t, int64(55), got.APIKeyID)
 	require.Equal(t, "claude-sonnet-4-upstream", *got.UpstreamModel)
+	require.Equal(t, "upstream-lookup", *got.UpstreamRequestID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

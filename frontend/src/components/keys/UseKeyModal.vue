@@ -1256,6 +1256,8 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     variants
   })
   const openaiModels = {
+    'gpt-6': openaiModel('GPT-6 (Astra)', 1050000, 128000, maxReasoningVariants),
+    'gpt-6-astra': openaiModel('GPT-6 Astra', 1050000, 128000, maxReasoningVariants),
     'gpt-5.6': openaiModel('GPT-5.6 (Sol)', 1050000, 128000, maxReasoningVariants),
     'gpt-5.6-sol': openaiModel('GPT-5.6 Sol', 1050000, 128000, maxReasoningVariants),
     'gpt-5.6-terra': openaiModel('GPT-5.6 Terra', 1050000, 128000, maxReasoningVariants),
@@ -1538,6 +1540,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
   const claudeThinking = (name: string, output = 128000) =>
     claudeModel(name, 200000, output, { budgetTokens: 24576, type: 'enabled' })
   const claudeModels = {
+    'claude-fable-5-1': claudeAdaptive('Claude Fable 5.1'),
     'claude-fable-5': claudeAdaptive('Claude Fable 5'),
     'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),
     'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),
@@ -1556,6 +1559,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'claude-3-5-haiku-20241022': claudeModel('Claude Haiku 3.5', 200000, 8192)
   }
   const antigravityClaudeModels = {
+    'claude-fable-5-1': claudeAdaptive('Claude Fable 5.1'),
     'claude-fable-5': claudeAdaptive('Claude Fable 5'),
     'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),
     'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),

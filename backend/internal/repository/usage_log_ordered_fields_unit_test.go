@@ -27,6 +27,7 @@ func TestUsageLogOrderedFields_NormalAndBatchInsertContract(t *testing.T) {
 	upstreamEndpoint := "/v1/chat/completions"
 	channelID := int64(41)
 	sessionID := "session-ordered-fields"
+	upstreamRequestID := "upstream-ordered-fields"
 	createdAt := time.Date(2026, 9, 1, 8, 9, 10, 0, time.UTC)
 	log := &service.UsageLog{
 		UserID:                   11,
@@ -41,12 +42,13 @@ func TestUsageLogOrderedFields_NormalAndBatchInsertContract(t *testing.T) {
 		UpstreamEndpoint:         &upstreamEndpoint,
 		ChannelID:                &channelID,
 		SessionID:                &sessionID,
+		UpstreamRequestID:        &upstreamRequestID,
 		NativeCompactionV2:       true,
 		CreatedAt:                createdAt,
 	}
 
 	prepared := prepareUsageLogInsert(log)
-	require.Len(t, usageLogInsertArgTypes, 62, "all local and approved upstream usage fields must have one typed argument")
+	require.Len(t, usageLogInsertArgTypes, 63, "all local and approved upstream usage fields must have one typed argument")
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
 	ordered := []usageLogOrderedFieldFixture{
@@ -57,9 +59,10 @@ func TestUsageLogOrderedFields_NormalAndBatchInsertContract(t *testing.T) {
 		{name: "upstream_endpoint", argPos: 50, sqlType: "text", want: sql.NullString{String: upstreamEndpoint, Valid: true}},
 		{name: "channel_id", argPos: 53, sqlType: "bigint", want: sql.NullInt64{Int64: channelID, Valid: true}},
 		{name: "account_id", argPos: 2, sqlType: "bigint", want: int64(31)},
-		{name: "session_id", argPos: 59, sqlType: "text", want: sql.NullString{String: sessionID, Valid: true}},
-		{name: "native_compaction_v2", argPos: 60, sqlType: "boolean", want: true},
-		{name: "created_at", argPos: 61, sqlType: "timestamptz", want: createdAt},
+		{name: "upstream_request_id", argPos: 59, sqlType: "text", want: sql.NullString{String: upstreamRequestID, Valid: true}},
+		{name: "session_id", argPos: 60, sqlType: "text", want: sql.NullString{String: sessionID, Valid: true}},
+		{name: "native_compaction_v2", argPos: 61, sqlType: "boolean", want: true},
+		{name: "created_at", argPos: 62, sqlType: "timestamptz", want: createdAt},
 	}
 	for _, field := range ordered {
 		t.Run(field.name, func(t *testing.T) {
@@ -99,10 +102,11 @@ func TestUsageLogOrderedFields_NullabilityContract(t *testing.T) {
 	require.Equal(t, sql.NullString{}, prepared.args[50])
 	require.Equal(t, sql.NullInt64{}, prepared.args[53])
 	require.Equal(t, sql.NullString{}, prepared.args[59])
-	require.Equal(t, false, prepared.args[60], "native_compaction_v2 is non-null and defaults false")
+	require.Equal(t, sql.NullString{}, prepared.args[60])
+	require.Equal(t, false, prepared.args[61], "native_compaction_v2 is non-null and defaults false")
 }
 
-func TestUsageLogOrderedFields_Literal63ValueScanContract(t *testing.T) {
+func TestUsageLogOrderedFields_Literal64ValueScanContract(t *testing.T) {
 	createdAt := time.Date(2026, 9, 1, 12, 34, 56, 789, time.UTC)
 	log, err := scanUsageLog(usageLogScannerStub{values: []any{
 		int64(1001), // id
@@ -160,12 +164,13 @@ func TestUsageLogOrderedFields_Literal63ValueScanContract(t *testing.T) {
 		true,                                    // cache_ttl_overridden
 		true,                                    // long_context_billing_applied
 		sql.NullInt64{Int64: 7601, Valid: true}, // channel_id
-		sql.NullString{String: "mapping-7701", Valid: true},      // model_mapping_chain
-		sql.NullString{String: "billing-tier-7801", Valid: true}, // billing_tier
-		sql.NullString{String: "billing-mode-7901", Valid: true}, // billing_mode
-		sql.NullFloat64{Float64: 8001.25, Valid: true},           // account_stats_cost
-		sql.NullFloat64{Float64: 8101.25, Valid: true},           // kiro_credits
-		sql.NullString{String: "session-8201", Valid: true},      // session_id
+		sql.NullString{String: "mapping-7701", Valid: true},          // model_mapping_chain
+		sql.NullString{String: "billing-tier-7801", Valid: true},     // billing_tier
+		sql.NullString{String: "billing-mode-7901", Valid: true},     // billing_mode
+		sql.NullFloat64{Float64: 8001.25, Valid: true},               // account_stats_cost
+		sql.NullFloat64{Float64: 8101.25, Valid: true},               // kiro_credits
+		sql.NullString{String: "upstream-request-8151", Valid: true}, // upstream_request_id
+		sql.NullString{String: "session-8201", Valid: true},          // session_id
 		true,      // native_compaction_v2
 		createdAt, // created_at
 	}})
@@ -178,6 +183,8 @@ func TestUsageLogOrderedFields_Literal63ValueScanContract(t *testing.T) {
 	require.Equal(t, int64(7601), *log.ChannelID)
 	require.Equal(t, int64(3001), log.AccountID)
 	require.Equal(t, "session-8201", *log.SessionID)
+	require.Equal(t, 8101.25, *log.KiroCredits)
+	require.Equal(t, "upstream-request-8151", *log.UpstreamRequestID)
 	require.True(t, log.NativeCompactionV2)
 	require.Equal(t, createdAt, log.CreatedAt)
 }

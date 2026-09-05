@@ -79,7 +79,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 	reqModel := modelResult.String()
 	service.SetCaptureRequestedModel(c, reqModel)
-	if cappedBody, changed := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, body); changed {
+	if cappedBody, changed, err := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, body); err != nil {
+		respondOpenAIReasoningEffortPolicyError(c, err, h.errorResponse)
+		return
+	} else if changed {
 		body = cappedBody
 	}
 	reqStream, ok := parseOpenAICompatibleStream(body)
@@ -111,6 +114,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	forwardModel := openAIChannelForwardModel(channelMapping, reqModel)
 
 	if h.errorPassthroughService != nil {
 		service.BindErrorPassthroughService(c, h.errorPassthroughService)
@@ -161,11 +165,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			service.WithOpenAIChannelRequestModel(c.Request.Context(), apiKey.GroupID, reqModel),
 			apiKey.GroupID,
 			"",
 			sessionHash,
-			reqModel,
+			forwardModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
 			service.OpenAIEndpointCapabilityChatCompletions,

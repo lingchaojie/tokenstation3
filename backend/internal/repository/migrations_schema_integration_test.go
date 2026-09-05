@@ -57,7 +57,7 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "accounts", "session_window_status", "character varying", 20, true)
 	requireIndex(t, tx, "accounts", "idx_accounts_autopause_expiry_due")
 
-	// groups: OpenAI Live 默认关闭，管理员显式开启后才可访问。
+	// groups: OpenAI Live 与 Fast 强制策略都默认关闭，管理员显式开启后才生效。
 	requireColumn(t, tx, "groups", "allow_live", "boolean", 0, false)
 	requireColumn(t, tx, "groups", "duplicate_operation_id", "character varying", 64, true)
 	requireColumn(t, tx, "groups", "max_reasoning_effort", "character varying", 20, false)
@@ -65,6 +65,21 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "groups", "profit_control_enabled", "boolean", 0, false)
 	requireColumn(t, tx, "groups", "video_model_prices", "jsonb", 0, true)
 	requireColumn(t, tx, "groups", "kiro_endpoint_mode", "character varying", 8, false)
+	requireColumn(t, tx, "groups", "force_openai_fast", "boolean", 0, false)
+	requireColumn(t, tx, "groups", "free_openai_fast", "boolean", 0, false)
+	requireColumnDefaultContains(t, tx, "groups", "force_openai_fast", "false")
+	requireColumnDefaultContains(t, tx, "groups", "free_openai_fast", "false")
+	requireColumn(t, tx, "groups", "max_reasoning_effort_over_limit", "character varying", 20, false)
+	requireColumnDefaultContains(t, tx, "groups", "max_reasoning_effort_over_limit", "downgrade")
+	requireColumn(t, tx, "groups", "codex_models_manifest_config", "jsonb", 0, false)
+
+	for _, table := range []string{
+		"channel_model_pricing", "channel_pricing_intervals",
+		"channel_account_stats_model_pricing", "channel_account_stats_pricing_intervals",
+	} {
+		requireColumn(t, tx, table, "cache_write_1h_price", "numeric", 0, true)
+	}
+	requireColumn(t, tx, "channel_model_pricing", "max_reasoning_effort_multiplier", "numeric", 0, true)
 
 	// api_keys: key length should be 128
 	requireColumn(t, tx, "api_keys", "key", "character varying", 128, false)
@@ -82,6 +97,8 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "usage_logs", "native_compaction_v2", "boolean", 0, false)
 	requireColumnDefaultContains(t, tx, "usage_logs", "native_compaction_v2", "false")
 	requireColumn(t, tx, "usage_logs", "requested_reasoning_effort", "character varying", 20, true)
+	requireColumn(t, tx, "usage_logs", "upstream_request_id", "character varying", 128, true)
+	requireIndex(t, tx, "usage_logs", "idx_usage_logs_upstream_request_id")
 	requireColumn(t, tx, "usage_logs", "image_input_size", "character varying", 32, true)
 	requireColumn(t, tx, "usage_logs", "image_output_size", "character varying", 32, true)
 	requireColumn(t, tx, "usage_logs", "image_size_source", "character varying", 16, true)

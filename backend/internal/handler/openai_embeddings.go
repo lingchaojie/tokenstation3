@@ -75,6 +75,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	forwardModel := openAIChannelForwardModel(channelMapping, reqModel)
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
@@ -117,7 +118,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 			apiKey.GroupID,
 			"",
 			"",
-			reqModel,
+			forwardModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportHTTPSSE,
 			service.OpenAIEndpointCapabilityEmbeddings,

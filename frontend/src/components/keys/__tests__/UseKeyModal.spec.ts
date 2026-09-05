@@ -919,6 +919,8 @@ describe('UseKeyModal', () => {
       apiKey: 'sk-test'
     })
     expect(Object.keys(parsed.provider.openai.models)).toEqual([
+      'gpt-6',
+      'gpt-6-astra',
       'gpt-5.6',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
@@ -974,6 +976,7 @@ describe('UseKeyModal', () => {
       apiKey: 'sk-test'
     })
     expect(Object.keys(parsed.provider.anthropic.models)).toEqual([
+      'claude-fable-5-1',
       'claude-fable-5',
       'claude-mythos-5',
       'claude-opus-4-8',
@@ -1021,7 +1024,7 @@ describe('UseKeyModal', () => {
     expect(JSON.parse(content!).provider[provider].options.baseURL).toBe(expectedBaseURL)
   })
 
-  it('renders GPT-5.6 alias and max variants in OpenCode config', async () => {
+  it('renders GPT-5.6 and GPT-6 Astra capabilities in OpenCode config', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -1056,6 +1059,18 @@ describe('UseKeyModal', () => {
       expect(models[model].variants).toHaveProperty('xhigh')
     }
     expect(models['gpt-5.6'].name).toBe('GPT-5.6 (Sol)')
+    expect(models['gpt-6']).toEqual({
+      name: 'GPT-6 (Astra)',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false },
+      variants: { low: {}, medium: {}, high: {}, xhigh: {}, max: {} }
+    })
+    expect(models['gpt-6-astra']).toEqual({
+      name: 'GPT-6 Astra',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false },
+      variants: { low: {}, medium: {}, high: {}, xhigh: {}, max: {} }
+    })
   })
 
   it('renders Claude Fable 5 OpenCode config with adaptive thinking', async () => {
@@ -1096,7 +1111,12 @@ describe('UseKeyModal', () => {
     const models = parsed.provider['antigravity-claude'].models
     const fable = models['claude-fable-5']
     const mythos = models['claude-mythos-5']
+    const fable51 = models['claude-fable-5-1']
 
+    expect(fable51.name).toBe('Claude Fable 5.1')
+    expect(fable51.limit).toEqual({ context: 1048576, output: 128000 })
+    expect(fable51.options.thinking).toEqual({ type: 'adaptive' })
+    expect(fable51.options.thinking).not.toHaveProperty('budgetTokens')
     expect(fable.name).toBe('Claude Fable 5')
     expect(fable.limit).toEqual({ context: 1048576, output: 128000 })
     expect(fable.options.thinking).toEqual({ type: 'adaptive' })

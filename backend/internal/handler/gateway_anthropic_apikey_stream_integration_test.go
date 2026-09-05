@@ -311,6 +311,22 @@ func runGatewayAnthropicHandlerWithConfig(
 	configure func(*config.Config),
 	accountMutators ...func(*service.Account),
 ) gatewayAnthropicHandlerRunResult {
+	return runGatewayAnthropicHandlerWithSessionCache(t, endpoint, requestBody, status, newBody, handle,
+		passthrough, configure, nil, accountMutators...)
+}
+
+func runGatewayAnthropicHandlerWithSessionCache(
+	t *testing.T,
+	endpoint string,
+	requestBody string,
+	status int,
+	newBody func() io.ReadCloser,
+	handle func(*GatewayHandler, *gin.Context),
+	passthrough bool,
+	configure func(*config.Config),
+	sessionCache service.SessionLimitCache,
+	accountMutators ...func(*service.Account),
+) gatewayAnthropicHandlerRunResult {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -377,7 +393,7 @@ func runGatewayAnthropicHandlerWithConfig(
 		nil, // claudeTokenProvider
 		nil, // kiroTokenProvider
 		nil, // kiroCooldownStore
-		nil, // sessionLimitCache
+		sessionCache,
 		nil, // rpmCache
 		nil, // digestStore
 		settingService,

@@ -376,6 +376,7 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 	finishCaptureResponse(resp)
 	return finalizeForwardResult(c, &ForwardResult{
 		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
 		Usage:                         *streamResult.usage,
 		Model:                         call.request.originalModel,
 		UpstreamModel:                 call.billingModel,
@@ -437,6 +438,8 @@ func (s *AntigravityGatewayService) handleAntigravityCompatHTTPError(
 	if s.shouldFailoverUpstreamError(resp.StatusCode) {
 		message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractAntigravityErrorMessage(body)))
 		event := OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -501,6 +504,8 @@ func (s *AntigravityGatewayService) writeMappedAntigravityCompatError(
 	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractAntigravityErrorMessage(body)))
 	setOpsUpstreamError(c, upstreamStatus, message, s.getUpstreamErrorDetail(body))
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
