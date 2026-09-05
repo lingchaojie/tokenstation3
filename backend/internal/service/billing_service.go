@@ -521,6 +521,17 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerToken:             0.02e-6,
 		CacheReadPricePerTokenPriority:     0.04e-6,
 	}
+	// OpenAI GPT-6 Astra 官方标准价格（USD/token）。
+	s.fallbackPrices["gpt-6-astra"] = &ModelPricing{
+		InputPricePerToken:            10e-6,
+		OutputPricePerToken:           50e-6,
+		CacheCreationPricePerToken:    12.5e-6,
+		CacheReadPricePerToken:        1e-6,
+		LongContextInputThreshold:     272000,
+		LongContextInputMultiplier:    2,
+		LongContextOutputMultiplier:   1.5,
+		LongContextThresholdInclusive: false,
+	}
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,
@@ -1031,7 +1042,12 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["doubao-embedding-vision"]
 	}
 
-	// OpenAI（GPT-5 / Codex 族）：仅匹配已知型号，避免未知 OpenAI 型号误计价。
+	// OpenAI：仅匹配已知型号，避免未知 OpenAI 型号误计价。
+	if modelLower == "gpt-6-astra" {
+		return s.fallbackPrices["gpt-6-astra"]
+	}
+
+	// GPT-5 / Codex 族。
 	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
 		case "gpt-5.6-sol":
