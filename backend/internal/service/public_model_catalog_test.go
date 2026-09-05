@@ -128,7 +128,7 @@ func TestPublicModelCatalog_IncludesClaude5ModelsInReleaseOrder(t *testing.T) {
 		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
 		require.Equal(t, want.releasedAt, model.ReleasedAt)
 		require.Equal(t, "confirmed", model.ReleaseStatus)
-		require.Equal(t, "2026-09-03", model.UpdatedAt)
+		require.Equal(t, "2026-09-05", model.UpdatedAt)
 		require.Equal(t, 1_000_000, model.ContextWindow)
 		require.Equal(t, want.sourceURL, model.SourceURL)
 		require.Equal(t, want.contextSourceURL, model.ContextSourceURL)
@@ -170,14 +170,16 @@ func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 
 	models := PublicModelCatalogModelsForWebChat()
 	found := make(map[string]struct{}, len(expected))
-	openAIModelNames := make([]string, 0)
+	relevantOpenAIModelNames := make([]string, 0, len(expected)+1)
 	for idx := range models {
 		model := &models[idx]
 		if model.Provider != "openai" {
 			continue
 		}
-		openAIModelNames = append(openAIModelNames, model.ModelName)
 		want, ok := expected[model.ModelName]
+		if ok || model.ModelName == "gpt-5.5" {
+			relevantOpenAIModelNames = append(relevantOpenAIModelNames, model.ModelName)
+		}
 		if !ok {
 			continue
 		}
@@ -189,7 +191,7 @@ func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
 		require.Equal(t, "2026-07-09", model.ReleasedAt)
 		require.Equal(t, "confirmed", model.ReleaseStatus)
-		require.Equal(t, "2026-09-03", model.UpdatedAt)
+		require.Equal(t, "2026-09-05", model.UpdatedAt)
 		require.Equal(t, 1_050_000, model.ContextWindow)
 		require.Equal(t, sourceOpenAI, model.SourceURL)
 		require.Equal(t, contextSourceOpenAI, model.ContextSourceURL)
@@ -203,6 +205,42 @@ func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 	}
 
 	require.Len(t, found, len(expected))
-	require.GreaterOrEqual(t, len(openAIModelNames), 4)
-	require.Equal(t, []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"}, openAIModelNames[:4])
+	require.Equal(t, []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"}, relevantOpenAIModelNames)
+}
+
+func TestPublicModelCatalog_IncludesGPT6AstraWithOfficialPricing(t *testing.T) {
+	models := PublicModelCatalogModelsForWebChat()
+	var astra *PublicModelCatalogModel
+	openAIModelNames := make([]string, 0)
+	for idx := range models {
+		if models[idx].Provider != "openai" {
+			continue
+		}
+		openAIModelNames = append(openAIModelNames, models[idx].ModelName)
+		if models[idx].ModelName == "gpt-6-astra" {
+			astra = &models[idx]
+		}
+	}
+
+	require.NotNil(t, astra)
+	require.Equal(t, "OpenAI", astra.ProviderName)
+	require.Equal(t, "GPT-6 Astra", astra.DisplayName)
+	require.Equal(t, []string{"text"}, astra.Modalities)
+	require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, astra.Features)
+	require.Equal(t, "2026-09-05", astra.ReleasedAt)
+	require.Equal(t, "confirmed", astra.ReleaseStatus)
+	require.Equal(t, "2026-09-05", astra.UpdatedAt)
+	require.Equal(t, 1_050_000, astra.ContextWindow)
+	require.Equal(t, "https://developers.openai.com/api/docs/models/gpt-6-astra", astra.SourceURL)
+	require.Equal(t, astra.SourceURL, astra.ContextSourceURL)
+	require.Equal(t, "confirmed", astra.PriceStatus)
+	require.NotNil(t, astra.Pricing.InputPerMillion)
+	require.NotNil(t, astra.Pricing.CacheReadPerMillion)
+	require.NotNil(t, astra.Pricing.OutputPerMillion)
+	require.Equal(t, 10.0, *astra.Pricing.InputPerMillion)
+	require.Equal(t, 1.0, *astra.Pricing.CacheReadPerMillion)
+	require.Equal(t, 50.0, *astra.Pricing.OutputPerMillion)
+	require.Equal(t, []PublicModelCatalogPriceLine{{Label: "cache write", Amount: 12.5, Unit: "1M tokens"}}, astra.Pricing.PriceLines)
+	require.NotEmpty(t, openAIModelNames)
+	require.Equal(t, "gpt-6-astra", openAIModelNames[0])
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const PublicModelCatalogUpdatedAt = "2026-09-03"
+const PublicModelCatalogUpdatedAt = "2026-09-05"
 
 type PublicModelCatalogResponse struct {
 	UpdatedAt string                       `json:"updated_at"`
@@ -59,6 +59,7 @@ const (
 	sourceAnthropicOpus5   = "https://www.anthropic.com/news/claude-opus-5"
 	sourceAnthropicFable5  = "https://www.anthropic.com/news/claude-fable-5-mythos-5"
 	sourceAnthropicFable51 = "https://platform.claude.com/docs/en/models/fable-5-1/overview"
+	sourceOpenAIGPT6Astra  = "https://developers.openai.com/api/docs/models/gpt-6-astra"
 	sourceOpenAI           = "https://openai.com/api/pricing/"
 	sourceGemini           = "https://ai.google.dev/gemini-api/docs/pricing"
 	sourceQwen             = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
@@ -138,6 +139,7 @@ var publicModelReleaseInfoByModel = map[string]modelReleaseInfo{
 	"claude-opus-4-5":          {ReleasedAt: "2026-03-01", ReleaseStatus: "unverified"},
 	"claude-sonnet-4-5":        {ReleasedAt: "2025-09-29", ReleaseStatus: "confirmed"},
 	"claude-sonnet-4-20250514": {ReleasedAt: "2025-05-14", ReleaseStatus: "confirmed"},
+	"gpt-6-astra":              {ReleasedAt: "2026-09-05", ReleaseStatus: "confirmed"},
 	"gpt-5.6-sol":              {ReleasedAt: "2026-07-09", ReleaseStatus: "confirmed"},
 	"gpt-5.6-terra":            {ReleasedAt: "2026-07-09", ReleaseStatus: "confirmed"},
 	"gpt-5.6-luna":             {ReleasedAt: "2026-07-09", ReleaseStatus: "confirmed"},
@@ -204,6 +206,7 @@ var publicModelCatalogModels = []PublicModelCatalogModel{
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", textModalities(), "Balanced Claude Sonnet model with strong coding and agent performance.", 200000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-5", "Claude Sonnet 5", textModalities(), "Best combination of speed and intelligence in the Claude model family, with a 1M-token context window.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(2, 10, 0.2), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", textModalities(), "Balanced Claude Sonnet model for production coding and agent workflows.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
+	catalogModel("openai", "OpenAI", "gpt-6-astra", "GPT-6 Astra", textModalities(), "OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.", 1050000, sourceOpenAIGPT6Astra, textFeatures("vision input", "tool use", "prompt caching"), withPriceLines(usdWithCache(10, 50, 1), priceLine("cache write", 12.5, "1M tokens")), "confirmed", sourceOpenAIGPT6Astra),
 	catalogModel("openai", "OpenAI", "gpt-5.6-sol", "GPT-5.6 Sol", textModalities(), "Highest-capability GPT-5.6 tier for complex reasoning, coding, and long-context agent workflows.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(4, 20, 0.4), "confirmed", sourceOpenAI),
 	catalogModel("openai", "OpenAI", "gpt-5.6-terra", "GPT-5.6 Terra", textModalities(), "Balanced GPT-5.6 tier for production reasoning, coding, and agent workloads.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(2.5, 15, 0.25), "confirmed", sourceOpenAI),
 	catalogModel("openai", "OpenAI", "gpt-5.6-luna", "GPT-5.6 Luna", textModalities(), "Lower-cost GPT-5.6 tier for efficient reasoning, coding, and high-throughput agent workloads.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(1, 6, 0.1), "confirmed", sourceOpenAI),
