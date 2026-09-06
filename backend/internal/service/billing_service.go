@@ -1643,6 +1643,7 @@ func (s *BillingService) computeTokenBreakdown(
 	cacheReadPrice := pricing.CacheReadPricePerToken
 	cacheCreationPrice := pricing.CacheCreationPricePerToken
 	cacheCreation5mPrice := pricing.CacheCreation5mPrice
+	cacheCreation5mConfigured := pricing.cacheWrite5mPriceConfigured || (!pricing.tokenPricePresenceKnown && pricing.CacheCreation5mPrice > 0)
 	cacheCreation1hPrice := pricing.CacheCreation1hPrice
 	cacheCreationMultiplier := 1.0
 	tierMultiplier := 1.0
@@ -1662,12 +1663,22 @@ func (s *BillingService) computeTokenBreakdown(
 		}
 		if pricing.cacheWrite5mPriorityConfigured || (!pricing.tokenPricePresenceKnown && pricing.CacheCreation5mPricePriority > 0) {
 			cacheCreation5mPrice = pricing.CacheCreation5mPricePriority
+			cacheCreation5mConfigured = true
 		}
 		if pricing.cacheWrite1hPriorityConfigured || (!pricing.tokenPricePresenceKnown && pricing.CacheCreation1hPricePriority > 0) {
 			cacheCreation1hPrice = pricing.CacheCreation1hPricePriority
 		}
 	} else {
 		tierMultiplier = configuredServiceTierMultiplier(serviceTier, pricing)
+	}
+
+	// A 1h-only override can enable split pricing on a generic-only fallback.
+	// Without TTL details, keep the validated effective generic rate unless a
+	// 5m price actually exists. Presence, not a nonzero check, preserves free 5m
+	// prices. Apply this before long-context scaling; explicit TTL usage still
+	// requires its own configured price in validateModelPricingForUsage.
+	if tokens.CacheCreation5mTokens == 0 && tokens.CacheCreation1hTokens == 0 && !cacheCreation5mConfigured {
+		cacheCreation5mPrice = cacheCreationPrice
 	}
 
 	longContextPricingEligible := applyLongCtx && s.shouldApplySessionLongContextPricing(tokens, pricing)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,15 @@ import (
 
 // 8 字节 PNG 魔数足以让字节嗅探判定为 image/png。
 var b64BackfillPNGBytes = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+
+func TestUpstreamAB99ImageBackfillUnsafeDownloadPreservesResponse(t *testing.T) {
+	upstream := &httpUpstreamRecorder{err: errors.New("public download proxy CONNECT failed: 403")}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	body := []byte(`{"created":1,"data":[{"url":"https://cdn.example.com/a.png","revised_prompt":"original"}],"usage":{"total_tokens":17}}`)
+	got := svc.backfillOpenAIImagesB64JSON(t.Context(), b64BackfillAccount(true), nil, body)
+	require.Equal(t, body, got, "a failed safe download must preserve the whole response, including URL and usage")
+	require.Len(t, upstream.requests, 1, "no retry that bypasses the account proxy")
+}
 
 func b64BackfillImageResponse(status int, contentType string, payload []byte) *http.Response {
 	header := http.Header{}

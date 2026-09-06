@@ -298,22 +298,27 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 }
 
 // httpClientForUpstreamRequest 按请求上下文的标记派生客户端：禁用重定向，或对重定向的每一跳做主机校验。
-// 派生的克隆与缓存客户端共享 Transport；未打标记时原样返回。
+// 公网下载使用隔离且绑定已校验 IP 的 Transport；未打标记时原样返回。
 func (s *httpUpstreamService) httpClientForUpstreamRequest(client *http.Client, req *http.Request) *http.Client {
 	if client == nil || req == nil {
 		return client
 	}
 	ctx := req.Context()
+	if service.HTTPUpstreamPublicHostsOnly(ctx) {
+		clone := *client
+		clone.Transport = &publicHostsOnlyTransport{base: client.Transport}
+		clone.CheckRedirect = s.redirectChecker
+		if service.HTTPUpstreamRedirectsDisabled(ctx) {
+			clone.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		}
+		return &clone
+	}
 	switch {
 	case service.HTTPUpstreamRedirectsDisabled(ctx):
 		clone := *client
 		clone.CheckRedirect = func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
-		return &clone
-	case service.HTTPUpstreamPublicHostsOnly(ctx) && client.CheckRedirect == nil:
-		clone := *client
-		clone.CheckRedirect = s.redirectChecker
 		return &clone
 	default:
 		return client
