@@ -392,10 +392,12 @@ func TestLiveContextCancellationErrorsFromProbeAreRejected(t *testing.T) {
 			require.Eventually(t, func() bool { return len(clock.delaysSnapshot()) >= 2 }, time.Second, time.Millisecond)
 
 			clock.Advance(idleProbeInterval)
+			// Probe rejection persists status with fsync before Run returns.
+			// Allow CI scheduling and disk latency; this is a liveness check, not a latency budget.
 			select {
 			case runErr := <-done:
 				require.EqualError(t, runErr, "capture sidecar delivery probe rejected")
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(5 * time.Second):
 				t.Fatal("live runtime remained alive after its probe worker silently stopped")
 			}
 			require.Zero(t, runtime.Status().UploadRetries)
