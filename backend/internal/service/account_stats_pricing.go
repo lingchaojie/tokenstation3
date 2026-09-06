@@ -35,7 +35,12 @@ func resolveAccountStatsCostWithUsage(
 	usage accountStatsCostUsage,
 	totalCost float64,
 	serviceTier string,
+	reasoningEfforts ...string,
 ) *float64 {
+	reasoningEffort := ""
+	if len(reasoningEfforts) > 0 {
+		reasoningEffort = reasoningEfforts[0]
+	}
 	if channelService == nil || upstreamModel == "" {
 		return nil
 	}
@@ -47,14 +52,14 @@ func resolveAccountStatsCostWithUsage(
 	platform := channelService.GetGroupPlatform(ctx, groupID)
 
 	// 优先级 1：自定义规则（始终尝试）
-	if cost := tryCustomRulesWithUsage(channel, accountID, groupID, platform, upstreamModel, tokens, usage); cost != nil {
+	if cost := tryCustomRulesWithUsage(channel, accountID, groupID, platform, upstreamModel, tokens, usage, reasoningEffort); cost != nil {
 		return cost
 	}
 
 	// 账号是否向用户收取长上下文溢价，不改变 provider 的实际成本。
 	// 因此实际命中的 provider 长上下文价格必须先于客户计费回退。
 	if billingService != nil {
-		if cost := tryLongContextModelFilePricing(billingService, upstreamModel, tokens, serviceTier); cost != nil {
+		if cost := tryLongContextModelFilePricing(billingService, upstreamModel, tokens, serviceTier, reasoningEffort); cost != nil {
 			return cost
 		}
 	}
@@ -70,29 +75,25 @@ func resolveAccountStatsCostWithUsage(
 
 	// 优先级 4：模型定价文件（LiteLLM）默认价格
 	if billingService != nil {
-		return tryModelFilePricing(billingService, upstreamModel, tokens, serviceTier)
+		return tryModelFilePricing(billingService, upstreamModel, tokens, serviceTier, reasoningEffort)
 	}
 
 	return nil
 }
 
-func tryLongContextModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string) *float64 {
+func tryLongContextModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, reasoningEfforts ...string) *float64 {
 	pricing, err := billingService.GetModelPricing(model)
 	if err != nil || pricing == nil || !billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
 		return nil
 	}
-	breakdown, err := billingService.CalculateCostWithServiceTier(model, tokens, 1, normalizeBillingServiceTier(serviceTier))
-	if err != nil || breakdown == nil || breakdown.TotalCost < 0 {
-		return nil
-	}
-	return &breakdown.TotalCost
+	return tryModelFilePricing(billingService, model, tokens, serviceTier, reasoningEfforts...)
 }
 
 // tryModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的价格计算费用。
 // 与用户计费共用同一条定价管线，避免这里维护第二份"单价 × token 数"实现后，
 // 每加一个定价特性都要手工镜像一次。channelPricing 为 nil，保持优先级 3 的
 // 语义：只取模型定价文件，不引入渠道自定义定价。
-func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string) *float64 {
+func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, reasoningEfforts ...string) *float64 {
 	if tokens.InputTokens == 0 && tokens.OutputTokens == 0 && tokens.CacheCreationTokens == 0 && tokens.CacheReadTokens == 0 &&
 		tokens.ImageInputTokens == 0 && tokens.ImageOutputTokens == 0 {
 		return nil
@@ -103,6 +104,9 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 	if err != nil || breakdown == nil || breakdown.TotalCost < 0 {
 		return nil
 	}
+	if len(reasoningEfforts) > 0 {
+		applyCostBreakdownMultiplier(breakdown, maxReasoningEffortBillingMultiplier(model, reasoningEfforts[0], nil))
+	}
 	return &breakdown.TotalCost
 }
 
@@ -110,7 +114,12 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 func tryCustomRulesWithUsage(
 	channel *Channel, accountID, groupID int64,
 	platform, model string, tokens UsageTokens, usage accountStatsCostUsage,
+	reasoningEfforts ...string,
 ) *float64 {
+	reasoningEffort := ""
+	if len(reasoningEfforts) > 0 {
+		reasoningEffort = reasoningEfforts[0]
+	}
 	modelLower := strings.ToLower(model)
 	for _, rule := range channel.AccountStatsPricingRules {
 		if !matchAccountStatsRule(&rule, accountID, groupID) {
@@ -120,7 +129,11 @@ func tryCustomRulesWithUsage(
 		if pricing == nil {
 			continue // 规则匹配但模型不在规则定价中，继续下一条
 		}
-		return calculateStatsCostWithUsage(pricing, tokens, usage)
+		cost := calculateStatsCostWithUsage(pricing, tokens, usage)
+		if cost != nil {
+			*cost *= maxReasoningEffortBillingMultiplier(model, reasoningEffort, nil)
+		}
+		return cost
 	}
 	return nil
 }
@@ -259,6 +272,9 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 			if iv.CacheWritePrice != nil {
 				p.CacheWritePrice = iv.CacheWritePrice
 			}
+			if iv.CacheWrite1hPrice != nil {
+				p.CacheWrite1hPrice = iv.CacheWrite1hPrice
+			}
 			if iv.CacheReadPrice != nil {
 				p.CacheReadPrice = iv.CacheReadPrice
 			}
@@ -282,6 +298,10 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 		}
 		textOutputTokens -= imageOutputTokens
 	}
+	cache5m, cache1h := normalizeCacheCreationBreakdown(tokens)
+	if p.CacheWrite1hPrice == nil || cache5m+cache1h == 0 {
+		cache5m, cache1h = tokens.CacheCreationTokens, 0
+	}
 	// Presence is checked independently for every used bucket. Pointer presence
 	// makes an explicit numeric zero a valid free price; nil falls through to the
 	// next pricing source instead of silently accounting the bucket at $0.
@@ -289,12 +309,13 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 		imageInputTokens > 0 && p.ImageInputPrice == nil ||
 		textOutputTokens > 0 && p.OutputPrice == nil ||
 		imageOutputTokens > 0 && p.ImageOutputPrice == nil ||
-		tokens.CacheCreationTokens > 0 && p.CacheWritePrice == nil ||
+		cache5m > 0 && p.CacheWritePrice == nil ||
+		cache1h > 0 && p.CacheWrite1hPrice == nil ||
 		tokens.CacheReadTokens > 0 && p.CacheReadPrice == nil {
 		return nil
 	}
 	if textInputTokens == 0 && imageInputTokens == 0 && textOutputTokens == 0 && imageOutputTokens == 0 &&
-		tokens.CacheCreationTokens == 0 && tokens.CacheReadTokens == 0 {
+		cache5m == 0 && cache1h == 0 && tokens.CacheReadTokens == 0 {
 		return nil
 	}
 	deref := func(ptr *float64) float64 {
@@ -307,7 +328,8 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 		float64(imageInputTokens)*deref(p.ImageInputPrice) +
 		float64(textOutputTokens)*deref(p.OutputPrice) +
 		float64(imageOutputTokens)*deref(p.ImageOutputPrice) +
-		float64(tokens.CacheCreationTokens)*deref(p.CacheWritePrice) +
+		float64(cache5m)*deref(p.CacheWritePrice) +
+		float64(cache1h)*deref(p.CacheWrite1hPrice) +
 		float64(tokens.CacheReadTokens)*deref(p.CacheReadPrice)
 	return &cost
 }
@@ -357,7 +379,11 @@ func applyAccountStatsCost(
 	if usageLog.ServiceTier != nil {
 		serviceTier = *usageLog.ServiceTier
 	}
+	reasoningEffort := ""
+	if usageLog.ReasoningEffort != nil {
+		reasoningEffort = *usageLog.ReasoningEffort
+	}
 	usageLog.AccountStatsCost = resolveAccountStatsCostWithUsage(
-		ctx, cs, bs, accountID, groupID, model, tokens, usage, totalCost, serviceTier,
+		ctx, cs, bs, accountID, groupID, model, tokens, usage, totalCost, serviceTier, reasoningEffort,
 	)
 }

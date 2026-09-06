@@ -67,6 +67,14 @@ var upstreamSyncMigrationFilenames = []string{
 	"231_add_usage_log_native_compaction_v2.sql",
 	"232_add_usage_log_requested_reasoning_effort.sql",
 	"233_user_restrict_public_groups.sql",
+	"234_add_usage_log_upstream_request_id.sql",
+	"235_channel_cache_write_1h_pricing.sql",
+	"236_group_force_openai_fast.sql",
+	"237_group_reasoning_effort_over_limit.sql",
+	"238_add_usage_log_upstream_request_id_index_notx.sql",
+	"239_group_free_openai_fast.sql",
+	"240_channel_max_reasoning_effort_multiplier.sql",
+	"241_group_codex_models_manifest_config.sql",
 }
 
 func TestUpstreamSyncMigrationSequenceStartsAfterLocal190(t *testing.T) {

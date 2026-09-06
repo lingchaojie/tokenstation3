@@ -309,6 +309,12 @@ func (s *PaymentService) ReconcilePendingWxpayOrders(ctx context.Context) (int, 
 	return s.ReconcilePendingProviderOrders(ctx)
 }
 
+// ReconcilePendingPaymentOrders keeps the upstream entry point compatible with
+// the shared WeChat, IkunPay and Alipay reconciliation batch.
+func (s *PaymentService) ReconcilePendingPaymentOrders(ctx context.Context) (int, error) {
+	return s.ReconcilePendingProviderOrders(ctx)
+}
+
 // ReconcilePendingProviderOrders actively checks recent pending orders for
 // providers where missed notifications should not wait until order expiry.
 func (s *PaymentService) ReconcilePendingProviderOrders(ctx context.Context) (int, error) {
@@ -326,6 +332,10 @@ func (s *PaymentService) ReconcilePendingProviderOrders(ctx context.Context) (in
 				paymentorder.PaymentTypeHasPrefix(payment.TypeIkunPay+"_"),
 				paymentorder.ProviderKeyEQ(payment.TypeIkunPay),
 				paymentorder.ProviderKeyHasPrefix(payment.TypeIkunPay+"_"),
+				paymentorder.PaymentTypeEQ(payment.TypeAlipay),
+				paymentorder.PaymentTypeHasPrefix(payment.TypeAlipay+"_"),
+				paymentorder.ProviderKeyEQ(payment.TypeAlipay),
+				paymentorder.ProviderKeyHasPrefix(payment.TypeAlipay+"_"),
 			),
 		).
 		Order(dbent.Asc(paymentorder.FieldCreatedAt)).

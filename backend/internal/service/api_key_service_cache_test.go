@@ -308,13 +308,14 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesKeyTypeAndReasoningEffortPolic
 			Concurrency: 3,
 		},
 		Group: &Group{
-			ID:                 groupID,
-			Name:               "openai",
-			Platform:           PlatformOpenAI,
-			Status:             StatusActive,
-			SubscriptionType:   SubscriptionTypeStandard,
-			RateMultiplier:     1,
-			MaxReasoningEffort: "medium",
+			ID:                          groupID,
+			Name:                        "openai",
+			Platform:                    PlatformOpenAI,
+			Status:                      StatusActive,
+			SubscriptionType:            SubscriptionTypeStandard,
+			RateMultiplier:              1,
+			MaxReasoningEffort:          "medium",
+			MaxReasoningEffortOverLimit: ReasoningEffortOverLimitDeny,
 			ReasoningEffortMappings: []ReasoningEffortMapping{
 				{From: "max", To: "xhigh"},
 			},
@@ -329,6 +330,7 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesKeyTypeAndReasoningEffortPolic
 	require.NotNil(t, roundTrip.Group)
 	require.Equal(t, PlatformOpenAI, roundTrip.Group.Platform)
 	require.Equal(t, "medium", roundTrip.Group.MaxReasoningEffort)
+	require.Equal(t, ReasoningEffortOverLimitDeny, roundTrip.Group.MaxReasoningEffortOverLimit)
 	require.Equal(t, apiKey.Group.ReasoningEffortMappings, roundTrip.Group.ReasoningEffortMappings)
 }
 

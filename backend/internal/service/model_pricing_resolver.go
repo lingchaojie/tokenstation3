@@ -316,16 +316,18 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 	if chPricing.CacheWritePrice != nil {
 		resolved.Provenance.CacheWrite = overrideSource
 		resolved.Provenance.CacheWrite5m = overrideSource
-		resolved.Provenance.CacheWrite1h = overrideSource
 		resolved.BasePricing.provenance.CacheWrite = overrideSource
 		resolved.BasePricing.provenance.CacheWrite5m = overrideSource
-		resolved.BasePricing.provenance.CacheWrite1h = overrideSource
 		if resolved.BasePricing.cacheWritePriorityConfigured {
 			resolved.Provenance.CacheWritePriority = overrideSource
 			resolved.Provenance.CacheWrite5mPriority = overrideSource
 			resolved.BasePricing.provenance.CacheWritePriority = overrideSource
 			resolved.BasePricing.provenance.CacheWrite5mPriority = overrideSource
 		}
+	}
+	if chPricing.CacheWritePrice != nil || chPricing.CacheWrite1hPrice != nil {
+		resolved.Provenance.CacheWrite1h = overrideSource
+		resolved.BasePricing.provenance.CacheWrite1h = overrideSource
 		if resolved.BasePricing.cacheWrite1hPriorityConfigured {
 			resolved.Provenance.CacheWrite1hPriority = overrideSource
 			resolved.BasePricing.provenance.CacheWrite1hPriority = overrideSource
@@ -339,8 +341,22 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 			resolved.BasePricing.provenance.CacheReadPriority = overrideSource
 		}
 	}
+	if chPricing.CacheWrite1hPrice != nil {
+		resolved.SupportsCacheBreakdown = true
+		resolved.BasePricing.SupportsCacheBreakdown = true
+	}
+	for i := range chPricing.Intervals {
+		if chPricing.Intervals[i].CacheWrite1hPrice != nil {
+			resolved.SupportsCacheBreakdown = true
+			resolved.BasePricing.SupportsCacheBreakdown = true
+			break
+		}
+	}
 	resolved.BasePricing.FastMultiplier = chPricing.FastMultiplier
 	resolved.BasePricing.FlexMultiplier = chPricing.FlexMultiplier
+	if chPricing.MaxReasoningEffortMultiplier != nil {
+		resolved.BasePricing.MaxReasoningEffortMultiplier = chPricing.MaxReasoningEffortMultiplier
+	}
 	if chPricing.ImageOutputPrice != nil {
 		resolved.BasePricing.ImageOutputPricePerToken = *chPricing.ImageOutputPrice
 		resolved.BasePricing.ImageOutputPriceExplicit = true
@@ -415,14 +431,14 @@ func configuredTokenPriceExists(pricing *ChannelModelPricing) bool {
 		return false
 	}
 	if pricing.InputPrice != nil || pricing.OutputPrice != nil ||
-		pricing.CacheWritePrice != nil || pricing.CacheReadPrice != nil ||
+		pricing.CacheWritePrice != nil || pricing.CacheWrite1hPrice != nil || pricing.CacheReadPrice != nil ||
 		pricing.ImageInputPrice != nil || pricing.ImageOutputPrice != nil {
 		return true
 	}
 	for i := range pricing.Intervals {
 		iv := &pricing.Intervals[i]
 		if iv.InputPrice != nil || iv.OutputPrice != nil ||
-			iv.CacheWritePrice != nil || iv.CacheReadPrice != nil {
+			iv.CacheWritePrice != nil || iv.CacheWrite1hPrice != nil || iv.CacheReadPrice != nil {
 			return true
 		}
 	}
@@ -435,7 +451,7 @@ func filterValidIntervals(intervals []PricingInterval) []PricingInterval {
 	var valid []PricingInterval
 	for _, iv := range intervals {
 		if iv.InputPrice != nil || iv.OutputPrice != nil ||
-			iv.CacheWritePrice != nil || iv.CacheReadPrice != nil ||
+			iv.CacheWritePrice != nil || iv.CacheWrite1hPrice != nil || iv.CacheReadPrice != nil ||
 			iv.PerRequestPrice != nil || iv.InputMultiplier != nil ||
 			iv.OutputMultiplier != nil || iv.CacheWriteMultiplier != nil ||
 			iv.CacheReadMultiplier != nil {
@@ -495,6 +511,9 @@ func markIntervalProvenance(p *PricingBucketProvenance, iv *PricingInterval, sou
 	if iv.CacheReadPrice != nil || iv.CacheReadMultiplier != nil {
 		p.CacheRead, p.CacheReadPriority = source, source
 	}
+	if iv.CacheWrite1hPrice != nil {
+		p.CacheWrite1h, p.CacheWrite1hPriority = source, source
+	}
 }
 
 // intervalToModelPricing 将区间定价转换为 ModelPricing
@@ -538,32 +557,33 @@ func intervalToModelPricing(iv *PricingInterval, base *ModelPricing, chPricing *
 	if iv.CacheWritePrice != nil {
 		baseStandard := pricing.CacheCreationPricePerToken
 		basePriority := pricing.CacheCreationPricePerTokenPriority
-		base1h := pricing.CacheCreation1hPrice
-		base1hPriority := pricing.CacheCreation1hPricePriority
 		pricing.CacheCreationPricePerTokenPriority = channelTierOverridePrice(pricing.CacheCreationPricePerToken, pricing.CacheCreationPricePerTokenPriority, *iv.CacheWritePrice)
 		pricing.CacheCreation5mPricePriority = pricing.CacheCreationPricePerTokenPriority
-		pricing.CacheCreation1hPricePriority = channelTierOverridePrice(base1h, base1hPriority, *iv.CacheWritePrice)
 		pricing.CacheCreationPricePerToken = *iv.CacheWritePrice
 		pricing.CacheCreationPriceExplicit = true
 		pricing.CacheCreation5mPrice = *iv.CacheWritePrice
-		pricing.CacheCreation1hPrice = *iv.CacheWritePrice
 		pricing.cacheWritePriorityConfigured = channelTierOverrideConfigured(baseStandard, basePriority,
 			pricing.cacheWritePriceConfigured || (!pricing.tokenPricePresenceKnown && baseStandard > 0),
 			pricing.cacheWritePriorityConfigured || (!pricing.tokenPricePresenceKnown && basePriority > 0))
 		pricing.cacheWritePriceConfigured = true
 		pricing.cacheWrite5mPriceConfigured = true
-		pricing.cacheWrite1hPriceConfigured = true
 		pricing.cacheWrite5mPriorityConfigured = pricing.cacheWritePriorityConfigured
-		pricing.cacheWrite1hPriorityConfigured = channelTierOverrideConfigured(base1h, base1hPriority,
-			base1h > 0 || pricing.cacheWrite1hPriceConfigured,
-			base1hPriority > 0 || pricing.cacheWrite1hPriorityConfigured)
+		if iv.CacheWrite1hPrice == nil {
+			applyCacheWrite1hPriceOverride(pricing, *iv.CacheWritePrice)
+		}
 	} else if iv.CacheWriteMultiplier != nil {
 		pricing.CacheCreationPricePerToken = applyMultiplier(pricing.CacheCreationPricePerToken, iv.CacheWriteMultiplier)
 		pricing.CacheCreationPricePerTokenPriority = applyMultiplier(pricing.CacheCreationPricePerTokenPriority, iv.CacheWriteMultiplier)
 		pricing.CacheCreation5mPrice = applyMultiplier(pricing.CacheCreation5mPrice, iv.CacheWriteMultiplier)
-		pricing.CacheCreation1hPrice = applyMultiplier(pricing.CacheCreation1hPrice, iv.CacheWriteMultiplier)
 		pricing.CacheCreation5mPricePriority = applyMultiplier(pricing.CacheCreation5mPricePriority, iv.CacheWriteMultiplier)
-		pricing.CacheCreation1hPricePriority = applyMultiplier(pricing.CacheCreation1hPricePriority, iv.CacheWriteMultiplier)
+		if iv.CacheWrite1hPrice == nil {
+			pricing.CacheCreation1hPrice = applyMultiplier(pricing.CacheCreation1hPrice, iv.CacheWriteMultiplier)
+			pricing.CacheCreation1hPricePriority = applyMultiplier(pricing.CacheCreation1hPricePriority, iv.CacheWriteMultiplier)
+		}
+	}
+	if iv.CacheWrite1hPrice != nil {
+		applyCacheWrite1hPriceOverride(pricing, *iv.CacheWrite1hPrice)
+		pricing.SupportsCacheBreakdown = true
 	}
 	if iv.CacheReadPrice != nil {
 		baseStandard := pricing.CacheReadPricePerToken

@@ -31,7 +31,7 @@ func TestUsageLogInsertColumnContractIncludesLocalAndUpstreamFields(t *testing.T
 		"image_size_breakdown", "video_count", "video_resolution", "video_duration_seconds",
 		"service_tier", "reasoning_effort", "requested_reasoning_effort", "inbound_endpoint", "upstream_endpoint",
 		"cache_ttl_overridden", "long_context_billing_applied", "channel_id", "model_mapping_chain",
-		"billing_tier", "billing_mode", "account_stats_cost", "kiro_credits", "session_id", "native_compaction_v2", "created_at",
+		"billing_tier", "billing_mode", "account_stats_cost", "kiro_credits", "upstream_request_id", "session_id", "native_compaction_v2", "created_at",
 	}
 	wantTypes := []string{
 		"bigint", "bigint", "bigint", "text", "text", "text", "text", "text", "boolean",
@@ -40,21 +40,23 @@ func TestUsageLogInsertColumnContractIncludesLocalAndUpstreamFields(t *testing.T
 		"numeric", "numeric", "numeric", "numeric", "smallint", "smallint", "boolean", "boolean",
 		"integer", "integer", "text", "text", "integer", "text", "text", "text", "text", "jsonb",
 		"integer", "text", "integer", "text", "text", "text", "text", "text", "boolean", "boolean",
-		"bigint", "text", "text", "text", "numeric", "numeric", "text", "boolean", "timestamptz",
+		"bigint", "text", "text", "text", "numeric", "numeric", "text", "text", "boolean", "timestamptz",
 	}
 
 	gotSelectColumns := splitUsageContractCSV(usageLogSelectColumns)
-	require.Len(t, gotSelectColumns, 63)
+	require.Len(t, gotSelectColumns, 64)
 	require.Equal(t, "id", gotSelectColumns[0])
 	require.Equal(t, wantColumns, gotSelectColumns[1:])
 	require.Equal(t, wantTypes, usageLogInsertArgTypes[:])
 
 	kiroCredits := 1.25
 	sessionID := "session-contract"
+	upstreamRequestID := "upstream-contract"
 	createdAt := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
 	log := &service.UsageLog{
 		UserID: 1, APIKeyID: 2, AccountID: 3, RequestID: "req-contract", Model: "gpt-5.6",
 		RequestedModel: "requested", SessionID: &sessionID, CreatedAt: createdAt,
+		UpstreamRequestID: &upstreamRequestID,
 	}
 	kiroField := reflect.ValueOf(log).Elem().FieldByName("KiroCredits")
 	require.True(t, kiroField.IsValid(), "local KiroCredits usage field must be preserved")
@@ -65,11 +67,12 @@ func TestUsageLogInsertColumnContractIncludesLocalAndUpstreamFields(t *testing.T
 	require.True(t, ok)
 	require.NotNil(t, preparedKiroCredits)
 	require.Equal(t, kiroCredits, *preparedKiroCredits)
-	require.Equal(t, sql.NullString{String: sessionID, Valid: true}, prepared.args[59])
-	upstreamModelMismatch, ok := prepared.args[60].(bool)
+	require.Equal(t, sql.NullString{String: upstreamRequestID, Valid: true}, prepared.args[59])
+	require.Equal(t, sql.NullString{String: sessionID, Valid: true}, prepared.args[60])
+	upstreamModelMismatch, ok := prepared.args[61].(bool)
 	require.True(t, ok)
 	require.False(t, upstreamModelMismatch)
-	require.Equal(t, createdAt, prepared.args[61])
+	require.Equal(t, createdAt, prepared.args[62])
 
 	t.Run("single", func(t *testing.T) {
 		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(

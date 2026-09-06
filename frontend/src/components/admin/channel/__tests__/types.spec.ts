@@ -17,6 +17,20 @@ import {
 } from '../types'
 
 describe('channel pricing form conversion', () => {
+  it('preserves independent 1h cache price and max effort multiplier when editing', () => {
+    const form = apiChannelPricingToForm({
+      platform: 'anthropic', models: ['claude-fable-5-1'], billing_mode: 'token',
+      input_price: null, output_price: null, cache_write_price: 3e-6,
+      cache_write_1h_price: 0, cache_read_price: null,
+      max_reasoning_effort_multiplier: 3,
+      image_input_price: null, image_output_price: null, per_request_price: null,
+      intervals: [], time_pricing: null,
+    })
+    expect(form.cache_write_price).toBe(3)
+    expect(form.cache_write_1h_price).toBe(0)
+    expect(form.max_reasoning_effort_multiplier).toBe(3)
+  })
+
   it('preserves fast/flex multipliers and both image token prices', () => {
     const form = apiChannelPricingToForm({
       platform: 'openai',

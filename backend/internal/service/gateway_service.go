@@ -605,8 +605,10 @@ type ClaudeUsage struct {
 
 type ForwardResult struct {
 	RequestID string
-	Usage     ClaudeUsage
-	Model     string
+	// UpstreamHeaders carries the direct provider response headers for configured request-ID extraction.
+	UpstreamHeaders http.Header
+	Usage           ClaudeUsage
+	Model           string
 	// UpstreamRequest is an immutable snapshot of the final request body sent
 	// by the last attempted upstream call. Compatibility producers may leave it
 	// nil; new forwarding paths must not substitute the inbound client body.

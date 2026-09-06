@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -68,7 +69,7 @@ func TestGatewayServiceRecordUpstreamUserAgentUsesFinalWireHeader(t *testing.T) 
 	}}, repo.records)
 }
 
-func TestGatewayServiceBuildUpstreamRequestMimicUsesCachedFingerprintUserAgent(t *testing.T) {
+func TestGatewayServiceBuildUpstreamRequestMimicRecordsUnifiedWireIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -97,17 +98,19 @@ func TestGatewayServiceBuildUpstreamRequestMimicUsesCachedFingerprintUserAgent(t
 	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-opus-4-8", true, true)
 
 	require.NoError(t, err)
-	require.Equal(t, "claude-cli/2.1.199 (external, cli)", getHeaderRaw(req.Header, "User-Agent"))
-	require.Equal(t, "x64", getHeaderRaw(req.Header, "X-Stainless-Arch"))
-	require.Equal(t, "v26.3.0", getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
-	require.Contains(t, string(wireBody), "cc_version=2.1.199.abc")
+	wantUA := claude.DefaultHeaders["User-Agent"]
+	require.Equal(t, wantUA, getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
+	version := ExtractCLIVersion(wantUA)
+	require.Contains(t, string(wireBody), "cc_version="+version+"."+computeClaudeCodeFingerprint(wireBody, version)+";")
 	require.Equal(t, []accountUpstreamUserAgentRecord{{
 		accountID: 14,
-		userAgent: "claude-cli/2.1.199 (external, cli)",
+		userAgent: wantUA,
 	}}, repo.records)
 }
 
-func TestGatewayServiceBuildCountTokensRequestMimicUsesCachedFingerprintUserAgent(t *testing.T) {
+func TestGatewayServiceBuildCountTokensRequestMimicRecordsUnifiedWireIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -136,12 +139,13 @@ func TestGatewayServiceBuildCountTokensRequestMimicUsesCachedFingerprintUserAgen
 	req, _, err := svc.buildCountTokensRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-opus-4-8", true)
 
 	require.NoError(t, err)
-	require.Equal(t, "claude-cli/2.1.199 (external, cli)", getHeaderRaw(req.Header, "User-Agent"))
-	require.Equal(t, "x64", getHeaderRaw(req.Header, "X-Stainless-Arch"))
-	require.Equal(t, "v26.3.0", getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
+	wantUA := claude.DefaultHeaders["User-Agent"]
+	require.Equal(t, wantUA, getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
 	require.Equal(t, []accountUpstreamUserAgentRecord{{
 		accountID: 14,
-		userAgent: "claude-cli/2.1.199 (external, cli)",
+		userAgent: wantUA,
 	}}, repo.records)
 }
 
