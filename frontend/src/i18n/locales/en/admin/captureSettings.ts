@@ -34,14 +34,15 @@ export default {
       gemini: 'Gemini',
       antigravity: 'Antigravity',
       grok: 'Grok',
-      openai: 'OpenAI HTTP text APIs',
-      openaiDescription: 'Only /v1/responses, /v1/chat/completions, and /v1/messages; excludes WebSocket, images, video, and embeddings.',
+      openai: 'OpenAI text APIs',
+      openaiDescription: 'Supports /v1/responses, /v1/chat/completions, /v1/messages, and Responses WebSocket; excludes images, video, and embeddings.',
     },
     models: {
       title: 'Model allowlists',
-      description: 'Only listed requested models are captured for Anthropic and Kiro. Leave a platform list empty to capture all of its models.',
+      description: 'Anthropic, Kiro, and OpenAI capture exact matches of the listed requested models. Leave a platform list empty to capture all of its models.',
       anthropic: 'Anthropic requested models',
       kiro: 'Kiro requested models',
+      openai: 'OpenAI requested models',
       placeholder: 'One model per line or separated by commas',
     },
     outcomes: {

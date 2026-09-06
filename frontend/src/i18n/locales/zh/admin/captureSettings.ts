@@ -34,14 +34,15 @@ export default {
       gemini: 'Gemini',
       antigravity: 'Antigravity',
       grok: 'Grok',
-      openai: 'OpenAI HTTP 文本接口',
-      openaiDescription: '仅 /v1/responses、/v1/chat/completions、/v1/messages；不包含 WS、图片、视频和 Embeddings。',
+      openai: 'OpenAI 文本接口',
+      openaiDescription: '支持 /v1/responses、/v1/chat/completions、/v1/messages 和 Responses WebSocket；不包含图片、视频和 Embeddings。',
     },
     models: {
       title: '模型白名单',
-      description: '仅转存 Anthropic 和 Kiro 中列出的请求模型；留空某个平台的列表即表示不按模型筛选。',
+      description: 'Anthropic、Kiro 和 OpenAI 按列出的请求模型精确匹配转存；留空某个平台的列表即表示不按模型筛选。',
       anthropic: 'Anthropic 请求模型',
       kiro: 'Kiro 请求模型',
+      openai: 'OpenAI 请求模型',
       placeholder: '每行一个模型，也可用逗号分隔',
     },
     outcomes: {

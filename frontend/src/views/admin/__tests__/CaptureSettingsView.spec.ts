@@ -107,6 +107,7 @@ describe('CaptureSettingsView', () => {
     captureSettings.policy.platforms.openai = false
     captureSettings.policy.model_allowlists.anthropic = ['claude-fable-5', 'claude-opus-5']
     captureSettings.policy.model_allowlists.kiro = ['claude-fable-5', 'claude-opus-5']
+    Object.assign(captureSettings.policy.model_allowlists, { openai: [] })
     captureSettings.provisioned = true
     captureSettings.ready = true
     captureSettings.sidecar_running = true
@@ -265,7 +266,7 @@ describe('CaptureSettingsView', () => {
         request_headers: true,
         response_headers: true,
       },
-      model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'] },
+      model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'], openai: [] },
       group_ids: [],
       user_ids: [],
     }))
@@ -295,7 +296,37 @@ describe('CaptureSettingsView', () => {
       model_allowlists: {
         anthropic: ['claude-fable-5', 'claude-opus-5'],
         kiro: ['claude-fable-5'],
+        openai: [],
       },
+    }))
+  })
+
+  it('loads, normalizes and clears the OpenAI request model allowlist', async () => {
+    Object.assign(captureSettings.policy.model_allowlists, { openai: ['gpt-6-astra'] })
+    const wrapper = mount(CaptureSettingsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' }, Toggle: ToggleStub,
+          GroupSelector: true, OpenAIFastPolicyUserSelector: true, Icon: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const input = wrapper.get('[data-test="capture-models-openai"]')
+    expect((input.element as HTMLTextAreaElement).value).toBe('gpt-6-astra')
+    await input.setValue(' GPT-6-ASTRA, gpt-6-astra\n ')
+    await wrapper.get('[data-test="capture-save"]').trigger('click')
+    await flushPromises()
+    expect(updateCaptureSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      model_allowlists: expect.objectContaining({ openai: ['gpt-6-astra'] }),
+    }))
+
+    await input.setValue('')
+    await wrapper.get('[data-test="capture-save"]').trigger('click')
+    await flushPromises()
+    expect(updateCaptureSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      model_allowlists: expect.objectContaining({ openai: [] }),
     }))
   })
 })

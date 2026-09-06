@@ -31,6 +31,7 @@ const policy: CaptureRuntimePolicy = {
   model_allowlists: {
     anthropic: ['claude-fable-5', 'claude-opus-5'],
     kiro: ['claude-fable-5', 'claude-opus-5'],
+    openai: ['gpt-6-astra'],
   },
   group_ids: [],
   user_ids: [],

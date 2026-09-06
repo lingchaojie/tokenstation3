@@ -110,12 +110,12 @@ ClickHouse 容器 :9000 ─► 独立持久数据盘
 |---|---|---|
 | Anthropic | native/OAuth、API-key passthrough、Chat/Responses 兼容、Bedrock、WebChat | 保存实际 provider 的最终 request/response；Bedrock 原始 AWS EventStream 由 Anthropic 平台策略控制 |
 | Kiro | Messages、WebSearch、Chat Completions、Responses、WebChat | 保存最终 AWS request envelope 和原始 AWS EventStream，不保存转换后的 Anthropic JSON/SSE |
-| OpenAI | `/v1/responses`、`/v1/chat/completions`、`/v1/messages` 与 direct WebChat HTTP | 保存最终 outbound body 和协议转换前的原始上游 JSON/SSE；不依赖 passthrough |
+| OpenAI | `/v1/responses`、`/v1/chat/completions`、`/v1/messages`、direct WebChat HTTP，以及 Responses WebSocket | 保存最终 outbound body 和协议转换前的原始上游 JSON/SSE/WS 帧；支持按请求模型白名单过滤，不依赖 passthrough |
 | Gemini | native generateContent/streamGenerateContent 与 Messages/Chat 兼容 | 保存 Google provider 原始 JSON/SSE；强制 provider streaming 时 `stream` 记录实际 wire，而不是客户端协议 |
 | Antigravity | native Gemini、Claude compatibility、base_url 与 forced-stream collector | 保存最终 Google/Claude provider attempt；转换后的客户端协议不覆盖原文 |
 | Grok | 已接入的 HTTP 文本转发路径 | 保存最终 observed provider HTTP attempt；本轮排除的 Voice/TTS/STT/Realtime 和独立 Search 不在范围 |
 
-OpenAI WebSocket、图片、视频、Embeddings 等未接入 capture 的非 HTTP 文本路径不在当前范围。中间 retry/failover 不单独入库：成功只保存最终成功 attempt；错误只保存最终返回客户端的终态上游 HTTP 响应。没有观察到真实 provider request/response、本地合成、请求到达上游前产生的错误一律不存，不会拿兼容入口 body 伪造 provider-native 记录。
+OpenAI 图片、视频、Embeddings 等未接入 capture 的路径不在当前范围。Responses WebSocket 按每轮请求模型判定转存；连接内切换模型也重新匹配白名单。中间 retry/failover 不单独入库：成功只保存最终成功 attempt；错误只保存最终返回客户端的终态上游 HTTP 响应。没有观察到真实 provider request/response、本地合成、请求到达上游前产生的错误一律不存，不会拿兼容入口 body 伪造 provider-native 记录。
 
 ### 3.2 每条记录的字段
 
@@ -661,9 +661,12 @@ LIMIT 20;
 ### 11.3 OpenAI 验收
 
 - 管理页 OpenAI 平台开关显式开启。
-- 请求来自支持的三个 HTTP 文本入口之一。
+- 请求来自支持的三个 HTTP 文本入口之一，或 Responses WebSocket。
+- 在“请求模型白名单”的 OpenAI 栏只填 `gpt-6-astra`，即可仅转存 Astra；空白表示不限制模型。按用户请求名匹配，忽略大小写和首尾空格，不使用映射后的上游模型名。
+- “成功调用”开启后保存成功结束的最终上游调用；“终态错误”独立控制最终失败调用。二者均受模型白名单约束。
 - 无论账号 `openai_passthrough` 为 true 还是 false，只要实际发生受支持的 OpenAI 上游 HTTP 调用，都应按策略转存。
 - ClickHouse 新增一行，`platform='openai'`，保存最终映射后的 outbound 请求和转换前的原始上游响应。
+- WebSocket 验证同连接 Astra→Sol 和 Sol→Astra，只有 Astra 的轮次转存。策略按连接初始化，保存新策略后应新建 WebSocket 连接验证。
 
 ### 11.4 其他 provider 与 failover 验收
 
@@ -884,7 +887,7 @@ ALTER TABLE llm_archive.model_call_archive DROP PARTITION '202607';
 
 ### OpenAI 为什么没有数据？
 
-确认运行时 OpenAI 平台开关已显式开启，请求来自 `/v1/responses`、`/v1/chat/completions` 或 `/v1/messages`，结果和用户/分组范围命中。`openai_passthrough` 不控制转存。
+确认运行时 OpenAI 平台开关已显式开启，请求来自支持的 HTTP 文本入口或 Responses WebSocket，且请求模型白名单、结果和用户/分组范围命中。`openai_passthrough` 不控制转存。旧版“OpenAI HTTP”说明描述的是最初覆盖范围；当前 Responses WebSocket 也使用同一套转存策略。
 
 ### ClickHouse 恢复了，为什么页面仍不 ready？
 

@@ -111,6 +111,32 @@ func TestCaptureSettingsPUTRejectsEnableWhenUnready(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "not ready")
 }
 
+func TestCaptureSettingsOpenAIModelAllowlistRoundTrip(t *testing.T) {
+	h := newCaptureHandlerForTest(nil)
+	for _, body := range []string{
+		`{"version":1,"enabled":false,"model_allowlists":{"openai":[" GPT-6-ASTRA ","gpt-6-astra"]}}`,
+		`{"version":1,"enabled":false,"model_allowlists":{"openai":[]}}`,
+	} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/capture-settings", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.Update(c)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		w = httptest.NewRecorder()
+		c, _ = gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/capture-settings", nil)
+		h.Get(c)
+		require.Equal(t, http.StatusOK, w.Code)
+		if strings.Contains(body, "GPT-6-ASTRA") {
+			require.Contains(t, w.Body.String(), `"openai":["gpt-6-astra"]`)
+		} else {
+			require.Contains(t, w.Body.String(), `"openai":[]`)
+		}
+	}
+}
+
 func TestCaptureSettingsPUTRejectsUnknownAndInvalidFields(t *testing.T) {
 	h := newCaptureHandlerForTest(nil)
 	for name, body := range map[string]string{
