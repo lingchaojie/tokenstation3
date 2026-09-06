@@ -46,6 +46,7 @@ type CaptureContentPolicy struct {
 type CaptureModelAllowlistPolicy struct {
 	Anthropic []string `json:"anthropic"`
 	Kiro      []string `json:"kiro"`
+	OpenAI    []string `json:"openai"`
 }
 
 type CaptureRuntimePolicy struct {
@@ -85,6 +86,7 @@ func DefaultCaptureRuntimePolicy() CaptureRuntimePolicy {
 		ModelAllowlists: CaptureModelAllowlistPolicy{
 			Anthropic: append([]string{}, defaultCaptureModelAllowlist...),
 			Kiro:      append([]string{}, defaultCaptureModelAllowlist...),
+			OpenAI:    []string{},
 		},
 		GroupIDs: []int64{},
 		UserIDs:  []int64{},
@@ -121,10 +123,12 @@ func ValidateAndNormalizeCaptureRuntimePolicy(policy CaptureRuntimePolicy) (Capt
 	}
 	anthropic := normalizeCapturePolicyModels(policy.ModelAllowlists.Anthropic, defaultCaptureModelAllowlist)
 	kiro := normalizeCapturePolicyModels(policy.ModelAllowlists.Kiro, defaultCaptureModelAllowlist)
+	openai := normalizeCapturePolicyModels(policy.ModelAllowlists.OpenAI, nil)
 	policy.GroupIDs = groups
 	policy.UserIDs = users
 	policy.ModelAllowlists.Anthropic = anthropic
 	policy.ModelAllowlists.Kiro = kiro
+	policy.ModelAllowlists.OpenAI = openai
 	return policy, nil
 }
 
@@ -188,12 +192,13 @@ func CompileCaptureRuntimePolicy(policy CaptureRuntimePolicy) (CompiledCapturePo
 		platforms:       normalized.Platforms,
 		outcomes:        normalized.Outcomes,
 		content:         normalized.Content,
-		modelAllowlists: make(map[string]map[string]struct{}, 2),
+		modelAllowlists: make(map[string]map[string]struct{}, 3),
 		groupIDs:        make(map[int64]struct{}, len(normalized.GroupIDs)),
 		userIDs:         make(map[int64]struct{}, len(normalized.UserIDs)),
 	}
 	compiled.modelAllowlists["anthropic"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.Anthropic)
 	compiled.modelAllowlists["kiro"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.Kiro)
+	compiled.modelAllowlists["openai"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.OpenAI)
 	for _, id := range normalized.GroupIDs {
 		compiled.groupIDs[id] = struct{}{}
 	}

@@ -47,12 +47,14 @@ func TestNormalizeCaptureRuntimePolicySortsAndDeduplicatesModelAllowlists(t *tes
 	policy.ModelAllowlists = CaptureModelAllowlistPolicy{
 		Anthropic: []string{" Claude-Fable-5 ", "claude-opus-5", "claude-fable-5", ""},
 		Kiro:      []string{"claude-opus-5", " CLAUDE-FABLE-5 "},
+		OpenAI:    []string{" GPT-6-ASTRA ", "gpt-6-astra", ""},
 	}
 
 	got, err := ValidateAndNormalizeCaptureRuntimePolicy(policy)
 	require.NoError(t, err)
 	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Anthropic)
 	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Kiro)
+	require.Equal(t, []string{"gpt-6-astra"}, got.ModelAllowlists.OpenAI)
 }
 
 func TestNormalizeCaptureRuntimePolicyRejectsInvalidVersionAndIDs(t *testing.T) {
@@ -249,6 +251,39 @@ func TestCompiledCapturePolicyMatchesEveryLocallySupportedPlatform(t *testing.T)
 		t.Run(platform, func(t *testing.T) {
 			_, ok := compiled.Decide(platform, CaptureOutcomeSuccess, 1, nil)
 			require.True(t, ok)
+		})
+	}
+}
+
+func TestCaptureRuntimePolicyOpenAIModelAllowlist(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		allowlist string
+		model     string
+		want      bool
+	}{
+		{"astra allowed", `"openai":[" GPT-6-ASTRA ","gpt-6-astra",""]`, "gpt-6-astra", true},
+		{"request name normalized", `"openai":["gpt-6-astra"]`, " GPT-6-ASTRA ", true},
+		{"sol excluded", `"openai":["gpt-6-astra"]`, "gpt-5.6-sol", false},
+		{"alias excluded", `"openai":["gpt-6-astra"]`, "gpt-6", false},
+		{"missing model excluded", `"openai":["gpt-6-astra"]`, "", false},
+		{"empty means unrestricted", `"openai":[]`, "gpt-5.6-sol", true},
+		{"legacy remains unrestricted", `"anthropic":[]`, "gpt-5.6-sol", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := DecodeCaptureRuntimePolicy([]byte(`{
+				"version":1,"enabled":true,"platforms":{"openai":true},
+				"outcomes":{"success":true,"terminal_error":true},
+				"content":{"raw_request":true,"raw_response":true},
+				"model_allowlists":{` + tc.allowlist + `}
+			}`))
+			require.NoError(t, err)
+			compiled, err := CompileCaptureRuntimePolicy(policy)
+			require.NoError(t, err)
+			for _, outcome := range []CaptureOutcome{CaptureOutcomeSuccess, CaptureOutcomeTerminalError, captureOutcomeClientDisconnect} {
+				_, allowed := compiled.DecideForModel(PlatformOpenAI, tc.model, outcome, 1, nil)
+				require.Equal(t, tc.want, allowed, "outcome=%s", outcome)
+			}
 		})
 	}
 }

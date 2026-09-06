@@ -26,6 +26,7 @@ export interface CaptureRuntimePolicy {
   model_allowlists: {
     anthropic: string[]
     kiro: string[]
+    openai: string[]
   }
   group_ids: number[]
   user_ids: number[]

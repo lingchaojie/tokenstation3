@@ -110,7 +110,7 @@
             :title="t('admin.captureSettings.models.title')"
             :description="t('admin.captureSettings.models.description')"
           />
-          <div class="grid gap-6 p-6 lg:grid-cols-2">
+          <div class="grid gap-6 p-6 lg:grid-cols-3">
             <div>
               <label class="input-label">{{ t('admin.captureSettings.models.anthropic') }}</label>
               <textarea
@@ -129,6 +129,17 @@
                 :value="form.model_allowlists.kiro.join('\n')"
                 :placeholder="t('admin.captureSettings.models.placeholder')"
                 @input="setModelAllowlist('kiro', $event)"
+              ></textarea>
+            </div>
+            <div>
+              <label for="capture-models-openai" class="input-label">{{ t('admin.captureSettings.models.openai') }}</label>
+              <textarea
+                id="capture-models-openai"
+                data-test="capture-models-openai"
+                class="input min-h-28 font-mono text-sm"
+                :value="form.model_allowlists.openai.join('\n')"
+                :placeholder="t('admin.captureSettings.models.placeholder')"
+                @input="setModelAllowlist('openai', $event)"
               ></textarea>
             </div>
           </div>
@@ -327,7 +338,7 @@ const defaultPolicy = (): CaptureRuntimePolicy => ({
   platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
   outcomes: { success: true, terminal_error: true },
   content: { raw_request: true, raw_response: true, request_headers: true, response_headers: true },
-  model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'] },
+  model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'], openai: [] },
   group_ids: [],
   user_ids: [],
 })
@@ -372,6 +383,7 @@ function copyPolicy(policy: CaptureRuntimePolicy): void {
     model_allowlists: {
       anthropic: [...(policy.model_allowlists?.anthropic ?? [])],
       kiro: [...(policy.model_allowlists?.kiro ?? [])],
+      openai: [...(policy.model_allowlists?.openai ?? [])],
     },
     group_ids: [...policy.group_ids],
     user_ids: [...policy.user_ids],
@@ -390,13 +402,14 @@ function normalizedPolicy(): CaptureRuntimePolicy {
     model_allowlists: {
       anthropic: models(form.model_allowlists.anthropic),
       kiro: models(form.model_allowlists.kiro),
+      openai: models(form.model_allowlists.openai),
     },
     group_ids: ids(form.group_ids),
     user_ids: ids(form.user_ids),
   }
 }
 
-function setModelAllowlist(platform: 'anthropic' | 'kiro', event: Event): void {
+function setModelAllowlist(platform: keyof CaptureRuntimePolicy['model_allowlists'], event: Event): void {
   const value = (event.target as HTMLTextAreaElement).value
   form.model_allowlists[platform] = value.split(/[\n,]/)
 }

@@ -31,6 +31,52 @@ func TestOpenAIHTTPCaptureDefaultPolicyAllocatesNothing(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestOpenAIModelAllowlistGuardsHTTPAndWebSocketWireCapture(t *testing.T) {
+	policy, err := DecodeCaptureRuntimePolicy([]byte(`{
+		"version":1,"enabled":true,"platforms":{"openai":true},
+		"outcomes":{"success":true,"terminal_error":true},
+		"content":{"raw_request":true,"raw_response":true},
+		"model_allowlists":{"openai":["gpt-6-astra"]}
+	}`))
+	require.NoError(t, err)
+	compiled, err := CompileCaptureRuntimePolicy(policy)
+	require.NoError(t, err)
+	for _, transportMode := range []string{"http", "websocket"} {
+		for _, requestedModel := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+			t.Run(transportMode+"/"+requestedModel, func(t *testing.T) {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				setCompiledCaptureScopeForTest(c, compiled, 1, nil)
+				SetCaptureRequestedModel(c, requestedModel)
+				transport := &recordingCaptureTransport{}
+				svc := &OpenAIGatewayService{
+					cfg:         captureEnabledConfigForTest(1024),
+					capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
+				}
+				account := &Account{Platform: PlatformOpenAI}
+				// Even a Sol request mapped upstream to Astra must remain excluded.
+				wireBody := []byte(`{"model":"gpt-6-astra","input":"test"}`)
+				var captured bool
+				if transportMode == "http" {
+					req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", nil)
+					captured = svc.prepareOpenAIHTTPCaptureAttempt(c, account, req, wireBody)
+				} else {
+					c.Request.Method = http.MethodGet
+					captured = svc.beginOpenAIWSCaptureAttempt(c.Request.Context(), c, account, "wss://api.openai.test/v1/responses", nil, wireBody, nil) != nil
+				}
+				if requestedModel == "gpt-6-astra" {
+					require.True(t, captured)
+					require.Len(t, transport.Attempts(), 1)
+				} else {
+					require.False(t, captured)
+					require.Empty(t, transport.Attempts())
+				}
+				AbortCaptureAttempt(c)
+			})
+		}
+	}
+}
+
 func TestOpenAIHTTPCaptureKeepsActualOutboundAndRawResponse(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
