@@ -369,6 +369,7 @@ func TestProviderProbeCapabilityMatrix(t *testing.T) {
 	for _, p := range []string{
 		MonitorProviderOpenAI, MonitorProviderAnthropic, MonitorProviderGemini,
 		MonitorProviderGrok, MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek,
+		MonitorProviderMiniMax, MonitorProviderOpenCodeGo,
 	} {
 		require.True(t, providerSupportsProbe(p), p)
 	}
@@ -376,6 +377,7 @@ func TestProviderProbeCapabilityMatrix(t *testing.T) {
 		MonitorProviderOpenAI, MonitorProviderAnthropic, MonitorProviderGemini,
 		MonitorProviderGrok, MonitorProviderAntigravity,
 		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek,
+		MonitorProviderMiniMax, MonitorProviderOpenCodeGo,
 	} {
 		require.NoError(t, validateProvider(p), p)
 	}
@@ -459,8 +461,32 @@ func TestMonitorAccountQuotaCapability_Matrix(t *testing.T) {
 			account: &Account{ID: 4, Platform: domain.PlatformZhipu, Credentials: map[string]any{"account_mode": AccountModeCoding}},
 		},
 		{
+			name:    "minimax coding default endpoint ok",
+			account: &Account{ID: 14, Platform: domain.PlatformMiniMax, Credentials: map[string]any{"account_mode": AccountModeCoding}},
+		},
+		{
+			name:    "opencode go default endpoint ok",
+			account: &Account{ID: 17, Platform: domain.PlatformOpenCodeGo},
+		},
+		{
+			name:    "opencode zen has no subscription quota window",
+			account: &Account{ID: 18, Platform: domain.PlatformOpenCodeGo, Credentials: map[string]any{"account_mode": AccountModeZen}},
+			wantErr: ErrChannelMonitorAccountNotSupportable,
+		},
+		{
+			name: "custom-domain minimax coding unsupported",
+			account: &Account{ID: 16, Platform: domain.PlatformMiniMax, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"account_mode": AccountModeCoding, "base_url": "https://relay.example.com/v1"}},
+			wantErr: ErrChannelMonitorAccountNotSupportable,
+		},
+		{
 			name:    "zhipu payg has no balance endpoint",
 			account: &Account{ID: 5, Platform: domain.PlatformZhipu},
+			wantErr: ErrChannelMonitorAccountNotSupportable,
+		},
+		{
+			name:    "minimax payg has no balance endpoint",
+			account: &Account{ID: 15, Platform: domain.PlatformMiniMax},
 			wantErr: ErrChannelMonitorAccountNotSupportable,
 		},
 		{

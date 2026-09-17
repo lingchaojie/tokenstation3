@@ -75,6 +75,7 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	require.Len(t, quotaRepo.bulkInsertCalls, 1, "createEmailOAuthUser must snapshot platform quotas via BulkInsertInitial")
 
 	records := quotaRepo.bulkInsertCalls[0]
+	require.Len(t, records, len(AllowedQuotaPlatforms), "all supported platforms get durable rows, including unlimited defaults")
 	var geminiRecord *UserPlatformQuotaRecord
 	for i := range records {
 		if records[i].Platform == "gemini" {

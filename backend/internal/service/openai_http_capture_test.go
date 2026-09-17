@@ -31,12 +31,12 @@ func TestOpenAIHTTPCaptureDefaultPolicyAllocatesNothing(t *testing.T) {
 	require.False(t, exists)
 }
 
-func TestOpenAIModelAllowlistGuardsHTTPAndWebSocketWireCapture(t *testing.T) {
+func TestOpenAIModelsListConfigGuardsHTTPAndWebSocketWireCapture(t *testing.T) {
 	policy, err := DecodeCaptureRuntimePolicy([]byte(`{
 		"version":1,"enabled":true,"platforms":{"openai":true},
 		"outcomes":{"success":true,"terminal_error":true},
 		"content":{"raw_request":true,"raw_response":true},
-		"model_allowlists":{"openai":["gpt-6-astra"]}
+		"models_list_configs":{"openai":["gpt-6-astra"]}
 	}`))
 	require.NoError(t, err)
 	compiled, err := CompileCaptureRuntimePolicy(policy)

@@ -10,13 +10,13 @@ import zh from "@/i18n/locales/zh/admin/overview";
 describe("groupsOpenAIFast", () => {
   it("supports only OpenAI groups", () => {
     expect(supportsGroupOpenAIFast("openai")).toBe(true);
-    expect(supportsGroupOpenAIFast("composite")).toBe(false);
+    expect(supportsGroupOpenAIFast("gemini")).toBe(false);
     expect(supportsGroupOpenAIFast("anthropic")).toBe(false);
   });
 
   it("clears stale enabled state on unsupported platforms", () => {
     expect(normalizeGroupOpenAIFast("openai", true)).toBe(true);
-    expect(normalizeGroupOpenAIFast("composite", true)).toBe(false);
+    expect(normalizeGroupOpenAIFast("gemini", true)).toBe(false);
     expect(normalizeGroupOpenAIFast("anthropic", true)).toBe(false);
     expect(normalizeGroupOpenAIFast("openai", false)).toBe(false);
   });

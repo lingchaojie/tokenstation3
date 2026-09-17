@@ -313,7 +313,7 @@ describe('UserDashboardStats', () => {
     expect(wrapper.text()).toContain('2 active plans')
   })
 
-  it('does not render per-platform billing breakdown', () => {
+  it('renders the preserved per-platform billing breakdown', () => {
     const wrapper = mount(UserDashboardStats, {
       props: {
         stats: {
@@ -336,8 +336,8 @@ describe('UserDashboardStats', () => {
     })
 
     const text = wrapper.text()
-    expect(text).not.toContain('Per-platform Breakdown')
-    expect(text).not.toContain('OpenAI')
+    expect(text).toContain('OpenAI')
+    expect(wrapper.find('[data-platform="openai"]').exists()).toBe(true)
     expect(text).not.toContain('Quota Usage')
   })
 

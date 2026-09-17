@@ -1771,7 +1771,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	var captureResponseComplete bool
 
 	if stream {
-		streamRes, err := s.handleNativeStreamingResponse(c, resp, startTime, isOAuth)
+		streamRes, err := s.handleNativeStreamingResponse(c, resp, startTime, isOAuth, account, requestID)
 		if err != nil {
 			if streamRes == nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, true, startTime, err), err
@@ -1788,7 +1788,12 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		if useUpstreamStream {
-			collected, usageObj, terminalObserved, err := collectGeminiSSE(resp, isOAuth, s.cfg)
+			var best geminiResponseSignal
+			collected, usageObj, terminalObserved, stats, err := collectGeminiSSEResponseObserved(resp, isOAuth, s.cfg, func(rawBytes []byte) {
+				if sig, ok := detectGeminiResponseSignal(rawBytes); ok && sig.Kind > best.Kind {
+					best = sig
+				}
+			})
 			if err != nil {
 				var failoverErr *UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -1797,6 +1802,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				writeErr := s.writeGoogleError(c, http.StatusBadGateway, "Failed to read upstream stream")
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, writeErr), writeErr
 			}
+			s.finalizeGeminiSSESignal(c, account, false, requestID, best, stats.dataEvents > 0, stats.fallback)
 			b, _ := json.Marshal(collected)
 			upstreamResponseModelObserverFromContext(c).ObserveGemini(b)
 			observeGeminiImageOutputs(c, b)
@@ -1804,7 +1810,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			usage = usageObj
 			captureResponseComplete = terminalObserved
 		} else {
-			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, action)
+			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, account, requestID)
 			if err != nil {
 				return failedForwardResultForError(c, resp, originalModel, mappedModel, false, startTime, err), err
 			}
@@ -2719,16 +2725,31 @@ func unwrapIfNeeded(isOAuth bool, raw []byte) []byte {
 }
 
 func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (map[string]any, *ClaudeUsage, bool, error) {
+	collected, usage, terminalObserved, _, err := collectGeminiSSEResponseObserved(resp, isOAuth, cfg, nil)
+	return collected, usage, terminalObserved, err
+}
+
+// geminiSSECollectStats records data events and non-data fallback content.
+type geminiSSECollectStats struct {
+	dataEvents int
+	fallback   *geminiSSEFallbackBody
+}
+
+// collectGeminiSSEResponseObserved preserves the provider stream limits and idle
+// timeout while exposing decoded events for quota/terminal signal detection.
+func collectGeminiSSEResponseObserved(resp *http.Response, isOAuth bool, cfg *config.Config, observe func(rawBytes []byte)) (map[string]any, *ClaudeUsage, bool, geminiSSECollectStats, error) {
 	var last map[string]any
 	var lastWithParts map[string]any
-	var collectedTextParts []string // Collect all text parts for aggregation
+	var collectedTextParts []string
 	usage := &ClaudeUsage{}
 	terminalObserved := false
+	stats := geminiSSECollectStats{fallback: &geminiSSEFallbackBody{}}
 	lineReader := newProviderLineReader(resp, cfg, func(r io.Reader) *bufio.Scanner {
 		return newBufferedProviderSSEScanner(r, cfg)
 	})
 	defer lineReader.Close()
 	var scanErr error
+
 	for {
 		line, ok, err := lineReader.Next()
 		if err != nil {
@@ -2738,59 +2759,70 @@ func collectGeminiSSE(resp *http.Response, isOAuth bool, cfg *config.Config) (ma
 		if !ok {
 			break
 		}
-		if len(line) > 0 {
-			trimmed := strings.TrimRight(line, "\r\n")
-			if strings.HasPrefix(trimmed, "data:") {
-				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-				switch payload {
-				case "":
-				case "[DONE]":
-				default:
-					var rawBytes []byte
-					if isOAuth {
-						innerBytes, err := unwrapGeminiResponse([]byte(payload))
-						if err != nil {
-							return nil, nil, false, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
-						}
-						rawBytes = innerBytes
-					} else {
-						rawBytes = []byte(payload)
-					}
-					parsed, err := decodeGeminiCompatResponse(rawBytes)
-					if err != nil {
-						return nil, nil, false, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
-					}
-					if parsed != nil {
-						if strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" {
-							terminalObserved = true
-						}
-						last = parsed
-						if u := extractGeminiUsage(rawBytes); u != nil {
-							usage = u
-						}
-						if parts := extractGeminiParts(parsed); len(parts) > 0 {
-							lastWithParts = parsed
-							// Collect text from each part for aggregation
-							for _, part := range parts {
-								if text, ok := part["text"].(string); ok && text != "" {
-									collectedTextParts = append(collectedTextParts, text)
-								}
-							}
-						}
-					}
+		if len(line) == 0 {
+			continue
+		}
+		trimmed := strings.TrimRight(line, "\r\n")
+		if !strings.HasPrefix(trimmed, "data:") {
+			if stats.dataEvents == 0 {
+				stats.fallback.AddLine(trimmed)
+			}
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			terminalObserved = true
+			break
+		}
+
+		var rawBytes []byte
+		if isOAuth {
+			innerBytes, err := unwrapGeminiResponse([]byte(payload))
+			if err != nil {
+				return nil, nil, false, stats, newIncompleteProviderStreamFailover(resp, "invalid wrapped Gemini provider payload")
+			}
+			rawBytes = innerBytes
+		} else {
+			rawBytes = []byte(payload)
+		}
+		parsed, err := decodeGeminiCompatResponse(rawBytes)
+		if err != nil {
+			return nil, nil, false, stats, newIncompleteProviderStreamFailover(resp, "invalid Gemini provider JSON payload")
+		}
+		stats.dataEvents++
+		if observe != nil {
+			observe(rawBytes)
+		}
+		if parsed == nil {
+			continue
+		}
+		if strings.TrimSpace(extractGeminiFinishReason(parsed)) != "" {
+			terminalObserved = true
+		}
+		last = parsed
+		if u := extractGeminiUsage(rawBytes); u != nil {
+			usage = u
+		}
+		if parts := extractGeminiParts(parsed); len(parts) > 0 {
+			lastWithParts = parsed
+			for _, part := range parts {
+				if text, ok := part["text"].(string); ok && text != "" {
+					collectedTextParts = append(collectedTextParts, text)
 				}
 			}
 		}
-
 	}
 	if scanErr != nil {
 		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
-			return nil, nil, false, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream data interval timeout")
+			return nil, nil, false, stats, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream data interval timeout")
 		}
-		return nil, nil, false, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed: "+sanitizeStreamError(scanErr))
+		return nil, nil, false, stats, newIncompleteProviderStreamFailover(resp, "gemini aggregate stream read failed: "+sanitizeStreamError(scanErr))
 	}
 
-	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, terminalObserved, nil
+	return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, terminalObserved, stats, nil
 }
 
 func pickGeminiCollectResult(last map[string]any, lastWithParts map[string]any) map[string]any {
@@ -2954,7 +2986,22 @@ type UpstreamHTTPResult struct {
 	Body       []byte
 }
 
-func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Context, resp *http.Response, isOAuth bool, action string) (*ClaudeUsage, error) {
+func geminiResponseSignalContext(args []any) (*Account, string) {
+	var account *Account
+	var requestID string
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case *Account:
+			account = value
+		case string:
+			requestID = value
+		}
+	}
+	return account, requestID
+}
+
+func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Context, resp *http.Response, isOAuth bool, signalArgs ...any) (*ClaudeUsage, error) {
+	account, upstreamRequestID := geminiResponseSignalContext(signalArgs)
 	if s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
 		logger.LegacyPrintf("service.gemini_messages_compat", "[GeminiAPI] ========== Response Headers ==========")
 		for key, values := range resp.Header {
@@ -2983,6 +3030,11 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 	}
 	observer.ObserveGemini(respBody)
 	observeGeminiImageOutputs(c, respBody)
+	if sig, ok := detectGeminiResponseSignalInBody(respBody); ok {
+		s.markGeminiResponseSignal(c, account, sig, false, upstreamRequestID)
+	} else if isGeminiEmptyResponseBody(respBody) {
+		s.markGeminiEmptyResponse(c, account, false, upstreamRequestID)
+	}
 
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
@@ -2998,7 +3050,8 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 	return &ClaudeUsage{}, nil
 }
 
-func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, isOAuth bool) (*geminiNativeStreamResult, error) {
+func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, isOAuth bool, signalArgs ...any) (*geminiNativeStreamResult, error) {
+	account, upstreamRequestID := geminiResponseSignalContext(signalArgs)
 	if s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
 		logger.LegacyPrintf("service.gemini_messages_compat", "[GeminiAPI] ========== Streaming Response Headers ==========")
 		for key, values := range resp.Header {
@@ -3072,6 +3125,10 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	})
 	defer lineReader.Close()
 	var scanErr error
+	var best geminiResponseSignal
+	sawDataEvent := false
+	fallback := &geminiSSEFallbackBody{}
+
 	for {
 		line, ok, err := lineReader.Next()
 		if err != nil {
@@ -3114,6 +3171,11 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					} else {
 						rawBytes = []byte(payload)
 					}
+
+					sawDataEvent = true
+					if sig, ok := detectGeminiResponseSignal(rawBytes); ok && sig.Kind > best.Kind {
+						best = sig
+					}
 					if u := extractGeminiUsage(rawBytes); u != nil {
 						usage = u
 					}
@@ -3142,6 +3204,9 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 				}
 			} else {
 				emit(line + "\n")
+				if !sawDataEvent {
+					fallback.AddLine(trimmed)
+				}
 			}
 		} else if !isOAuth {
 			// Scanner strips delimiters; retain blank event separators for the
@@ -3181,6 +3246,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 			return nil, err
 		}
 	}
+	s.finalizeGeminiSSESignal(c, account, true, upstreamRequestID, best, sawDataEvent, fallback)
 	return resultSnapshot(false), nil
 }
 

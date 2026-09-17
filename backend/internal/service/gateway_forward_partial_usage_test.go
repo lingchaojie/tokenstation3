@@ -77,8 +77,8 @@ func installDisconnectOnlyCapturePolicy(t *testing.T, c *gin.Context) {
 	policy.Platforms.OpenAI = true
 	policy.Outcomes.Success = false
 	policy.Outcomes.TerminalError = false
-	policy.ModelAllowlists.Anthropic = []string{}
-	policy.ModelAllowlists.Kiro = []string{}
+	policy.ModelsListConfigs.Anthropic = []string{}
+	policy.ModelsListConfigs.Kiro = []string{}
 	compiled, err := CompileCaptureRuntimePolicy(policy)
 	require.NoError(t, err)
 	setCompiledCaptureScopeForTest(c, compiled, 9, nil)

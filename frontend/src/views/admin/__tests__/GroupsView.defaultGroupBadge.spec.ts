@@ -9,14 +9,14 @@ const {
   getSettings,
   getUsageSummary,
   getCapacitySummary,
-  getModelsListCandidates,
+  getModelsListConfigCandidates,
   showError,
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   getSettings: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
-  getModelsListCandidates: vi.fn(),
+  getModelsListConfigCandidates: vi.fn(),
   showError: vi.fn(),
 }));
 
@@ -26,7 +26,7 @@ vi.mock("@/api/admin", () => ({
       list: listGroups,
       getUsageSummary,
       getCapacitySummary,
-      getModelsListCandidates,
+      getModelsListConfigCandidates,
     },
     settings: {
       getSettings,
@@ -39,6 +39,10 @@ vi.mock("@/stores/app", () => ({
     showError,
     showSuccess: vi.fn(),
   }),
+}));
+
+vi.mock("@/stores/auth", () => ({
+  useAuthStore: () => ({ isSimpleMode: false }),
 }));
 
 vi.mock("@/stores/onboarding", () => ({
@@ -119,7 +123,7 @@ describe("GroupsView default group badge", () => {
     getSettings.mockReset();
     getUsageSummary.mockReset();
     getCapacitySummary.mockReset();
-    getModelsListCandidates.mockReset();
+    getModelsListConfigCandidates.mockReset();
     showError.mockReset();
 
     listGroups.mockResolvedValue({
@@ -140,7 +144,7 @@ describe("GroupsView default group badge", () => {
     });
     getUsageSummary.mockResolvedValue([]);
     getCapacitySummary.mockResolvedValue([]);
-    getModelsListCandidates.mockResolvedValue([]);
+    getModelsListConfigCandidates.mockResolvedValue([]);
   });
 
   it("marks only the groups configured as global API key defaults", async () => {

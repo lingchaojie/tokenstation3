@@ -297,6 +297,29 @@ describe('EmailOAuthButtons', () => {
     expect(window.sessionStorage.getItem('email_oauth_pending_provider')).toBe('github')
   })
 
+  it('omits an empty promo code from the OAuth request', async () => {
+    const wrapper = mount(EmailOAuthButtons, {
+      props: {
+        githubEnabled: true,
+        googleEnabled: false,
+        promoCode: '   ',
+      },
+      global: {
+        stubs: {
+          GitHubMark: true,
+          GoogleMark: true,
+        },
+      },
+    })
+
+    await wrapper.get('button').trigger('click')
+
+    expect(locationState.current.href).toBe(
+      '/api/v1/auth/oauth/github/start?redirect=%2Fbilling%3Fplan%3Dpro&aff_code=AFF123'
+    )
+    expect(locationState.current.href).not.toContain('promo_code=')
+  })
+
   it('uses a full-width descriptive button when only GitHub is enabled', () => {
     const wrapper = mount(EmailOAuthButtons, {
       props: {

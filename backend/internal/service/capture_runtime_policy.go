@@ -43,24 +43,24 @@ type CaptureContentPolicy struct {
 	ResponseHeaders bool `json:"response_headers"`
 }
 
-type CaptureModelAllowlistPolicy struct {
+type CaptureModelsListConfigPolicy struct {
 	Anthropic []string `json:"anthropic"`
 	Kiro      []string `json:"kiro"`
 	OpenAI    []string `json:"openai"`
 }
 
 type CaptureRuntimePolicy struct {
-	Version         int                         `json:"version"`
-	Enabled         bool                        `json:"enabled"`
-	Platforms       CapturePlatformPolicy       `json:"platforms"`
-	Outcomes        CaptureOutcomePolicy        `json:"outcomes"`
-	Content         CaptureContentPolicy        `json:"content"`
-	ModelAllowlists CaptureModelAllowlistPolicy `json:"model_allowlists"`
-	GroupIDs        []int64                     `json:"group_ids"`
-	UserIDs         []int64                     `json:"user_ids"`
+	Version           int                           `json:"version"`
+	Enabled           bool                          `json:"enabled"`
+	Platforms         CapturePlatformPolicy         `json:"platforms"`
+	Outcomes          CaptureOutcomePolicy          `json:"outcomes"`
+	Content           CaptureContentPolicy          `json:"content"`
+	ModelsListConfigs CaptureModelsListConfigPolicy `json:"models_list_configs"`
+	GroupIDs          []int64                       `json:"group_ids"`
+	UserIDs           []int64                       `json:"user_ids"`
 }
 
-var defaultCaptureModelAllowlist = []string{"claude-fable-5", "claude-opus-5"}
+var defaultCaptureModelsListConfig = []string{"claude-fable-5", "claude-opus-5"}
 
 func DefaultCaptureRuntimePolicy() CaptureRuntimePolicy {
 	return CaptureRuntimePolicy{
@@ -83,9 +83,9 @@ func DefaultCaptureRuntimePolicy() CaptureRuntimePolicy {
 			RequestHeaders:  true,
 			ResponseHeaders: true,
 		},
-		ModelAllowlists: CaptureModelAllowlistPolicy{
-			Anthropic: append([]string{}, defaultCaptureModelAllowlist...),
-			Kiro:      append([]string{}, defaultCaptureModelAllowlist...),
+		ModelsListConfigs: CaptureModelsListConfigPolicy{
+			Anthropic: append([]string{}, defaultCaptureModelsListConfig...),
+			Kiro:      append([]string{}, defaultCaptureModelsListConfig...),
 			OpenAI:    []string{},
 		},
 		GroupIDs: []int64{},
@@ -94,8 +94,12 @@ func DefaultCaptureRuntimePolicy() CaptureRuntimePolicy {
 }
 
 func DecodeCaptureRuntimePolicy(data []byte) (CaptureRuntimePolicy, error) {
+	normalizedData, err := normalizeLegacyCaptureRuntimePolicyJSON(data)
+	if err != nil {
+		return CaptureRuntimePolicy{}, fmt.Errorf("decode capture runtime policy: %w", err)
+	}
 	var policy CaptureRuntimePolicy
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder := json.NewDecoder(bytes.NewReader(normalizedData))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&policy); err != nil {
 		return CaptureRuntimePolicy{}, fmt.Errorf("decode capture runtime policy: %w", err)
@@ -107,6 +111,34 @@ func DecodeCaptureRuntimePolicy(data []byte) (CaptureRuntimePolicy, error) {
 		return CaptureRuntimePolicy{}, fmt.Errorf("decode capture runtime policy trailing data: %w", err)
 	}
 	return ValidateAndNormalizeCaptureRuntimePolicy(policy)
+}
+
+// normalizeLegacyCaptureRuntimePolicyJSON keeps persisted version-1 policies
+// readable after the model filter field was renamed. New writes use
+// models_list_configs; model_allowlists remains a read-only compatibility alias.
+func normalizeLegacyCaptureRuntimePolicyJSON(data []byte) ([]byte, error) {
+	if !bytes.Contains(data, []byte(`"model_allowlists"`)) {
+		return data, nil
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	legacy, hasLegacy := fields["model_allowlists"]
+	if !hasLegacy {
+		return data, nil
+	}
+	if _, hasCurrent := fields["models_list_configs"]; hasCurrent {
+		return nil, fmt.Errorf("model_allowlists and models_list_configs cannot both be set")
+	}
+	fields["models_list_configs"] = legacy
+	delete(fields, "model_allowlists")
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 func ValidateAndNormalizeCaptureRuntimePolicy(policy CaptureRuntimePolicy) (CaptureRuntimePolicy, error) {
@@ -121,14 +153,14 @@ func ValidateAndNormalizeCaptureRuntimePolicy(policy CaptureRuntimePolicy) (Capt
 	if err != nil {
 		return CaptureRuntimePolicy{}, err
 	}
-	anthropic := normalizeCapturePolicyModels(policy.ModelAllowlists.Anthropic, defaultCaptureModelAllowlist)
-	kiro := normalizeCapturePolicyModels(policy.ModelAllowlists.Kiro, defaultCaptureModelAllowlist)
-	openai := normalizeCapturePolicyModels(policy.ModelAllowlists.OpenAI, nil)
+	anthropic := normalizeCapturePolicyModels(policy.ModelsListConfigs.Anthropic, defaultCaptureModelsListConfig)
+	kiro := normalizeCapturePolicyModels(policy.ModelsListConfigs.Kiro, defaultCaptureModelsListConfig)
+	openai := normalizeCapturePolicyModels(policy.ModelsListConfigs.OpenAI, nil)
 	policy.GroupIDs = groups
 	policy.UserIDs = users
-	policy.ModelAllowlists.Anthropic = anthropic
-	policy.ModelAllowlists.Kiro = kiro
-	policy.ModelAllowlists.OpenAI = openai
+	policy.ModelsListConfigs.Anthropic = anthropic
+	policy.ModelsListConfigs.Kiro = kiro
+	policy.ModelsListConfigs.OpenAI = openai
 	return policy, nil
 }
 
@@ -196,9 +228,9 @@ func CompileCaptureRuntimePolicy(policy CaptureRuntimePolicy) (CompiledCapturePo
 		groupIDs:        make(map[int64]struct{}, len(normalized.GroupIDs)),
 		userIDs:         make(map[int64]struct{}, len(normalized.UserIDs)),
 	}
-	compiled.modelAllowlists["anthropic"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.Anthropic)
-	compiled.modelAllowlists["kiro"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.Kiro)
-	compiled.modelAllowlists["openai"] = compileCaptureModelAllowlist(normalized.ModelAllowlists.OpenAI)
+	compiled.modelAllowlists["anthropic"] = compileCaptureModelsListConfig(normalized.ModelsListConfigs.Anthropic)
+	compiled.modelAllowlists["kiro"] = compileCaptureModelsListConfig(normalized.ModelsListConfigs.Kiro)
+	compiled.modelAllowlists["openai"] = compileCaptureModelsListConfig(normalized.ModelsListConfigs.OpenAI)
 	for _, id := range normalized.GroupIDs {
 		compiled.groupIDs[id] = struct{}{}
 	}
@@ -208,7 +240,7 @@ func CompileCaptureRuntimePolicy(policy CaptureRuntimePolicy) (CompiledCapturePo
 	return compiled, nil
 }
 
-func compileCaptureModelAllowlist(models []string) map[string]struct{} {
+func compileCaptureModelsListConfig(models []string) map[string]struct{} {
 	if len(models) == 0 {
 		return nil
 	}

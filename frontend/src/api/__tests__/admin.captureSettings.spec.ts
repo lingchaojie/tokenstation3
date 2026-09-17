@@ -28,7 +28,7 @@ const policy: CaptureRuntimePolicy = {
     request_headers: true,
     response_headers: true,
   },
-  model_allowlists: {
+  models_list_configs: {
     anthropic: ['claude-fable-5', 'claude-opus-5'],
     kiro: ['claude-fable-5', 'claude-opus-5'],
     openai: ['gpt-6-astra'],

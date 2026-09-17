@@ -111,11 +111,11 @@ func TestCaptureSettingsPUTRejectsEnableWhenUnready(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "not ready")
 }
 
-func TestCaptureSettingsOpenAIModelAllowlistRoundTrip(t *testing.T) {
+func TestCaptureSettingsOpenAIModelsListConfigRoundTrip(t *testing.T) {
 	h := newCaptureHandlerForTest(nil)
 	for _, body := range []string{
-		`{"version":1,"enabled":false,"model_allowlists":{"openai":[" GPT-6-ASTRA ","gpt-6-astra"]}}`,
-		`{"version":1,"enabled":false,"model_allowlists":{"openai":[]}}`,
+		`{"version":1,"enabled":false,"models_list_configs":{"openai":[" GPT-6-ASTRA ","gpt-6-astra"]}}`,
+		`{"version":1,"enabled":false,"models_list_configs":{"openai":[]}}`,
 	} {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)

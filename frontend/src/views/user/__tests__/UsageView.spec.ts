@@ -3,12 +3,15 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import UsageView from '../UsageView.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
+import DateRangePicker from '@/components/common/DateRangePicker.vue'
 
 const {
   query,
   getStats,
   getDashboardModels,
   getDashboardSnapshotV2,
+  listMyErrorRequests,
   list,
   getAvailable,
   showError,
@@ -20,6 +23,7 @@ const {
   getStats: vi.fn(),
   getDashboardModels: vi.fn(),
   getDashboardSnapshotV2: vi.fn(),
+  listMyErrorRequests: vi.fn(),
   list: vi.fn(),
   getAvailable: vi.fn(),
   showError: vi.fn(),
@@ -115,6 +119,7 @@ vi.mock('@/api', () => ({
     getStats,
     getDashboardModels,
     getDashboardSnapshotV2,
+    listMyErrorRequests,
   },
   keysAPI: {
     list,
@@ -124,8 +129,17 @@ vi.mock('@/api', () => ({
   },
 }))
 
+const appStoreState = vi.hoisted(() => ({
+  cachedPublicSettings: { allow_user_view_error_requests: true } as Record<string, unknown>,
+}))
+
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({ showError, showWarning, showSuccess, showInfo }),
+  useAppStore: () => ({
+    showError, showWarning, showSuccess, showInfo,
+    get cachedPublicSettings() {
+      return appStoreState.cachedPublicSettings
+    },
+  }),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -181,6 +195,7 @@ describe('user UsageView tooltip', () => {
     getStats.mockReset()
     getDashboardModels.mockReset()
     getDashboardSnapshotV2.mockReset()
+    listMyErrorRequests.mockReset()
     list.mockReset()
     getAvailable.mockReset()
     showError.mockReset()
@@ -384,6 +399,58 @@ describe('user UsageView tooltip', () => {
     }
   })
 
+  it('loads API keys from every page for usage and error filters', async () => {
+    query.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockResolvedValue({
+      total_requests: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      total_actual_cost: 0,
+      avg_duration_ms: 0,
+      endpoints: [],
+    })
+    const firstPageKeys = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      name: `key-${index + 1}`,
+    }))
+    const laterKey = { id: 101, name: 'key-from-second-page' }
+    list
+      .mockResolvedValueOnce({ items: firstPageKeys, total: 101, page: 1, page_size: 100, pages: 2 })
+      .mockResolvedValueOnce({ items: [laterKey], total: 101, page: 2, page_size: 100, pages: 2 })
+
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    expect(list.mock.calls).toEqual([[1, 100], [2, 100]])
+    expect((wrapper.vm as any).apiKeyOptions).toContainEqual({ value: laterKey.id, label: laterKey.name })
+    expect((wrapper.vm as any).errorKeyOptions).toContainEqual({ value: laterKey.id, label: laterKey.name })
+  })
+
+  it('stops loading API keys when a later page is empty despite a stale page count', async () => {
+    query.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockResolvedValue({
+      total_requests: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      total_actual_cost: 0,
+      avg_duration_ms: 0,
+      endpoints: [],
+    })
+    const firstPageKeys = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      name: `key-${index + 1}`,
+    }))
+    list
+      .mockResolvedValueOnce({ items: firstPageKeys, total: 201, page: 1, page_size: 100, pages: 3 })
+      .mockResolvedValueOnce({ items: [], total: 201, page: 2, page_size: 100, pages: 3 })
+
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    expect(list.mock.calls).toEqual([[1, 100], [2, 100]])
+    expect((wrapper.vm as any).apiKeyOptions).toHaveLength(101)
+  })
+
   it('exports csv without user-hidden rate or standard cost columns', async () => {
     const exportedLogs = [
       {
@@ -492,6 +559,81 @@ describe('user UsageView tooltip', () => {
     window.URL.revokeObjectURL = originalRevokeObjectURL
     vi.unstubAllGlobals()
     clickSpy.mockRestore()
+  })
+
+  it('keeps the initial filters, sort, and filename while exporting multiple pages', async () => {
+    const usageLog = {
+      request_id: 'req-paged-export',
+      actual_cost: 0.01,
+      total_cost: 0.01,
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 0,
+      duration_ms: 100,
+      created_at: '2026-03-08T00:00:00Z',
+      model: 'gpt-5.4',
+      api_key: { name: 'demo-key' },
+    }
+    const pageResponse = { items: [usageLog], total: 101, pages: 2 }
+    query.mockResolvedValue(pageResponse)
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    const datePicker = wrapper.findComponent(DateRangePicker)
+    datePicker.vm.$emit('change', { startDate: '2026-03-01', endDate: '2026-03-08', preset: null })
+    await flushPromises()
+
+    let resolveFirstPage!: (value: typeof pageResponse) => void
+    const firstPage = new Promise<typeof pageResponse>((resolve) => { resolveFirstPage = resolve })
+    query.mockClear()
+    query.mockImplementation((params, options) =>
+      !options && params.page === 1 ? firstPage : Promise.resolve(pageResponse)
+    )
+    const originalCreateObjectURL = window.URL.createObjectURL
+    const originalRevokeObjectURL = window.URL.revokeObjectURL
+    window.URL.createObjectURL = vi.fn(() => 'blob:usage-export')
+    window.URL.revokeObjectURL = vi.fn()
+    let filename = ''
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+      filename = this.download
+    })
+
+    try {
+      await wrapper.findAll('button').find((button) => button.text() === 'Export CSV')!.trigger('click')
+      const initialParams = { ...query.mock.calls[0][0] }
+      expect(initialParams).toMatchObject({
+        page: 1, page_size: 100, start_date: '2026-03-01', end_date: '2026-03-08',
+        sort_by: 'created_at', sort_order: 'desc',
+      })
+
+      const keySelect = wrapper.findAllComponents(Select).find((select) =>
+        select.props('options').some((option: SelectOption) => option.label === 'All API Keys')
+      )!
+      keySelect.vm.$emit('update:modelValue', 1)
+      keySelect.vm.$emit('change', 1)
+      datePicker.vm.$emit('change', { startDate: '2026-04-01', endDate: '2026-04-08', preset: null })
+      ;(wrapper.vm as any).handleSort('actual_cost', 'asc')
+      await flushPromises()
+      expect(query).toHaveBeenCalledWith(expect.objectContaining({
+        api_key_id: 1, start_date: '2026-04-01', end_date: '2026-04-08',
+        sort_by: 'actual_cost', sort_order: 'asc',
+      }), expect.anything())
+
+      resolveFirstPage(pageResponse)
+      await flushPromises()
+
+      const exportCalls = query.mock.calls.filter((call) => call.length === 1)
+      expect.soft(exportCalls).toEqual([[initialParams], [{ ...initialParams, page: 2 }]])
+      expect.soft(filename).toBe('usage_2026-03-01_to_2026-03-08.csv')
+      expect(showSuccess).toHaveBeenCalledWith('Export success')
+      expect(showError).not.toHaveBeenCalled()
+    } finally {
+      window.URL.createObjectURL = originalCreateObjectURL
+      window.URL.revokeObjectURL = originalRevokeObjectURL
+      clickSpy.mockRestore()
+      wrapper.unmount()
+    }
   })
 
   it('exports historical image rows with image billing mode derived from image_count', async () => {
@@ -721,5 +863,37 @@ describe('user UsageView tooltip', () => {
     expect(text).toContain('Output size')
     expect(text).toContain('3840x2160')
     expect(text).toContain('4K x 2')
+  })
+})
+
+describe('UsageView subscription feature flag', () => {
+  afterEach(() => {
+    appStoreState.cachedPublicSettings = { allow_user_view_error_requests: true }
+  })
+
+  function billingTypeSelect(wrapper: ReturnType<typeof mountUsageView>) {
+    return wrapper.findAllComponents(Select).find((select) =>
+      select.props('options').some((option: SelectOption) => option.label === 'Subscription')
+    )
+  }
+
+  it('offers the balance / subscription billing-type filter by default', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    expect(billingTypeSelect(wrapper)).toBeDefined()
+    expect(wrapper.text()).toContain('Billing Type')
+    wrapper.unmount()
+  })
+
+  it('hides the billing-type filter entirely when subscriptions are disabled', async () => {
+    appStoreState.cachedPublicSettings = { allow_user_view_error_requests: true, subscription_enabled: false }
+
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    expect(billingTypeSelect(wrapper)).toBeUndefined()
+    expect(wrapper.text()).not.toContain('Billing Type')
+    wrapper.unmount()
   })
 })

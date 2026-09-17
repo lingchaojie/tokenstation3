@@ -402,6 +402,7 @@ func (h *SettingHandler) buildSystemSettingsPayload(
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         settings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              settings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        settings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           settings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: settings.GrokCrossClientModelMapEnabled,
@@ -412,6 +413,7 @@ func (h *SettingHandler) buildSystemSettingsPayload(
 		CyberSessionBlockEnabled:    settings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds: settings.CyberSessionBlockTTLSeconds,
 		AffiliateEnabled:            settings.AffiliateEnabled,
+		SubscriptionEnabled:         settings.SubscriptionEnabled,
 
 		ModelPlazaEnabled:     settings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth: settings.ModelPlazaRequireAuth,

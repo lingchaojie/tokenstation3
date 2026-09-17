@@ -13,6 +13,15 @@ func TestDeepSeekOfficialHostRemainsInDeploymentAllowlistExample(t *testing.T) {
 	}
 }
 
+func TestMiniMaxOfficialHostsRemainInDeploymentAllowlistExample(t *testing.T) {
+	configExample := readRepoFile(t, "deploy/config.example.yaml")
+	for _, host := range []string{"api.minimaxi.com", "api.minimax.io"} {
+		if !strings.Contains(configExample, `- "`+host+`"`) {
+			t.Errorf("deploy/config.example.yaml must allow the official MiniMax host %s", host)
+		}
+	}
+}
+
 func TestTask3ExcludedProductFilesAreAbsent(t *testing.T) {
 	root := repoRoot(t)
 	for _, path := range []string{

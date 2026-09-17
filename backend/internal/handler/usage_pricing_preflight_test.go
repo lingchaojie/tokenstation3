@@ -124,7 +124,7 @@ func TestGatewayBufferedCaptureReevaluatesOutcomeAfterPricingFailure(t *testing.
 			policy.Platforms.Anthropic = true
 			policy.Outcomes.Success = tt.success
 			policy.Outcomes.TerminalError = tt.terminal
-			policy.ModelAllowlists.Anthropic = nil
+			policy.ModelsListConfigs.Anthropic = nil
 			require.NoError(t, service.InstallCaptureRuntimePolicyForUnitTest(c, policy, 9, nil))
 			records := make(chan *service.CaptureRecord, 1)
 			h := &GatewayHandler{capturePool: service.NewConversationCapturePoolForUnitTest(records), cfg: &config.Config{Gateway: config.GatewayConfig{Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 1024}}}}

@@ -78,6 +78,7 @@ function mountView() {
 async function fillRequiredFields(wrapper: ReturnType<typeof mountView>) {
   await wrapper.get('#email').setValue('new-user@example.com')
   await wrapper.get('#password').setValue('secret-123')
+  await wrapper.get('#confirmPassword').setValue('secret-123')
 }
 
 describe('RegisterView affiliate activity switch', () => {

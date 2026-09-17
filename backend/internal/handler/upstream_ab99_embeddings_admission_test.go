@@ -70,7 +70,7 @@ func TestUpstreamAB99EmbeddingsPreservesChannelAdmission(t *testing.T) {
 					ModelPricing: []service.ChannelModelPricing{{Platform: service.PlatformOpenAI, Models: []string{tc.pricedModel}, InputPrice: &price}},
 				}},
 				groupPlatforms: map[int64]string{groupID: service.PlatformOpenAI},
-			}, nil, nil, nil)
+			}, nil, nil, nil, nil)
 			accountRepo := &embeddingsAdmissionAccountRepo{openAIWSUsageHandlerAccountRepoStub{account: service.Account{
 				ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
 				Status: service.StatusActive, Schedulable: true, Concurrency: 1,

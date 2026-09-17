@@ -331,7 +331,7 @@ func TestGatewayService_BedrockProviderDeadlineAfterDisconnectAbortsTerminalDisa
 	c.Writer = &bedrockPartialClientWriteErrorWriter{ResponseWriter: c.Writer}
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
-	policy.ModelAllowlists.Anthropic = []string{}
+	policy.ModelsListConfigs.Anthropic = []string{}
 	policy.Outcomes.Success = false
 	policy.Outcomes.TerminalError = false
 	compiled, err := CompileCaptureRuntimePolicy(policy)

@@ -115,6 +115,9 @@ async function submitAuthView(component: typeof LoginView | typeof RegisterView)
   await flushPromises()
   await wrapper.get('#email').setValue('guide@example.com')
   await wrapper.get('#password').setValue('secret-123')
+  if (component === RegisterView) {
+    await wrapper.get('#confirmPassword').setValue('secret-123')
+  }
   await wrapper.get('form').trigger('submit.prevent')
   await flushPromises()
   return wrapper

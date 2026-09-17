@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,8 +113,9 @@ func TestIdentityService_GetOrCreateFingerprint_ReplacesPollutedNonClaudeUAWithC
 	require.NoError(t, err)
 
 	require.Equal(t, "stable-client-id", fp.ClientID)
-	require.Equal(t, "claude-cli/2.1.170 (external, cli)", fp.UserAgent)
-	require.Equal(t, "claude-cli/2.1.170 (external, cli)", cache.fingerprint.UserAgent)
+	wantUA := "claude-cli/" + claude.CLICurrentVersion + " (external, cli)"
+	require.Equal(t, wantUA, fp.UserAgent)
+	require.Equal(t, wantUA, cache.fingerprint.UserAgent)
 }
 
 func TestIdentityService_GetOrCreateFingerprint_CleansPollutedNonClaudeUAOnNextNonClaudeRequest(t *testing.T) {

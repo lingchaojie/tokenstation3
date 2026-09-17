@@ -38,10 +38,10 @@ func TestCaptureDecisionShortCircuitsOpenAIBeforeBufferAllocation(t *testing.T) 
 	require.False(t, exists)
 }
 
-func TestCaptureDecisionUsesRequestedModelAllowlist(t *testing.T) {
+func TestCaptureDecisionUsesRequestedModelsListConfig(t *testing.T) {
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
-	policy.ModelAllowlists = CaptureModelAllowlistPolicy{
+	policy.ModelsListConfigs = CaptureModelsListConfigPolicy{
 		Anthropic: []string{"claude-opus-5", "claude-fable-5"},
 		Kiro:      []string{"claude-opus-5", "claude-fable-5"},
 	}

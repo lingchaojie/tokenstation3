@@ -69,6 +69,7 @@ func newRedeemPlanService(client *dbent.Client) *service.RedeemService {
 		nil,
 		client,
 		nil,
+		nil,
 	)
 }
 

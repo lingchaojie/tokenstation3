@@ -376,7 +376,7 @@ func TestOpenAIChatConversion_RequestCancellationDoesNotInventDetachedProviderCa
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
-	require.NoError(t, upstream.lastReq.Context().Err(), "streaming OpenAI request context is deliberately detached from the canceled handler context")
+	require.NoError(t, upstream.lastContextErr, "streaming OpenAI request context is deliberately detached from the canceled handler context at dispatch")
 	require.False(t, result.ClientDisconnect, "request cancellation alone cannot prove a conversion-path client disconnect")
 	require.False(t, result.CaptureTerminalError)
 	require.True(t, result.CaptureResponseComplete)

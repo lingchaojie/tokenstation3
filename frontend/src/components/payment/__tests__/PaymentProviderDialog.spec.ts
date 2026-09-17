@@ -369,13 +369,14 @@ describe('PaymentProviderDialog payment guide', () => {
     const customTypeInputs = inputs.filter(input => (input.element as HTMLInputElement).placeholder === 'credit_card')
     const ldcTypeInput = customTypeInputs[0]
     const upstreamTypeInput = customTypeInputs[1]
+    const upstreamType = 'alipay'
     const displayNameInput = inputs.find(input => (input.element as HTMLInputElement).placeholder === '信用卡')
     if (!ldcTypeInput || !upstreamTypeInput || !displayNameInput) {
       throw new Error('custom method inputs not found')
     }
 
     await ldcTypeInput.setValue('ldc')
-    await upstreamTypeInput.setValue('epay')
+    await upstreamTypeInput.setValue(upstreamType)
     await displayNameInput.setValue('LDC')
     await wrapper.find('form').trigger('submit.prevent')
 
@@ -383,11 +384,15 @@ describe('PaymentProviderDialog payment guide', () => {
       config: Record<string, string>
       supported_types: string[]
     }
-    expect(payload.config.customMethods).toBe('[{"type":"ldc","upstreamType":"epay","displayName":"LDC"}]')
+    expect(JSON.parse(payload.config.customMethods)).toEqual([{ type: 'ldc', upstreamType, displayName: 'LDC' }])
     expect(payload.supported_types).toEqual(['alipay', 'wxpay', 'ldc'])
   })
 
-  it('rejects custom EasyPay method types with built-in payment prefixes', async () => {
+  it.each([
+    ['alipay_hk', 'hkpay'],
+    ['usdt.trc20', 'usdt.trc20'],
+    ['usdt_trc20', 'usdt/trc20'],
+  ])('rejects invalid EasyPay mapping %s to %s', async (type, upstreamType) => {
     const provider = providerFactory({
       provider_key: 'easypay',
       name: 'EasyPay',
@@ -417,9 +422,9 @@ describe('PaymentProviderDialog payment guide', () => {
       throw new Error('custom method inputs not found')
     }
 
-    await typeInput.setValue('alipay_hk')
-    await upstreamTypeInput.setValue('hkpay')
-    await displayNameInput.setValue('Hong Kong Alipay')
+    await typeInput.setValue(type)
+    await upstreamTypeInput.setValue(upstreamType)
+    await displayNameInput.setValue('Custom payment')
     await wrapper.find('form').trigger('submit.prevent')
     await flushPromises()
 
