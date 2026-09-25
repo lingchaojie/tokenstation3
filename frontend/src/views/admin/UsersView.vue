@@ -1733,6 +1733,13 @@ const handleToggleStatus = async (user: AdminUser) => {
     appStore.showSuccess(
       newStatus === 'active' ? t('admin.users.userEnabled') : t('admin.users.userDisabled')
     )
+    if (filters.status && filters.status !== updated.status) {
+      // Membership and totals are server-filtered. Restart from a valid page
+      // because removing the last matching row may invalidate the current page.
+      pagination.page = 1
+      loadUsers()
+      return
+    }
     if (loading.value) {
       // 与本次更新并发的列表请求可能读到更新前的状态，重新拉取保证一致。
       loadUsers()

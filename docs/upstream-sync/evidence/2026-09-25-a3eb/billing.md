@@ -115,6 +115,57 @@ Coordinates: base `881f3202694c6bc932446931a30c27d9675178b9`, local
 
 ## Expanded repository and account-domain semantic audit inventory
 
+### Independent-review follow-up: OpenCode sibling resolver / persisted-pair CAS
+
+Independent review found a gap in the initial audit: group resolution selected
+the newest account even when a newly created sibling had no managed keys, then
+copied a snapshot from another sibling without checking its auto-refresh value.
+This could disable the displayed inherited setting and construct a raw
+`auto_refresh`/snapshot pair absent from every persisted member. The repository
+correctly rejected writes of that synthetic pair with
+`OPENCODE_GO_USAGE_IDENTITY_CHANGED` (409).
+
+The service resolver now prefers siblings with an explicit boolean setting over
+unconfigured siblings; within equal configuredness it retains the existing
+UpdatedAt/ID ordering. Snapshot freshness is compared only among siblings with
+equal raw auto-refresh values. In particular, absent/null is not explicit false;
+manual-refresh snapshots without a switch still propagate among unconfigured
+siblings. Every resulting managed pair therefore exists on a persisted sibling.
+Repository locking, identity checking and CAS were not relaxed or changed.
+
+Red/green evidence:
+
+- The coordinator's new-sibling regressions failed before repair in both service
+  and real PostgreSQL tests (false inherited instead of true):
+  `/tmp/sub2api-review-opencode-unit-red.log` and
+  `/tmp/sub2api-review-opencode-integration-red.log`.
+- Additional unit table failed for lost explicit false and cross-switch snapshot
+  combinations: `/tmp/sub2api-review-opencode-divergent-red.log`.
+- Additional real PostgreSQL test reproduced 409 CAS failures for true→false,
+  false→true and absent→false pairs before repair:
+  `/tmp/sub2api-review-opencode-divergent-integration-red.log`.
+- `go test -tags=unit ./internal/service ./internal/repository -run
+  'Test.*OpenCode' -count=1 -timeout=10m`: PASS (service0.057s,
+  repository0.022s); `/tmp/sub2api-review-opencode-unit-green.log`.
+- `go test -tags=integration ./internal/repository -run 'Test.*OpenCode'
+  -count=1 -timeout=10m`: PASS (7.095s);
+  `/tmp/sub2api-review-opencode-integration-green.log`. Covers the new sibling,
+  divergent switches, manual-only snapshots, same-switch freshness, actual CAS
+  writes and unchanged rejection of a second write using stale expected state.
+- `go test -tags=integration ./internal/repository -count=1 -timeout=15m`:
+  PASS (37.156s), exact PostgreSQL/Redis normal harness;
+  `/tmp/sub2api-review-opencode-full-repository-integration.log`.
+- The two resolver regression tests also passed 50 repetitions (0.083s),
+  exercising sibling input-order variation from the map-backed test fixture:
+  `/tmp/sub2api-review-opencode-resolver-repeat.log`.
+
+Scope: `service/opencode_go_usage.go`, its unit test, and
+`repository/account_repo_opencode_go_usage_integration_test.go`; no provider
+requests, production environment actions, schema changes or repository-CAS
+changes. Coordinator owns the final full-backend suites and independent recheck.
+
+### Original expanded coverage
+
 All paths below are relative to `backend/internal/`; review includes automatic
 merge changes, not only conflict markers. Production changes were read against
 the local parent; associated changed test bodies were inspected for retained

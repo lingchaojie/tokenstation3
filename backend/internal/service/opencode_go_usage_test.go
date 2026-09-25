@@ -562,6 +562,7 @@ func TestOpenCodeGoUsageGroupSharesStateAcrossSiblings(t *testing.T) {
 
 	newSibling := openCodeGoUsageAccount(74)
 	newSibling.Credentials = map[string]any{"base_url": "https://opencode.ai/zen/go/v1", "api_key": "shared-key"}
+	newSibling.UpdatedAt = sibling.UpdatedAt.Add(time.Minute)
 	repo.mu.Lock()
 	repo.accounts[newSibling.ID] = newSibling
 	repo.mu.Unlock()
@@ -573,6 +574,59 @@ func TestOpenCodeGoUsageGroupSharesStateAcrossSiblings(t *testing.T) {
 	before := repo.groupResolveCalls.Load()
 	require.NoError(t, svc.ResolveOpenCodeGoUsageAccounts(context.Background(), []*Account{source, sibling, different, newSibling}))
 	require.Equal(t, before+1, repo.groupResolveCalls.Load(), "one list batch must issue one group lookup")
+}
+
+func TestOpenCodeGoUsageResolverPreservesPersistedManagedPair(t *testing.T) {
+	now := time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
+	oldSnapshot := &OpenCodeGoUsageSnapshot{Status: OpenCodeGoUsageStatusOK, LastAttemptAt: now.Add(-time.Hour)}
+	newSnapshot := &OpenCodeGoUsageSnapshot{Status: OpenCodeGoUsageStatusOK, LastAttemptAt: now}
+	for _, tc := range []struct {
+		name                         string
+		olderAuto, newerAuto         any
+		olderSnapshot, newerSnapshot *OpenCodeGoUsageSnapshot
+		wantAuto                     any
+		wantSnapshot                 *OpenCodeGoUsageSnapshot
+	}{
+		{"empty sibling inherits explicit disabled", false, nil, oldSnapshot, nil, false, oldSnapshot},
+		{"manual snapshot without switch remains visible", nil, nil, oldSnapshot, nil, nil, oldSnapshot},
+		{"disabled must not inherit enabled snapshot", true, false, newSnapshot, nil, false, nil},
+		{"enabled must not inherit disabled snapshot", false, true, newSnapshot, oldSnapshot, true, oldSnapshot},
+		{"absent and false are distinct persisted switches", nil, false, newSnapshot, nil, false, nil},
+		{"same switch keeps newest observation", false, false, newSnapshot, oldSnapshot, false, newSnapshot},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			older, newer := openCodeGoUsageAccount(101), openCodeGoUsageAccount(102)
+			newer.Credentials["api_key"] = older.Credentials["api_key"]
+			older.UpdatedAt, newer.UpdatedAt = now.Add(-time.Minute), now
+			for _, entry := range []struct {
+				account  *Account
+				auto     any
+				snapshot *OpenCodeGoUsageSnapshot
+			}{{older, tc.olderAuto, tc.olderSnapshot}, {newer, tc.newerAuto, tc.newerSnapshot}} {
+				if entry.auto != nil {
+					entry.account.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = entry.auto
+				}
+				if entry.snapshot != nil {
+					entry.account.Extra[OpenCodeGoUsageSnapshotExtraKey] = entry.snapshot
+				}
+			}
+			repo := &openCodeGoUsageTestRepo{accounts: map[int64]*Account{older.ID: older, newer.ID: newer}}
+			svc := newOpenCodeGoUsageTestService(t, repo, nil, nil)
+			for _, id := range []int64{older.ID, newer.ID} {
+				loaded, err := repo.GetByID(context.Background(), id)
+				require.NoError(t, err)
+				require.NoError(t, svc.ResolveOpenCodeGoUsageAccounts(context.Background(), []*Account{loaded}))
+				require.Equal(t, tc.wantAuto, loaded.Extra[OpenCodeGoUsageAutoRefreshExtraKey])
+				require.Equal(t, tc.wantSnapshot, decodeOpenCodeGoUsageSnapshot(loaded.Extra))
+				matchesPersisted := false
+				for _, persisted := range []*Account{older, newer} {
+					matchesPersisted = matchesPersisted || (reflect.DeepEqual(loaded.Extra[OpenCodeGoUsageAutoRefreshExtraKey], persisted.Extra[OpenCodeGoUsageAutoRefreshExtraKey]) &&
+						reflect.DeepEqual(decodeOpenCodeGoUsageSnapshot(loaded.Extra), decodeOpenCodeGoUsageSnapshot(persisted.Extra)))
+				}
+				require.True(t, matchesPersisted, "resolved switch and snapshot must coexist in one persisted sibling")
+			}
+		})
+	}
 }
 
 func TestOpenCodeGoUsageSetAutoRefreshAndSnapshotAreGroupScoped(t *testing.T) {

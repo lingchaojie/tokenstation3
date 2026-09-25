@@ -82,3 +82,23 @@ existing tag resolves to that same source commit.
 
 Parent coordinator retains responsibility for final cross-domain verification,
 independent review, merge commit and publication.
+
+## Independent review correction
+
+Reviewer `review_frontend_release` covered the complete 216-path non-backend
+union at candidate `1da1df694` and found a filtered-list regression in UsersView:
+the new in-place status toggle retained rows that no longer matched the server
+status filter and left pagination totals stale. Three added regressions failed
+before the fix (active-to-disabled, disabled-to-active, last-page removal).
+Filtered membership changes now reload from page 1; unfiltered updates retain
+the in-place optimization and list-only fields. The existing concurrent-fetch
+and failed-toggle tests remain passing. Also removed the Seedance guide's
+unsupported Composite-group configuration claim.
+
+- Red: `/tmp/sub2api-review-users-red.log` (3 failures, 9 passes).
+- Green focused: `/tmp/sub2api-review-users-green.log` (12 passes).
+- Full rerun: `/tmp/sub2api-review-frontend-full.log`, 407 files / 3165 tests pass.
+- Final lint and build/typecheck: `/tmp/sub2api-review-frontend-lint.log` and
+  `/tmp/sub2api-review-frontend-build.log`, both exit 0.
+- This fixes the first review findings but is not self-approval; a new
+  independent reviewer must cover the complete corrected non-backend scope.

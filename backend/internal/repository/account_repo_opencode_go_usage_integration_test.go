@@ -11,6 +11,107 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOpenCodeGoUsageNewSiblingInheritsStateAndAllowsCASWrites(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	repo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
+	snapshot := &service.OpenCodeGoUsageSnapshot{
+		Status:        service.OpenCodeGoUsageStatusOK,
+		LastAttemptAt: time.Now().UTC().Add(-time.Hour),
+	}
+	source := mustCreateAccount(t, tx.Client(), &service.Account{
+		Name: "opencode-managed-source", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "new-sibling-shared-key", "base_url": "https://opencode.ai/zen/go/v1"},
+		Extra:       map[string]any{service.OpenCodeGoUsageAutoRefreshExtraKey: true, service.OpenCodeGoUsageSnapshotExtraKey: snapshot},
+	})
+	_, err := tx.ExecContext(ctx, `UPDATE accounts SET updated_at = NOW() - INTERVAL '1 hour' WHERE id = $1`, source.ID)
+	require.NoError(t, err)
+	sibling := mustCreateAccount(t, tx.Client(), &service.Account{
+		Name: "opencode-new-sibling", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "new-sibling-shared-key", "base_url": "https://opencode.ai/zen/go/v1"},
+	})
+	svc := service.NewOpenCodeGoUsageService(repo, nil, nil)
+	t.Cleanup(svc.Stop)
+	state, err := svc.GetState(ctx, sibling.ID)
+	require.NoError(t, err)
+	require.True(t, state.AutoRefreshEnabled)
+	require.NotNil(t, state.Snapshot)
+
+	// Both the inherited auto/snapshot pair and writes anchored on the new row
+	// must match a persisted group member, not a synthetic impossible CAS pair.
+	loaded, err := repo.GetByID(ctx, sibling.ID)
+	require.NoError(t, err)
+	require.NoError(t, svc.ResolveOpenCodeGoUsageAccounts(ctx, []*service.Account{loaded}))
+	require.NoError(t, repo.UpdateOpenCodeGoUsageSnapshot(ctx, loaded, &service.OpenCodeGoUsageSnapshot{
+		Status: service.OpenCodeGoUsageStatusOK, LastAttemptAt: time.Now().UTC(),
+	}))
+	state, err = svc.SetAutoRefresh(ctx, sibling.ID, false)
+	require.NoError(t, err)
+	require.False(t, state.AutoRefreshEnabled)
+	state, err = svc.GetState(ctx, source.ID)
+	require.NoError(t, err)
+	require.False(t, state.AutoRefreshEnabled)
+}
+
+func TestOpenCodeGoUsageDivergentSiblingStateAllowsCASWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		olderAuto, newerAuto any
+		wantSnapshot         bool
+	}{
+		{"enabled snapshot does not cross disabled switch", true, false, false},
+		{"disabled snapshot does not cross enabled switch", false, true, false},
+		{"manual snapshot does not cross explicit false", nil, false, false},
+		{"manual snapshot survives empty sibling", nil, nil, true},
+		{"same switch inherits latest snapshot", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			tx := testEntTx(t)
+			repo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
+			attempt := time.Now().UTC().Add(-time.Hour)
+			create := func(name string, auto any, snapshot bool) *service.Account {
+				extra := map[string]any{}
+				if auto != nil {
+					extra[service.OpenCodeGoUsageAutoRefreshExtraKey] = auto
+				}
+				if snapshot {
+					extra[service.OpenCodeGoUsageSnapshotExtraKey] = &service.OpenCodeGoUsageSnapshot{
+						Status: service.OpenCodeGoUsageStatusOK, LastAttemptAt: attempt,
+					}
+				}
+				return mustCreateAccount(t, tx.Client(), &service.Account{
+					Name: name, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+					Credentials: map[string]any{"api_key": "divergent-sibling-key", "base_url": "https://opencode.ai/zen/go/v1"}, Extra: extra,
+				})
+			}
+			older := create("older-state", tc.olderAuto, true)
+			newer := create("newer-state", tc.newerAuto, false)
+			_, err := tx.ExecContext(ctx, `UPDATE accounts SET updated_at = NOW() - INTERVAL '1 hour' WHERE id = $1`, older.ID)
+			require.NoError(t, err)
+			svc := service.NewOpenCodeGoUsageService(repo, nil, nil)
+			t.Cleanup(svc.Stop)
+			loaded, err := repo.GetByID(ctx, newer.ID)
+			require.NoError(t, err)
+			require.NoError(t, svc.ResolveOpenCodeGoUsageAccounts(ctx, []*service.Account{loaded}))
+			require.Equal(t, tc.newerAuto, loaded.Extra[service.OpenCodeGoUsageAutoRefreshExtraKey])
+			state := service.OpenCodeGoUsageStateFromAccount(loaded)
+			fresh := &service.OpenCodeGoUsageSnapshot{Status: service.OpenCodeGoUsageStatusOK, LastAttemptAt: attempt.Add(time.Hour)}
+			require.NoError(t, repo.UpdateOpenCodeGoUsageSnapshot(ctx, loaded, fresh), "resolved pair must match a locked persisted sibling")
+			require.Equal(t, tc.wantSnapshot, state.Snapshot != nil)
+			// Successful writes do not weaken CAS: the prior resolved snapshot is
+			// stale now and must be rejected on a second write.
+			require.ErrorIs(t, repo.UpdateOpenCodeGoUsageSnapshot(ctx, loaded, fresh), service.ErrOpenCodeGoUsageIdentityChanged)
+			state, err = svc.SetAutoRefresh(ctx, newer.ID, true)
+			require.NoError(t, err)
+			require.True(t, state.AutoRefreshEnabled)
+			state, err = svc.GetState(ctx, older.ID)
+			require.NoError(t, err)
+			require.True(t, state.AutoRefreshEnabled)
+		})
+	}
+}
+
 // openCodeGoManagedExtra 构造同时携带探测 / Ollama / OpenCode 受管键的 extra，
 // 用于验证各身份清理分支只清自己该清的键、不跨身份误清。
 func openCodeGoManagedExtra(now time.Time) map[string]any {

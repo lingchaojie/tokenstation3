@@ -13,6 +13,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -501,8 +502,17 @@ func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Cont
 			continue
 		}
 		current := sources[fingerprint]
-		if current == nil || candidate.UpdatedAt.After(current.UpdatedAt) ||
-			(candidate.UpdatedAt.Equal(current.UpdatedAt) && candidate.ID < current.ID) {
+		if current == nil {
+			sources[fingerprint] = candidate
+			continue
+		}
+		// Newly created siblings have no managed keys. Their unrelated UpdatedAt
+		// must not override an existing group setting, including explicit false.
+		_, candidateConfigured := candidate.Extra[OpenCodeGoUsageAutoRefreshExtraKey].(bool)
+		_, currentConfigured := current.Extra[OpenCodeGoUsageAutoRefreshExtraKey].(bool)
+		if (candidateConfigured && !currentConfigured) ||
+			(candidateConfigured == currentConfigured && (candidate.UpdatedAt.After(current.UpdatedAt) ||
+				(candidate.UpdatedAt.Equal(current.UpdatedAt) && candidate.ID < current.ID))) {
 			sources[fingerprint] = candidate
 		}
 	}
@@ -518,6 +528,13 @@ func (s *OpenCodeGoUsageService) ResolveOpenCodeGoUsageAccounts(ctx context.Cont
 		fingerprint, valid := openCodeGoUsageGroupFingerprint(candidate)
 		source := resolvedSources[fingerprint]
 		if !valid || source == nil {
+			continue
+		}
+		// The repository CAS requires the raw switch/snapshot pair to coexist on
+		// a persisted sibling. Never combine a snapshot from a different switch
+		// state; absent/null is distinct from explicit false. Matching absent
+		// switches still share manual-refresh snapshots without enabling polling.
+		if !reflect.DeepEqual(candidate.Extra[OpenCodeGoUsageAutoRefreshExtraKey], source.Extra[OpenCodeGoUsageAutoRefreshExtraKey]) {
 			continue
 		}
 		candidateSnapshot := decodeOpenCodeGoUsageSnapshot(candidate.Extra)

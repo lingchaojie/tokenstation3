@@ -135,3 +135,26 @@ not the independent pre-push review or a completion claim.
   release-helper results are recorded in the adjacent domain evidence files.
 - Full independent review, remote drift checks, push and exact-SHA CI remain
   publication gates; local test results are not a push authorization by themselves.
+
+## Verification after first independent review fixes
+
+- UsersView filtered-membership and OpenCode managed-state fixes are documented
+  in frontend.md and billing.md with failing-before/passing-after regressions.
+- Final normal/unit suites both exit 0: `/tmp/sub2api-review-normal-final.log`
+  and `/tmp/sub2api-review-unit-final.log`.
+- Final integration partitions both exit 0:
+  `/tmp/sub2api-review-integration-isolated-final.log` and
+  `/tmp/sub2api-review-integration-host-final.log`; host repository 25.850s,
+  service 168.574s. PostgreSQL 18.1 and Redis 8.4 retained.
+- Build and lint after production fixes both exit 0:
+  `/tmp/sub2api-review-build-final.log`, `/tmp/sub2api-review-lint-final.log`.
+  Wiring/schema/generator inputs did not change after the generation check.
+- OpenCode race suite exits 0 (1.075s):
+  `/tmp/sub2api-review-opencode-race.log`; frontend full suite now 3165 tests.
+- User explicitly approved keeping Seedance's independent-video token-profit
+  exemption. Balance/quota/pricing validation remains enabled; no production
+  gate code was changed to resolve that policy question.
+- Gateway reviewer reran profit-context, Seedance lifecycle/token billing,
+  forwarded-effort pricing, Lite capture, referral, scheduling and SimpleMode
+  regressions plus full apicompat/antigravity unit suites successfully. Final
+  reviewer approval must still be tied to the corrected candidate coordinate.
