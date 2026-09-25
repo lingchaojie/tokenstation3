@@ -101,7 +101,7 @@ describe('user RedeemView plan subscription display', () => {
     showWarning.mockReset()
 
     getPublicSettings.mockResolvedValue({ contact_info: '' })
-    getHistory.mockResolvedValue([])
+    getHistory.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     refreshUser.mockResolvedValue(undefined)
     fetchActiveSubscriptions.mockResolvedValue(undefined)
   })
@@ -136,7 +136,7 @@ describe('user RedeemView plan subscription display', () => {
   })
 
   it('shows plan names, fallbacks, and effective durations in redeem history without changing group-mode display', async () => {
-    getHistory.mockResolvedValue([
+    getHistory.mockResolvedValue({ items: [
       {
         id: 1,
         code: 'PLAN-CODE',
@@ -180,7 +180,7 @@ describe('user RedeemView plan subscription display', () => {
         used_at: '2026-01-03T00:00:00Z',
         created_at: '2026-01-03T00:00:00Z',
       },
-    ])
+    ], total: 3, page: 1, page_size: 20, pages: 1 })
 
     const wrapper = mountView()
     await flushPromises()

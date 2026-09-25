@@ -31,6 +31,35 @@ func TestUpsertForUser_NewUserInsertsAllRecords(t *testing.T) {
 	require.Len(t, got, 2)
 }
 
+func TestUpsertForUser_AllNilLimitsPreservesRowAndUsageAccumulation(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	userID := mustCreateUserForQuota(t, client)
+	repo := NewUserPlatformQuotaRepository(client)
+
+	daily := 10.0
+	require.NoError(t, repo.UpsertForUser(ctx, userID, []UserPlatformQuotaRecord{{
+		UserID: userID, Platform: "openai", DailyLimitUSD: &daily,
+	}}))
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.IncrementUsageWithReset(ctx, userID, "openai", 1.25, now))
+
+	require.NoError(t, repo.UpsertForUser(ctx, userID, []UserPlatformQuotaRecord{{
+		UserID: userID, Platform: "openai",
+	}}))
+	require.NoError(t, repo.IncrementUsageWithReset(ctx, userID, "openai", 0.75, now))
+
+	got, err := repo.GetByUserPlatform(ctx, userID, "openai")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Nil(t, got.DailyLimitUSD)
+	require.Nil(t, got.WeeklyLimitUSD)
+	require.Nil(t, got.MonthlyLimitUSD)
+	require.InDelta(t, 2.0, got.DailyUsageUSD, 1e-9)
+	require.InDelta(t, 2.0, got.WeeklyUsageUSD, 1e-9)
+	require.InDelta(t, 2.0, got.MonthlyUsageUSD, 1e-9)
+}
+
 func TestUpsertForUser_PartialUpdateSoftDeletesMissingPlatforms(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)

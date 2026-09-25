@@ -7,9 +7,11 @@ import {
   apiTimePricingToForm,
   createDefaultTimePricingForm,
   formIntervalsToAPI,
+  formReasoningEffortMultipliersToAPI,
   formTimePricingToAPI,
   isValidPositiveMultiplier,
   validateIntervals,
+  validateReasoningEffortMultipliers,
   validateTimePricing,
   type IntervalFormEntry,
   type TimePricingFormEntry,
@@ -22,13 +24,13 @@ describe('channel pricing form conversion', () => {
       platform: 'anthropic', models: ['claude-fable-5-1'], billing_mode: 'token',
       input_price: null, output_price: null, cache_write_price: 3e-6,
       cache_write_1h_price: 0, cache_read_price: null,
-      max_reasoning_effort_multiplier: 3,
+      reasoning_effort_multipliers: { max: 3 },
       image_input_price: null, image_output_price: null, per_request_price: null,
       intervals: [], time_pricing: null,
     })
     expect(form.cache_write_price).toBe(3)
     expect(form.cache_write_1h_price).toBe(0)
-    expect(form.max_reasoning_effort_multiplier).toBe(3)
+    expect(form.reasoning_effort_multipliers?.max).toBe(3)
   })
 
   it('preserves fast/flex multipliers and both image token prices', () => {
@@ -62,6 +64,32 @@ describe('channel pricing form conversion', () => {
     const conversions = source.match(/image_input_price:\s*perTokenToMTok\(p\.image_input_price\)/g) ?? []
 
     expect(conversions).toHaveLength(1)
+  })
+})
+
+describe('reasoning effort multipliers', () => {
+  it('serializes independent overrides without altering their values', () => {
+    expect(formReasoningEffortMultipliersToAPI({ none: '0.5', high: 1, max: '3', low: '' }))
+      .toEqual({ none: 0.5, high: 1, max: 3 })
+  })
+
+  it.each([null, undefined, {}, { max: '' }])('clears empty overrides with null: %j', value => {
+    expect(formReasoningEffortMultipliersToAPI(value)).toBeNull()
+    expect(validateReasoningEffortMultipliers(value, t)).toBeNull()
+  })
+
+  it('accepts supported levels with positive finite multipliers, including discounts', () => {
+    expect(validateReasoningEffortMultipliers({
+      none: 0.01, minimal: 0.5, low: 1, medium: '1.2', high: 2, xhigh: 2.5, max: 3,
+    }, t)).toBeNull()
+  })
+
+  it.each([0, -1, Infinity, NaN, 'invalid', 'Infinity'])('rejects invalid multiplier %s', multiplier => {
+    expect(validateReasoningEffortMultipliers({ high: multiplier }, t)).toContain('reasoningEffortMultiplierPositive')
+  })
+
+  it('rejects unsupported effort keys', () => {
+    expect(validateReasoningEffortMultipliers({ unknown: 2 }, t)).toContain('reasoningEffortLevelInvalid')
   })
 })
 

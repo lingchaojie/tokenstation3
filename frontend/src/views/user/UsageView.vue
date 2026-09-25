@@ -200,7 +200,7 @@
                 <label class="input-label">{{ t('usage.compactionFilter') }}</label>
                 <Select v-model="filters.native_compaction_v2" :options="compactionOptions" @change="applyFilters" />
               </div>
-              <div class="min-w-[180px]">
+              <div v-if="subscriptionFeatureEnabled" class="min-w-[180px]">
                 <label class="input-label">{{ t('admin.usage.billingType') }}</label>
                 <Select v-model="filters.billing_type" :options="billingTypeOptions" @change="applyFilters" />
               </div>
@@ -736,6 +736,7 @@
 import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import { keysAPI, usageAPI, userGroupsAPI } from '@/api'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -966,6 +967,9 @@ const compactionOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('usage.allCompactionTypes') },
   { value: true, label: t('usage.compactionOnly') },
 ])
+const subscriptionFeatureEnabled = computed(() =>
+  resolveFeatureFlag(appStore.cachedPublicSettings, FeatureFlags.subscription)
+)
 const billingTypeOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('admin.usage.allBillingTypes') },
   { value: 0, label: t('admin.usage.billingTypeBalance') },
@@ -1161,8 +1165,14 @@ const loadUsageLogs = async () => {
 
 const loadApiKeys = async () => {
   try {
-    const response = await keysAPI.list(1, 100)
-    apiKeys.value = response.items
+    const firstPage = await keysAPI.list(1, 100)
+    const keys = [...firstPage.items]
+    for (let page = 2; page <= (firstPage.pages ?? 1) && keys.length > 0; page++) {
+      const response = await keysAPI.list(page, 100)
+      if (response.items.length === 0) break
+      keys.push(...response.items)
+    }
+    apiKeys.value = keys
   } catch (error) {
     console.error('Failed to load API keys:', error)
   }
@@ -1334,17 +1344,9 @@ const escapeCSVValue = (value: unknown): string => {
 
   const str = String(value)
   const escaped = str.replace(/"/g, '""')
-
-  // Prevent formula injection by prefixing dangerous characters with single quote
-  if (/^[=+\-@\t\r]/.test(str)) {
-    return `"\'${escaped}"`
-  }
-
-  // Escape values containing comma, quote, or newline
-  if (/[,"\n\r]/.test(str)) {
-    return `"${escaped}"`
-  }
-
+  if (str === '-') return str
+  if (/^[=+\-@\t\r]/.test(str)) return `"\'${escaped}"`
+  if (/[,"\n\r]/.test(str)) return `"${escaped}"`
   return str
 }
 
@@ -1360,10 +1362,11 @@ const exportToCSV = async () => {
   try {
     const allLogs: UsageLog[] = []
     const pageSize = 100 // Use a larger page size for export to reduce requests
+    const exportParams = buildUsageQueryParams(1, pageSize)
     const totalRequests = Math.ceil(pagination.total / pageSize)
 
     for (let page = 1; page <= totalRequests; page++) {
-      const response = await usageAPI.query(buildUsageQueryParams(page, pageSize))
+      const response = await usageAPI.query({ ...exportParams, page })
       allLogs.push(...response.items)
     }
 
@@ -1416,7 +1419,7 @@ const exportToCSV = async () => {
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `usage_${filters.value.start_date}_to_${filters.value.end_date}.csv`
+    link.download = `usage_${exportParams.start_date}_to_${exportParams.end_date}.csv`
     link.click()
     window.URL.revokeObjectURL(url)
 

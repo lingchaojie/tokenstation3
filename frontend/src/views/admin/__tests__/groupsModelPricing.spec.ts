@@ -22,7 +22,7 @@ const apiPricing: ChannelModelPricing = {
   cache_read_price: 2e-7,
   fast_multiplier: 1.5,
   flex_multiplier: 0.75,
-  max_reasoning_effort_multiplier: null,
+  reasoning_effort_multipliers: null,
   image_input_price: 4e-6,
   image_output_price: 10e-6,
   per_request_price: null,
@@ -38,10 +38,10 @@ const groupsViewSource = readFileSync(
 
 describe("group model pricing round-trip", () => {
   it.each([0, 5e-6])("preserves independent 1h price %s and max effort multiplier on save", (price) => {
-    const pricing = { ...apiPricing, cache_write_1h_price: price, max_reasoning_effort_multiplier: 3 };
+    const pricing = { ...apiPricing, cache_write_1h_price: price, reasoning_effort_multipliers: { high: 1.5, max: 3 } };
     const form = groupPricingFromAPI([pricing]);
     expect(form[0].cache_write_1h_price).toBe(price === 0 ? 0 : 5);
-    expect(form[0].max_reasoning_effort_multiplier).toBe(3);
+    expect(form[0].reasoning_effort_multipliers).toEqual({ high: 1.5, max: 3 });
     expect(groupPricingToAPI(form, "openai")).toEqual([pricing]);
   });
 

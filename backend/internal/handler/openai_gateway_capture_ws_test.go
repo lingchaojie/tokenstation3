@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOpenAIResponsesWebSocket_CaptureModelAllowlistPerTurn(t *testing.T) {
+func TestOpenAIResponsesWebSocket_CaptureModelsListConfigPerTurn(t *testing.T) {
 	for _, mode := range []string{service.OpenAIWSIngressModePassthrough, service.OpenAIWSIngressModeCtxPool} {
 		for _, tc := range []struct {
 			name, first, second string
@@ -56,7 +56,7 @@ func newAstraOnlyOpenAIWSCaptureForTest(t *testing.T, cfg *config.Config) (*serv
 	policy := service.DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
 	policy.Platforms.OpenAI = true
-	policy.ModelAllowlists.OpenAI = []string{"gpt-6-astra"}
+	policy.ModelsListConfigs.OpenAI = []string{"gpt-6-astra"}
 	_, err := settings.UpdateCaptureRuntimePolicy(context.Background(), policy)
 	require.NoError(t, err)
 	records := make(chan *service.CaptureRecord, 2)

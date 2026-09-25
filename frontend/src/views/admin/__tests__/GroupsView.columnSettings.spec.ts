@@ -7,7 +7,7 @@ import GroupsView from '../GroupsView.vue'
 const {
   listGroups,
   getAllGroups,
-  getModelsListCandidates,
+  getModelsListConfigCandidates,
   getUsageSummary,
   getCapacitySummary,
   getSettings,
@@ -16,10 +16,11 @@ const {
   showSuccess,
   isCurrentStep,
   nextStep,
+  authState,
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   getAllGroups: vi.fn(),
-  getModelsListCandidates: vi.fn(),
+  getModelsListConfigCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getSettings: vi.fn(),
@@ -28,6 +29,7 @@ const {
   showSuccess: vi.fn(),
   isCurrentStep: vi.fn(),
   nextStep: vi.fn(),
+  authState: { isSimpleMode: false },
 }))
 
 const messages: Record<string, string> = {
@@ -53,7 +55,7 @@ vi.mock('@/api/admin', () => ({
     groups: {
       list: listGroups,
       getAll: getAllGroups,
-      getModelsListCandidates,
+      getModelsListConfigCandidates,
       getUsageSummary,
       getCapacitySummary,
       create: vi.fn(),
@@ -75,6 +77,10 @@ vi.mock('@/stores/app', () => ({
     showError,
     showSuccess,
   }),
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authState,
 }))
 
 vi.mock('@/stores/onboarding', () => ({
@@ -235,7 +241,7 @@ describe('admin GroupsView column settings', () => {
 
     listGroups.mockReset()
     getAllGroups.mockReset()
-    getModelsListCandidates.mockReset()
+    getModelsListConfigCandidates.mockReset()
     getUsageSummary.mockReset()
     getCapacitySummary.mockReset()
     getSettings.mockReset()
@@ -253,7 +259,7 @@ describe('admin GroupsView column settings', () => {
       pages: 1,
     })
     getAllGroups.mockResolvedValue([])
-    getModelsListCandidates.mockResolvedValue([])
+    getModelsListConfigCandidates.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     getSettings.mockResolvedValue({

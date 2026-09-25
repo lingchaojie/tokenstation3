@@ -88,10 +88,10 @@ export async function getById(id: number): Promise<AdminGroup> {
 }
 
 /**
- * Get candidate models for custom /v1/models list.
+ * Get candidate models for the group's displayed model list.
  * id=0 returns platform default models for create flow.
  */
-export async function getModelsListCandidates(
+export async function getModelsListConfigCandidates(
   id: number,
   platform?: GroupPlatform
 ): Promise<string[]> {
@@ -412,7 +412,7 @@ export const groupsAPI = {
   getByPlatform,
   getAllIncludingInactive,
   getById,
-  getModelsListCandidates,
+  getModelsListConfigCandidates,
   create,
   duplicate,
   update,

@@ -606,11 +606,12 @@ func generateChatCmplID() string {
 // ---------------------------------------------------------------------------
 
 type bufferedFuncCall struct {
-	Type     string
-	CallID   string
-	Name     string
-	Args     strings.Builder
-	HadDelta bool
+	OutputIndex int
+	Type        string
+	CallID      string
+	Name        string
+	Args        strings.Builder
+	HadDelta    bool
 }
 
 type responsesTextStreamKey struct {
@@ -718,9 +719,10 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 			idx := len(a.funcCalls)
 			a.outputIndexToFuncIdx[event.OutputIndex] = idx
 			a.funcCalls = append(a.funcCalls, bufferedFuncCall{
-				Type:   event.Item.Type,
-				CallID: event.Item.CallID,
-				Name:   event.Item.Name,
+				OutputIndex: event.OutputIndex,
+				Type:        event.Item.Type,
+				CallID:      event.Item.CallID,
+				Name:        event.Item.Name,
 			})
 		}
 	case "response.output_item.done":
@@ -787,7 +789,7 @@ func (a *BufferedResponseAccumulator) processOutputItemDone(event *ResponsesStre
 			}
 			idx = len(a.funcCalls)
 			a.outputIndexToFuncIdx[event.OutputIndex] = idx
-			a.funcCalls = append(a.funcCalls, bufferedFuncCall{Type: event.Item.Type, CallID: event.Item.CallID, Name: event.Item.Name})
+			a.funcCalls = append(a.funcCalls, bufferedFuncCall{OutputIndex: event.OutputIndex, Type: event.Item.Type, CallID: event.Item.CallID, Name: event.Item.Name})
 		}
 		if a.funcCalls[idx].HadDelta {
 			return
@@ -941,15 +943,33 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 	return out
 }
 
-// SupplementResponseOutput fills resp.Output from accumulated delta content
-// when the terminal event delivered an empty output array. If resp.Output is
-// already populated, this is a no-op (preserves backward compatibility).
+// SupplementResponseOutput fills an empty terminal output from accumulated
+// content and repairs function calls whose terminal item omitted arguments.
 func (a *BufferedResponseAccumulator) SupplementResponseOutput(resp *ResponsesResponse) {
-	if resp == nil || len(resp.Output) > 0 || a.Err() != nil {
+	if resp == nil || a.Err() != nil {
 		return
 	}
-	if !a.HasContent() {
+	if len(resp.Output) == 0 {
+		if a.HasContent() {
+			resp.Output = a.BuildOutput()
+		}
 		return
 	}
-	resp.Output = a.BuildOutput()
+	for outputIndex := range resp.Output {
+		item := &resp.Output[outputIndex]
+		if item.Type != "function_call" || item.Arguments != "" {
+			continue
+		}
+		for funcIndex := range a.funcCalls {
+			call := &a.funcCalls[funcIndex]
+			matchesCallID := item.CallID != "" && item.CallID == call.CallID
+			if !matchesCallID && call.OutputIndex != outputIndex {
+				continue
+			}
+			if call.Args.Len() > 0 {
+				item.Arguments = call.Args.String()
+			}
+			break
+		}
+	}
 }

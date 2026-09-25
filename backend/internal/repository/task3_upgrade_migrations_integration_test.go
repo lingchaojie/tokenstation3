@@ -27,6 +27,10 @@ var task3ApprovedUpgradeMigrations = []string{
 	"239_group_free_openai_fast.sql",
 	"240_channel_max_reasoning_effort_multiplier.sql",
 	"241_group_codex_models_manifest_config.sql",
+	"242_add_minimax_platform.sql",
+	"243_opencode_go_platform.sql",
+	"244_content_moderation_engine_meta.sql",
+	"245_channel_reasoning_effort_multipliers.sql",
 }
 
 func TestTask3MigrationsUpgradePersisted230Fixture(t *testing.T) {

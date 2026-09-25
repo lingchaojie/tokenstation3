@@ -6,6 +6,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -142,6 +143,23 @@ type AdminService interface {
 	BatchDeleteRedeemCodes(ctx context.Context, ids []int64) (int64, error)
 	ExpireRedeemCode(ctx context.Context, id int64) (*RedeemCode, error)
 	ResetAccountQuota(ctx context.Context, id int64) error
+}
+
+type AdminGroupOperation string
+
+const (
+	AdminGroupOperationBasic       AdminGroupOperation = "basic"
+	AdminGroupOperationDuplicate   AdminGroupOperation = "duplicate"
+	AdminGroupOperationMultiplier  AdminGroupOperation = "multiplier"
+	AdminGroupOperationRPMOverride AdminGroupOperation = "rpm_override"
+	AdminGroupOperationSort        AdminGroupOperation = "sort"
+)
+
+func ValidateSimpleModeGroupOperation(cfg *config.Config, operation AdminGroupOperation) error {
+	if cfg != nil && cfg.RunMode == config.RunModeSimple && operation != AdminGroupOperationBasic {
+		return infraerrors.New(http.StatusForbidden, "SIMPLE_MODE_OPERATION_UNSUPPORTED", "This operation is not supported in simple mode")
+	}
+	return nil
 }
 
 // CreateUserInput represents input for creating a new user via admin operations.
@@ -519,18 +537,22 @@ type CreateProxyInput struct {
 	ExpiryWarnDays int
 }
 
+// UpdateProxyInput preserves omitted expiry/backup values; Clear flags explicitly
+// remove them. A nil ExpiryWarnDays preserves the current warning period.
 type UpdateProxyInput struct {
 	Name           string
 	Protocol       string
 	Host           string
 	Port           int
-	Username       string
-	Password       string
+	Username       *string
+	Password       *string
 	Status         string
 	ExpiresAt      *time.Time
+	ClearExpiresAt bool
 	FallbackMode   string
 	BackupProxyID  *int64
-	ExpiryWarnDays int
+	ClearBackupID  bool
+	ExpiryWarnDays *int
 }
 
 type GenerateRedeemCodesInput struct {
@@ -665,28 +687,31 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
-	userRepo                UserRepository
-	groupRepo               GroupRepository
-	groupDuplicateRepo      GroupDuplicateRepository
-	accountRepo             AccountRepository
-	accountDuplicateRepo    AccountDuplicateRepository
-	proxyRepo               ProxyRepository
-	apiKeyRepo              APIKeyRepository
-	redeemCodeRepo          RedeemCodeRepository
-	userGroupRateRepo       UserGroupRateRepository
-	userAPIKeyRouteRepo     UserAPIKeyRouteRepository
-	userRPMCache            UserRPMCache
-	billingCacheService     *BillingCacheService
-	proxyProber             ProxyExitInfoProber
-	proxyLatencyCache       ProxyLatencyCache
-	authCacheInvalidator    APIKeyAuthCacheInvalidator
-	entClient               *dbent.Client // 用于开启数据库事务
-	settingService          *SettingService
-	defaultSubAssigner      DefaultSubscriptionAssigner
-	userSubRepo             UserSubscriptionRepository
-	privacyClientFactory    PrivacyClientFactory
-	runtimeBlocker          AccountRuntimeBlocker
-	affiliateService        adminRechargeAffiliateAccruer
+	cfg                  *config.Config
+	userRepo             UserRepository
+	groupRepo            GroupRepository
+	groupDuplicateRepo   GroupDuplicateRepository
+	emptyGroupDeleteRepo EmptyGroupDeleteRepository
+	accountRepo          AccountRepository
+	accountDuplicateRepo AccountDuplicateRepository
+	proxyRepo            ProxyRepository
+	apiKeyRepo           APIKeyRepository
+	redeemCodeRepo       RedeemCodeRepository
+	userGroupRateRepo    UserGroupRateRepository
+	userAPIKeyRouteRepo  UserAPIKeyRouteRepository
+	userRPMCache         UserRPMCache
+	billingCacheService  *BillingCacheService
+	proxyProber          ProxyExitInfoProber
+	proxyLatencyCache    ProxyLatencyCache
+	authCacheInvalidator APIKeyAuthCacheInvalidator
+	entClient            *dbent.Client // 用于开启数据库事务
+	settingService       *SettingService
+	defaultSubAssigner   DefaultSubscriptionAssigner
+	userSubRepo          UserSubscriptionRepository
+	privacyClientFactory PrivacyClientFactory
+	runtimeBlocker       AccountRuntimeBlocker
+	affiliateService     adminRechargeAffiliateAccruer
+	// 分组平台变更后用来失效渠道缓存；可为 nil（缓存会在 TTL 到期后自然重建）
 	channelCacheInvalidator ChannelCacheInvalidator
 }
 
@@ -704,6 +729,7 @@ type userGroupRateBatchReader interface {
 
 // NewAdminService creates a new AdminService
 func NewAdminService(
+	cfg *config.Config,
 	userRepo UserRepository,
 	groupRepo AdminGroupRepository,
 	accountRepo AdminAccountRepository,
@@ -727,9 +753,11 @@ func NewAdminService(
 	channelCacheInvalidator ChannelCacheInvalidator,
 ) AdminService {
 	return &adminServiceImpl{
+		cfg:                     cfg,
 		userRepo:                userRepo,
 		groupRepo:               groupRepo,
 		groupDuplicateRepo:      groupRepo,
+		emptyGroupDeleteRepo:    groupRepo,
 		accountRepo:             accountRepo,
 		accountDuplicateRepo:    accountRepo,
 		proxyRepo:               proxyRepo,

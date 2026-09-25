@@ -116,9 +116,9 @@
               <textarea
                 data-test="capture-models-anthropic"
                 class="input min-h-28 font-mono text-sm"
-                :value="form.model_allowlists.anthropic.join('\n')"
+                :value="form.models_list_configs.anthropic.join('\n')"
                 :placeholder="t('admin.captureSettings.models.placeholder')"
-                @input="setModelAllowlist('anthropic', $event)"
+                @input="setModelsListConfig('anthropic', $event)"
               ></textarea>
             </div>
             <div>
@@ -126,9 +126,9 @@
               <textarea
                 data-test="capture-models-kiro"
                 class="input min-h-28 font-mono text-sm"
-                :value="form.model_allowlists.kiro.join('\n')"
+                :value="form.models_list_configs.kiro.join('\n')"
                 :placeholder="t('admin.captureSettings.models.placeholder')"
-                @input="setModelAllowlist('kiro', $event)"
+                @input="setModelsListConfig('kiro', $event)"
               ></textarea>
             </div>
             <div>
@@ -137,9 +137,9 @@
                 id="capture-models-openai"
                 data-test="capture-models-openai"
                 class="input min-h-28 font-mono text-sm"
-                :value="form.model_allowlists.openai.join('\n')"
+                :value="form.models_list_configs.openai.join('\n')"
                 :placeholder="t('admin.captureSettings.models.placeholder')"
-                @input="setModelAllowlist('openai', $event)"
+                @input="setModelsListConfig('openai', $event)"
               ></textarea>
             </div>
           </div>
@@ -338,7 +338,7 @@ const defaultPolicy = (): CaptureRuntimePolicy => ({
   platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
   outcomes: { success: true, terminal_error: true },
   content: { raw_request: true, raw_response: true, request_headers: true, response_headers: true },
-  model_allowlists: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'], openai: [] },
+  models_list_configs: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'], openai: [] },
   group_ids: [],
   user_ids: [],
 })
@@ -380,10 +380,10 @@ function copyPolicy(policy: CaptureRuntimePolicy): void {
     platforms: { ...policy.platforms },
     outcomes: { ...policy.outcomes },
     content: { ...policy.content },
-    model_allowlists: {
-      anthropic: [...(policy.model_allowlists?.anthropic ?? [])],
-      kiro: [...(policy.model_allowlists?.kiro ?? [])],
-      openai: [...(policy.model_allowlists?.openai ?? [])],
+    models_list_configs: {
+      anthropic: [...(policy.models_list_configs?.anthropic ?? [])],
+      kiro: [...(policy.models_list_configs?.kiro ?? [])],
+      openai: [...(policy.models_list_configs?.openai ?? [])],
     },
     group_ids: [...policy.group_ids],
     user_ids: [...policy.user_ids],
@@ -399,19 +399,19 @@ function normalizedPolicy(): CaptureRuntimePolicy {
     platforms: { ...form.platforms },
     outcomes: { ...form.outcomes },
     content: { ...form.content },
-    model_allowlists: {
-      anthropic: models(form.model_allowlists.anthropic),
-      kiro: models(form.model_allowlists.kiro),
-      openai: models(form.model_allowlists.openai),
+    models_list_configs: {
+      anthropic: models(form.models_list_configs.anthropic),
+      kiro: models(form.models_list_configs.kiro),
+      openai: models(form.models_list_configs.openai),
     },
     group_ids: ids(form.group_ids),
     user_ids: ids(form.user_ids),
   }
 }
 
-function setModelAllowlist(platform: keyof CaptureRuntimePolicy['model_allowlists'], event: Event): void {
+function setModelsListConfig(platform: keyof CaptureRuntimePolicy['models_list_configs'], event: Event): void {
   const value = (event.target as HTMLTextAreaElement).value
-  form.model_allowlists[platform] = value.split(/[\n,]/)
+  form.models_list_configs[platform] = value.split(/[\n,]/)
 }
 
 async function save(): Promise<void> {

@@ -23,7 +23,7 @@ export interface CaptureRuntimePolicy {
     request_headers: boolean
     response_headers: boolean
   }
-  model_allowlists: {
+  models_list_configs: {
     anthropic: string[]
     kiro: string[]
     openai: string[]

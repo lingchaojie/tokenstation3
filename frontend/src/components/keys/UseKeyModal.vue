@@ -1244,7 +1244,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     ...reasoningVariants,
     max: {}
   }
-  const openaiModel = (name: string, context: number, output = 128000, variants = reasoningVariants) => ({
+  const openaiModel = (name: string, context: number, output = 128000, variants: Record<string, object> = reasoningVariants) => ({
     name,
     limit: {
       context,
@@ -1267,6 +1267,8 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'gpt-5.4-mini': openaiModel('GPT-5.4 Mini', 400000),
     'gpt-5.3-codex-spark': openaiModel('GPT-5.3 Codex Spark', 128000, 32000),
     'gpt-5.2': openaiModel('GPT-5.2', 400000),
+    'gpt-6-sol': openaiModel('GPT-6 Sol', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
+    'gpt-6-luna': openaiModel('GPT-6 Luna', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
     'codex-mini-latest': {
       name: 'Codex Mini',
       limit: {
@@ -1540,6 +1542,11 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
   const claudeThinking = (name: string, output = 128000) =>
     claudeModel(name, 200000, output, { budgetTokens: 24576, type: 'enabled' })
   const claudeModels = {
+    'claude-opus-5-5': {
+      ...claudeModel('Claude Opus 5.5', 1000000, 128000, { type: 'adaptive' }),
+      options: { thinking: { type: 'adaptive' }, effort: 'medium' },
+      variants: Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max'].map(effort => [effort, { effort }]))
+    },
     'claude-fable-5-1': claudeAdaptive('Claude Fable 5.1'),
     'claude-fable-5': claudeAdaptive('Claude Fable 5'),
     'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),

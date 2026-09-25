@@ -31,12 +31,12 @@ func TestOpenAIHTTPCaptureDefaultPolicyAllocatesNothing(t *testing.T) {
 	require.False(t, exists)
 }
 
-func TestOpenAIModelAllowlistGuardsHTTPAndWebSocketWireCapture(t *testing.T) {
+func TestOpenAIModelsListConfigGuardsHTTPAndWebSocketWireCapture(t *testing.T) {
 	policy, err := DecodeCaptureRuntimePolicy([]byte(`{
 		"version":1,"enabled":true,"platforms":{"openai":true},
 		"outcomes":{"success":true,"terminal_error":true},
 		"content":{"raw_request":true,"raw_response":true},
-		"model_allowlists":{"openai":["gpt-6-astra"]}
+		"models_list_configs":{"openai":["gpt-6-astra"]}
 	}`))
 	require.NoError(t, err)
 	compiled, err := CompileCaptureRuntimePolicy(policy)
@@ -123,6 +123,66 @@ func TestOpenAIHTTPCaptureKeepsActualOutboundAndRawResponse(t *testing.T) {
 	require.Contains(t, string(attempts[0].RequestHeaderBytes()), "Openai-Beta")
 	require.Empty(t, attempts[0].TerminalStates())
 	AbortCaptureAttempt(c)
+}
+
+func TestOpenAICaptureUsesFinalMappedLiteRequestBody(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setOpenAIHTTPCaptureScopeForTest(t, c, true)
+	transport := &recordingCaptureTransport{}
+	svc := &OpenAIGatewayService{
+		cfg:         captureEnabledConfigForTest(1024),
+		capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
+	}
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	body := []byte(`{"model":"gpt-5.5","stream":true,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true","keep":"yes"}}`)
+	req, err := http.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.NoError(t, applyMappedGPT55LiteCompatibility(req, account, body))
+	require.True(t, svc.prepareOpenAIHTTPCaptureAttempt(c, account, req, body))
+	actual, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.NotEqual(t, body, actual)
+	attempts := transport.Attempts()
+	require.Len(t, attempts, 1)
+	require.Equal(t, actual, attempts[0].RequestBytes())
+	AbortCaptureAttempt(c)
+}
+
+func TestOpenAICaptureReplayFailureAbortsWithoutConsumingWireBody(t *testing.T) {
+	for _, failOpen := range []bool{true, false} {
+		t.Run(strconv.FormatBool(failOpen), func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			setOpenAIHTTPCaptureScopeForTest(t, c, true)
+			transport := &recordingCaptureTransport{}
+			svc := &OpenAIGatewayService{
+				cfg:         captureEnabledConfigForTest(1024),
+				capturePool: newConversationCapturePoolForTransport(transport, func() bool { return true }),
+			}
+			body := []byte(`{"model":"gpt-5.5","stream":true}`)
+			req, err := http.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", bytes.NewReader(body))
+			require.NoError(t, err)
+			replay := &trackingCaptureReadCloser{reader: &dataAndErrorCaptureBody{payload: []byte("partial"), err: io.ErrUnexpectedEOF}}
+			req.GetBody = func() (io.ReadCloser, error) {
+				if failOpen {
+					return nil, io.ErrUnexpectedEOF
+				}
+				return replay, nil
+			}
+			require.False(t, svc.prepareOpenAIHTTPCaptureAttempt(c, &Account{Platform: PlatformOpenAI}, req, body))
+			actual, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.Equal(t, body, actual)
+			if failOpen {
+				require.Empty(t, transport.Attempts())
+			} else {
+				require.Len(t, transport.Attempts(), 1)
+				require.Equal(t, []captureTerminalState{captureAborted}, transport.Attempts()[0].TerminalStates())
+				require.Equal(t, 1, replay.closes)
+			}
+		})
+	}
 }
 
 func TestFinalizeOpenAIForwardResultKeepsFinalTypedAttemptRequest(t *testing.T) {

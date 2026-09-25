@@ -902,6 +902,7 @@ func (h *UserHandler) UpdateUserPlatformQuotas(c *gin.Context) {
 	slog.Info("admin.quota_updated",
 		"actor_admin_id", getAdminIDFromContext(c),
 		"target_user_id", userID,
+		"submitted_count", len(req.Quotas),
 		"platform_count", len(records),
 		"before_snapshot_available", beforeErr == nil,
 		"changes", changes)

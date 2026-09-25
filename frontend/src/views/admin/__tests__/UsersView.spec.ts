@@ -6,6 +6,10 @@ import UsersView from '../UsersView.vue'
 
 const {
   listUsers,
+  toggleStatus,
+  deleteUser,
+  showError,
+  showSuccess,
   getAllGroups,
   getBatchUsersUsage,
   listEnabledDefinitions,
@@ -15,6 +19,10 @@ const {
   getPlatformQuotas
 } = vi.hoisted(() => ({
   listUsers: vi.fn(),
+  toggleStatus: vi.fn(),
+  deleteUser: vi.fn(),
+  showError: vi.fn(),
+  showSuccess: vi.fn(),
   getAllGroups: vi.fn(),
   getBatchUsersUsage: vi.fn(),
   listEnabledDefinitions: vi.fn(),
@@ -28,8 +36,8 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     users: {
       list: listUsers,
-      toggleStatus: vi.fn(),
-      delete: vi.fn(),
+      toggleStatus,
+      delete: deleteUser,
       getAPIKeyRoutes,
       updateAPIKeyRoutes,
       getPlatformQuotas
@@ -49,8 +57,8 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
-    showSuccess: vi.fn()
+    showError,
+    showSuccess
   })
 }))
 
@@ -59,7 +67,8 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string, params?: { count?: number }) =>
+        params?.count === undefined ? key : `${key}:${params.count}`
     })
   }
 })
@@ -125,6 +134,7 @@ const DataTableStub = {
     <div>
       <div data-test="columns">{{ columns.map(col => col.key).join(',') }}</div>
       <div data-test="row-order">{{ data.map(row => row.email).join(',') }}</div>
+      <div data-test="row-state">{{ data.map(row => [row.id, row.status, row.current_concurrency].join(':')).join(',') }}</div>
       <div data-test="selected-keys">{{ (selectedKeys || []).join(',') }}</div>
       <button data-test="sort-last-used" @click="$emit('sort', 'last_used_at', 'desc')">sort</button>
       <button
@@ -143,13 +153,14 @@ const DataTableStub = {
 		  <slot name="cell-groups" :row="row" />
 		</div>
         <slot name="cell-last_used_at" :value="row.last_used_at" :row="row" />
-        <slot name="cell-actions" :row="row" />
+        <div :data-test="'actions-' + row.id"><slot name="cell-actions" :row="row" /></div>
       </div>
     </div>
   `
 }
 
 const PaginationStub = {
+  props: ['page', 'total'],
   emits: ['update:page'],
   template: '<button data-test="next-page" @click="$emit(\'update:page\', 2)">next</button>'
 }
@@ -165,12 +176,63 @@ const BulkEditUserModalStub = {
   `
 }
 
+const mountBulkDeleteView = () => mount(UsersView, {
+  global: {
+    stubs: {
+      AppLayout: { template: '<div><slot /></div>' },
+      TablePageLayout: {
+        template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
+      },
+      DataTable: DataTableStub,
+      Pagination: PaginationStub,
+      ConfirmDialog: {
+        props: ['show', 'message'],
+        emits: ['confirm', 'cancel'],
+        template: `<div v-if="show" data-test="delete-dialog">
+          <span>{{ message }}</span>
+          <button data-test="confirm-delete" @click="$emit('confirm')">confirm</button>
+          <button data-test="cancel-delete" @click="$emit('cancel')">cancel</button>
+        </div>`
+      },
+      EmptyState: true,
+      GroupBadge: true,
+      Select: true,
+      UserAttributesConfigModal: true,
+      UserConcurrencyCell: true,
+      UserCreateModal: true,
+      UserEditModal: true,
+      BulkEditUserModal: true,
+      UserPlatformQuotaModal: true,
+      UserApiKeysModal: true,
+      UserAllowedGroupsModal: true,
+      UserBalanceModal: true,
+      UserBalanceHistoryModal: true,
+      GroupReplaceModal: true,
+      Icon: true,
+      Teleport: true
+    }
+  }
+})
+
+const getToggleStatusButton = (wrapper: ReturnType<typeof mountBulkDeleteView>, id: number) => {
+  const button = wrapper
+    .get(`[data-test="actions-${id}"]`)
+    .findAll('button')
+    .find((candidate) => /admin\.users\.(disable|enable)$/.test(candidate.text()))
+  if (!button) throw new Error(`toggle status button not found for user ${id}`)
+  return button
+}
+
 describe('admin UsersView', () => {
   beforeEach(() => {
     vi.useRealTimers()
     localStorage.clear()
 
     listUsers.mockReset()
+    toggleStatus.mockReset()
+    deleteUser.mockReset()
+    showError.mockReset()
+    showSuccess.mockReset()
     getAllGroups.mockReset()
     getBatchUsersUsage.mockReset()
     listEnabledDefinitions.mockReset()
@@ -328,6 +390,118 @@ describe('admin UsersView', () => {
     expect(wrapper.get('[data-test="groups-42"]').text()).not.toContain('Public Unlisted')
     expect(wrapper.get('[data-test="groups-43"]').text()).not.toContain('Public Listed')
     expect(wrapper.get('[data-test="groups-43"]').text()).not.toContain('Public Unlisted')
+  })
+
+  it('updates only the toggled row in place without reloading the list', async () => {
+    listUsers.mockResolvedValue({
+      items: [createAdminUser({ id: 42, current_concurrency: 3 }), createAdminUser({ id: 43 })],
+      total: 2, page: 1, page_size: 20, pages: 1
+    })
+    toggleStatus.mockResolvedValue(
+      createAdminUser({ id: 42, status: 'disabled', current_concurrency: undefined })
+    )
+    const wrapper = mountBulkDeleteView()
+    await flushPromises()
+    expect(wrapper.get('[data-test="row-state"]').text()).toBe('42:active:3,43:active:0')
+
+    await getToggleStatusButton(wrapper, 42).trigger('click')
+    await flushPromises()
+
+    expect(toggleStatus.mock.calls).toEqual([[42, 'disabled']])
+    expect(listUsers).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test="row-state"]').text()).toBe('42:disabled:3,43:active:0')
+    expect(getToggleStatusButton(wrapper, 42).text()).toBe('admin.users.enable')
+    expect(showSuccess).toHaveBeenCalledWith('admin.users.userDisabled')
+    wrapper.unmount()
+  })
+
+  it.each(['active', 'disabled'] as const)('reloads filtered membership and totals when toggling a %s user', async (status) => {
+    localStorage.setItem('user-filter-values', JSON.stringify({ status }))
+    listUsers.mockResolvedValueOnce({
+      items: [createAdminUser({ status }), createAdminUser({ id: 43, status })],
+      total: 2, page: 1, page_size: 20, pages: 1
+    }).mockResolvedValue({
+      items: [createAdminUser({ id: 43, status })],
+      total: 1, page: 1, page_size: 20, pages: 1
+    })
+    toggleStatus.mockResolvedValue(createAdminUser({ status: status === 'active' ? 'disabled' : 'active' }))
+    const wrapper = mountBulkDeleteView()
+    await flushPromises()
+
+    await getToggleStatusButton(wrapper, 42).trigger('click')
+    await flushPromises()
+
+    expect(listUsers).toHaveBeenCalledTimes(2)
+    expect(listUsers.mock.lastCall?.[2]).toMatchObject({ status })
+    expect(wrapper.get('[data-test="row-state"]').text()).toBe(`43:${status}:0`)
+    expect(wrapper.findComponent(PaginationStub).props('total')).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('returns to a valid page when the last filtered row is toggled off the last page', async () => {
+    localStorage.setItem('user-filter-values', JSON.stringify({ status: 'active' }))
+    listUsers.mockResolvedValueOnce({
+      items: [createAdminUser({ id: 43 })], total: 21, page: 1, page_size: 20, pages: 2
+    }).mockResolvedValueOnce({
+      items: [createAdminUser()], total: 21, page: 2, page_size: 20, pages: 2
+    }).mockResolvedValue({
+      items: [createAdminUser({ id: 43 })], total: 20, page: 1, page_size: 20, pages: 1
+    })
+    toggleStatus.mockResolvedValue(createAdminUser({ status: 'disabled' }))
+    const wrapper = mountBulkDeleteView()
+    await flushPromises()
+    await wrapper.get('[data-test="next-page"]').trigger('click')
+    await flushPromises()
+
+    await getToggleStatusButton(wrapper, 42).trigger('click')
+    await flushPromises()
+
+    expect(listUsers).toHaveBeenCalledTimes(3)
+    expect(listUsers.mock.lastCall?.[0]).toBe(1)
+    expect(wrapper.findComponent(PaginationStub).props()).toMatchObject({ page: 1, total: 20 })
+    expect(wrapper.get('[data-test="row-state"]').text()).toBe('43:active:0')
+    wrapper.unmount()
+  })
+
+  it('keeps the row untouched when toggling status fails', async () => {
+    toggleStatus.mockRejectedValue(new Error('boom'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const wrapper = mountBulkDeleteView()
+    await flushPromises()
+
+    await getToggleStatusButton(wrapper, 42).trigger('click')
+    await flushPromises()
+
+    expect(listUsers).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test="row-state"]').text()).toBe('42:active:0')
+    expect(showError).toHaveBeenCalledWith('admin.users.failedToToggle')
+    expect(showSuccess).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('reloads the list when a list request is in flight as the toggle resolves', async () => {
+    let finishToggle!: (user: AdminUser) => void
+    toggleStatus.mockImplementation(() => new Promise<AdminUser>(resolve => { finishToggle = resolve }))
+    const wrapper = mountBulkDeleteView()
+    await flushPromises()
+
+    await getToggleStatusButton(wrapper, 42).trigger('click')
+    listUsers.mockImplementationOnce(() => new Promise(() => {}))
+    await wrapper.get('[data-test="sort-last-used"]').trigger('click')
+    await flushPromises()
+    expect(listUsers).toHaveBeenCalledTimes(2)
+
+    listUsers.mockResolvedValue({
+      items: [createAdminUser({ status: 'disabled' })],
+      total: 1, page: 1, page_size: 20, pages: 1
+    })
+    finishToggle(createAdminUser({ status: 'disabled' }))
+    await flushPromises()
+
+    expect(listUsers).toHaveBeenCalledTimes(3)
+    expect(wrapper.get('[data-test="row-state"]').text()).toBe('42:disabled:0')
+    wrapper.unmount()
   })
 
   it('shows active, used, and created activity columns in order and requests last_used_at sort', async () => {

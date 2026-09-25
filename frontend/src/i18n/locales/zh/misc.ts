@@ -63,6 +63,8 @@ export default {
   purchase: {
     title: '充值/订阅',
     description: '通过内嵌页面完成充值/订阅',
+    rechargeDescription: '通过内嵌页面完成充值',
+    subscriptionDescription: '通过内嵌页面完成订阅',
     openInNewTab: '新窗口打开',
     notEnabledTitle: '该功能未开启',
     notEnabledDesc: '管理员暂未开启充值/订阅入口，请联系管理员。',
@@ -447,6 +449,7 @@ export default {
     tabSubscribe: '订阅',
     noPlans: '暂无可用订阅套餐',
     notAvailable: '充值功能暂未开放',
+    billingUnavailable: '充值与订阅均暂未开放，请联系管理员。',
     confirmSubscription: '确认订阅',
     confirmCancel: '确定要取消此订单吗？',
     amountTooLow: '最低金额为 {min}',
@@ -539,6 +542,7 @@ export default {
     perMonth: '月',
     perYear: '年',
     admin: {
+      validityDays: '有效天数',
       sevenDayQuota: '7 日额度（USD）',
       sevenDayQuotaHint: '留空表示不设置套餐级 7 日额度。',
       seatLimit: '名额上限',

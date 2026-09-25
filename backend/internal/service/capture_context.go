@@ -569,6 +569,25 @@ func beginCaptureAttemptForWireRequest(
 	body []byte,
 	headerLimit int,
 ) (*CaptureAttempt, bool) {
+	attempt, ok := beginCaptureAttemptForWireRequestHeaders(ctx, c, pool, platform, req, body, headerLimit)
+	if ok {
+		attempt.WriteRequest(body)
+	}
+	return attempt, ok
+}
+
+// beginCaptureAttemptForWireRequestHeaders initializes request metadata and
+// headers without writing payload bytes. Callers with a replayable final wire
+// request can then stream its payload without retaining another full-body copy.
+func beginCaptureAttemptForWireRequestHeaders(
+	ctx context.Context,
+	c *gin.Context,
+	pool *ConversationCapturePool,
+	platform string,
+	req *http.Request,
+	metadataBody []byte,
+	headerLimit int,
+) (*CaptureAttempt, bool) {
 	transitionCaptureAttemptOwner(c, captureAttemptOwnerTyped)
 	if pool == nil || req == nil {
 		return nil, false
@@ -581,7 +600,7 @@ func beginCaptureAttemptForWireRequest(
 	if req.URL != nil {
 		endpoint = redactCaptureURL(req.URL)
 	}
-	upstreamModel, stream, streamKnown := extractCaptureProviderRequestMeta(platform, body, endpoint)
+	upstreamModel, stream, streamKnown := extractCaptureProviderRequestMeta(platform, metadataBody, endpoint)
 	format := captureWirePayloadFormat(platform, endpoint, stream, streamKnown)
 	begin := model.Begin{
 		CaptureID:        uuid.New(),
@@ -604,7 +623,6 @@ func beginCaptureAttemptForWireRequest(
 	replaceCaptureAttemptForRequest(c, attempt)
 	setCaptureAttemptStreamGeometry(c, attempt, stream, streamKnown)
 	attempt.WriteRequestHeaders(captureHeaderBytes(req.Header, headerLimit))
-	attempt.WriteRequest(body)
 	return attempt, true
 }
 

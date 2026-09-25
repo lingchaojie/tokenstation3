@@ -16,6 +16,16 @@ case "$path" in
         [ -n "$label" ] || exit 1
         printf '{"org.sub2api.stack":"%s"}\n' "$label"
         ;;
+    0.configuration.ipv4Subnet)
+        subnet=$(printf '%s\n' "$payload" | sed -n 's/.*"ipv4Subnet":"\([^"]*\)".*/\1/p')
+        [ -n "$subnet" ] || exit 1
+        printf '%s\n' "$subnet"
+        ;;
+    0.id)
+        image_id=$(printf '%s\n' "$payload" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+        [ -n "$image_id" ] || exit 1
+        printf '%s\n' "$image_id"
+        ;;
     0.status.networks.0.ipv4Address)
         address=$(printf '%s\n' "$payload" | sed -n 's/.*"ipv4Address":"\([^"]*\)".*/\1/p')
         [ -n "$address" ] || exit 1

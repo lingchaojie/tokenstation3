@@ -2344,8 +2344,8 @@ func newTestGinContext(ctx context.Context) *gin.Context {
 	policy.Platforms.OpenAI = true
 	// WebChat service tests cover multiple model families; production defaults
 	// keep Anthropic/Kiro capture restricted to the configured allowlist.
-	policy.ModelAllowlists.Anthropic = []string{}
-	policy.ModelAllowlists.Kiro = []string{}
+	policy.ModelsListConfigs.Anthropic = []string{}
+	policy.ModelsListConfigs.Kiro = []string{}
 	compiled, err := CompileCaptureRuntimePolicy(policy)
 	if err != nil {
 		panic(err)

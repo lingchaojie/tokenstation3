@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -85,7 +86,7 @@ func TestBillingAndAccountStatsModelPricingParityMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			billed, err := billing.CalculateCostWithServiceTier(tt.model, tt.tokens, 1, tt.tier)
 			require.NoError(t, err)
-			stats := tryModelFilePricing(billing, tt.model, tt.tokens, tt.tier)
+			stats := tryModelFilePricing(billing, tt.model, tt.tokens, tt.tier, time.Time{})
 			require.NotNil(t, stats, "an explicitly resolved free price remains a non-nil zero")
 			require.InDelta(t, billed.TotalCost, *stats, 1e-12)
 		})
@@ -98,6 +99,7 @@ func TestResolveAccountStatsCost_ApplyPricingPreservesResolvedFreeZero(t *testin
 	got := resolveAccountStatsCostWithUsage(
 		context.Background(), cs, nil, 1, 10, "explicit-free-model",
 		UsageTokens{InputTokens: 1}, accountStatsCostUsage{requestCount: 1}, 0, "",
+		time.Time{},
 	)
 	require.NotNil(t, got)
 	require.Zero(t, *got)

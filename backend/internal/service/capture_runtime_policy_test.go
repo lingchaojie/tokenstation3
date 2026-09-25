@@ -27,8 +27,8 @@ func TestDefaultCaptureRuntimePolicyKeepsOpenAIOff(t *testing.T) {
 	require.True(t, got.Content.RawResponse)
 	require.True(t, got.Content.RequestHeaders)
 	require.True(t, got.Content.ResponseHeaders)
-	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Anthropic)
-	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Kiro)
+	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelsListConfigs.Anthropic)
+	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelsListConfigs.Kiro)
 }
 
 func TestNormalizeCaptureRuntimePolicySortsAndDeduplicatesIDs(t *testing.T) {
@@ -42,9 +42,9 @@ func TestNormalizeCaptureRuntimePolicySortsAndDeduplicatesIDs(t *testing.T) {
 	require.Equal(t, []int64{1, 8}, got.UserIDs)
 }
 
-func TestNormalizeCaptureRuntimePolicySortsAndDeduplicatesModelAllowlists(t *testing.T) {
+func TestNormalizeCaptureRuntimePolicySortsAndDeduplicatesModelsListConfigs(t *testing.T) {
 	policy := DefaultCaptureRuntimePolicy()
-	policy.ModelAllowlists = CaptureModelAllowlistPolicy{
+	policy.ModelsListConfigs = CaptureModelsListConfigPolicy{
 		Anthropic: []string{" Claude-Fable-5 ", "claude-opus-5", "claude-fable-5", ""},
 		Kiro:      []string{"claude-opus-5", " CLAUDE-FABLE-5 "},
 		OpenAI:    []string{" GPT-6-ASTRA ", "gpt-6-astra", ""},
@@ -52,9 +52,9 @@ func TestNormalizeCaptureRuntimePolicySortsAndDeduplicatesModelAllowlists(t *tes
 
 	got, err := ValidateAndNormalizeCaptureRuntimePolicy(policy)
 	require.NoError(t, err)
-	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Anthropic)
-	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelAllowlists.Kiro)
-	require.Equal(t, []string{"gpt-6-astra"}, got.ModelAllowlists.OpenAI)
+	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelsListConfigs.Anthropic)
+	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, got.ModelsListConfigs.Kiro)
+	require.Equal(t, []string{"gpt-6-astra"}, got.ModelsListConfigs.OpenAI)
 }
 
 func TestNormalizeCaptureRuntimePolicyRejectsInvalidVersionAndIDs(t *testing.T) {
@@ -89,8 +89,41 @@ func TestDecodeCaptureRuntimePolicyAppliesModelDefaultsToLegacySettings(t *testi
       "group_ids":[],"user_ids":[]
     }`))
 	require.NoError(t, err)
-	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, policy.ModelAllowlists.Anthropic)
-	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, policy.ModelAllowlists.Kiro)
+	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, policy.ModelsListConfigs.Anthropic)
+	require.Equal(t, []string{"claude-fable-5", "claude-opus-5"}, policy.ModelsListConfigs.Kiro)
+}
+
+func TestCaptureRuntimePolicyLoadsPreMergeModelAllowlists(t *testing.T) {
+	const legacyPolicy = `{
+      "version":1,"enabled":true,
+      "platforms":{"anthropic":true,"kiro":true,"openai":true,"gemini":true,"antigravity":true,"grok":true},
+      "outcomes":{"success":true,"terminal_error":true},
+      "content":{"raw_request":true,"raw_response":true,"request_headers":true,"response_headers":true},
+      "model_allowlists":{"anthropic":[" Claude-Opus-5 ","custom-anthropic"],"kiro":["custom-kiro"],"openai":[" GPT-6-ASTRA "]},
+      "group_ids":[9],"user_ids":[7]
+    }`
+
+	repo := &capturePolicyRepoStub{value: legacyPolicy}
+	svc := NewSettingService(repo, nil)
+	policy, err := svc.GetCaptureRuntimePolicy(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"claude-opus-5", "custom-anthropic"}, policy.ModelsListConfigs.Anthropic)
+	require.Equal(t, []string{"custom-kiro"}, policy.ModelsListConfigs.Kiro)
+	require.Equal(t, []string{"gpt-6-astra"}, policy.ModelsListConfigs.OpenAI)
+
+	encoded, err := json.Marshal(policy)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"models_list_configs"`)
+	require.NotContains(t, string(encoded), `"model_allowlists"`)
+}
+
+func TestDecodeCaptureRuntimePolicyRejectsBothModelFilterKeys(t *testing.T) {
+	_, err := DecodeCaptureRuntimePolicy([]byte(`{
+      "version":1,
+      "model_allowlists":{"openai":["legacy"]},
+      "models_list_configs":{"openai":["current"]}
+    }`))
+	require.ErrorContains(t, err, "cannot both be set")
 }
 
 func TestCompiledCapturePolicyRequiresBothConfiguredFilters(t *testing.T) {
@@ -216,11 +249,11 @@ func TestCompiledCapturePolicyClientDisconnectIgnoresOutcomeTogglesOnly(t *testi
 	}
 }
 
-func TestCompiledCapturePolicyAppliesModelAllowlistsOnlyToConfiguredPlatforms(t *testing.T) {
+func TestCompiledCapturePolicyAppliesModelsListConfigsOnlyToConfiguredPlatforms(t *testing.T) {
 	policy := DefaultCaptureRuntimePolicy()
 	policy.Enabled = true
 	policy.Platforms.OpenAI = true
-	policy.ModelAllowlists = CaptureModelAllowlistPolicy{
+	policy.ModelsListConfigs = CaptureModelsListConfigPolicy{
 		Anthropic: []string{"claude-opus-5", "claude-fable-5"},
 		Kiro:      []string{"claude-opus-5", "claude-fable-5"},
 	}
@@ -255,7 +288,7 @@ func TestCompiledCapturePolicyMatchesEveryLocallySupportedPlatform(t *testing.T)
 	}
 }
 
-func TestCaptureRuntimePolicyOpenAIModelAllowlist(t *testing.T) {
+func TestCaptureRuntimePolicyOpenAIModelsListConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		allowlist string
@@ -275,7 +308,7 @@ func TestCaptureRuntimePolicyOpenAIModelAllowlist(t *testing.T) {
 				"version":1,"enabled":true,"platforms":{"openai":true},
 				"outcomes":{"success":true,"terminal_error":true},
 				"content":{"raw_request":true,"raw_response":true},
-				"model_allowlists":{` + tc.allowlist + `}
+				"models_list_configs":{` + tc.allowlist + `}
 			}`))
 			require.NoError(t, err)
 			compiled, err := CompileCaptureRuntimePolicy(policy)

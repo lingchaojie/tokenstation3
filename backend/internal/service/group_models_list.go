@@ -1,6 +1,22 @@
 package service
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/domain"
+)
+
+// DomainGroupModelsListConfig converts the display-only service configuration
+// to the domain value persisted by ent.
+func DomainGroupModelsListConfig(cfg GroupModelsListConfig) domain.GroupModelsListConfig {
+	return domain.GroupModelsListConfig(cfg)
+}
+
+// GroupModelsListConfigFromDomain converts the persisted display configuration
+// to the service representation.
+func GroupModelsListConfigFromDomain(cfg domain.GroupModelsListConfig) GroupModelsListConfig {
+	return GroupModelsListConfig(cfg)
+}
 
 func normalizeGroupModelsListConfig(cfg GroupModelsListConfig) GroupModelsListConfig {
 	out := GroupModelsListConfig{Enabled: cfg.Enabled}
