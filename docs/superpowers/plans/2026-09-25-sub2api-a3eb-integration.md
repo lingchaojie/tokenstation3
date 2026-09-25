@@ -81,7 +81,7 @@ config, account/identity/settings/affiliate services, repositories, handlers/rou
 - [x] Run go test ./..., go test -tags=unit ./..., full integration package partitions and risk-focused races.
 - [x] Run backend lint, build, generation consistency; frontend full verification and deploy/security checks as CI specifies.
 - [x] Reproduce suspected baseline failures at DEV_BASE before classifying them.
-- [ ] Archive decisions/test commands and add index entry; resolve all conflict markers and inspect staged diff.
+- [x] Archive decisions/test commands and add index entry; resolve all conflict markers and inspect staged diff.
 - [ ] Commit true merge; fresh independent reviewer covers every changed area and both parents. Fix and re-review any findings.
 - [ ] Refresh refs; pause only on unapproved drift or functional choice. Fast-forward local dev and main only as runbook permits.
 - [ ] Display final ref updates; non-force push dev/main; wait for exact dev SHA required checks. No post-CI commits.
@@ -91,5 +91,5 @@ config, account/identity/settings/affiliate services, repositories, handlers/rou
 - Task 0 complete: risk analysis, 97 conflict inventory, full fixed coordinates, user decisions and protected original tree.
 - Tasks 1–4 implemented in isolated merge worktree; local full verification passed.
 - Frontend, release helpers and deployment CI equivalents passed; backend generation/build and reachable-vulnerability scan passed. See domain evidence for exact commands.
-- Task 5: archive finalization, independent review, ref refresh, push and exact-SHA CI still pending.
+- Task 5: local verification and archive complete; independent review, ref refresh, push and exact-SHA CI still pending.
 - The user approved the concrete risk assessment and migration proposal with “是的”; execution is authorized.
