@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -1133,6 +1134,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		AllowLive:                       g.AllowLive,
 		ForceOpenAIFast:                 g.ForceOpenaiFast,
 		FreeOpenAIFast:                  g.FreeOpenaiFast,
+		LongContextPricingEnabled:       g.LongContextPricingEnabled,
 		RequireOAuthOnly:                g.RequireOauthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		DefaultMappedModel:              g.DefaultMappedModel,
@@ -1157,6 +1159,13 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		ProfitSafetyBuffer:              g.ProfitSafetyBuffer,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
+	}
+	if len(g.ModelPricing) > 0 {
+		// Model pricing is written as a validated JSON array by groupRepository.
+		// Decode into a fresh slice so hydrated groups never share mutable prices.
+		if err := json.Unmarshal(g.ModelPricing, &out.ModelPricing); err != nil {
+			out.ModelPricing = nil
+		}
 	}
 	service.NormalizeGroupRuntimeFields(out)
 	return out

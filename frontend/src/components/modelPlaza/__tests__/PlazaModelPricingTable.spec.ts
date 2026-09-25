@@ -8,7 +8,8 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string, params?: Record<string, unknown>) =>
+        key === 'modelPlaza.table.reasoningMultiplierBadge' ? `${key} ${params?.effort} ×${params?.multiplier}` : key
     })
   }
 })
@@ -95,13 +96,36 @@ describe('PlazaModelPricingTable', () => {
     expect(cells[5].text().trim()).toBe('$0.00')
   })
 
-  it('shows the Max reasoning billing multiplier', () => {
+  it('shows all configured reasoning multipliers in level order', () => {
     const model = tokenModel()
-    model.pricing!.max_reasoning_effort_multiplier = 3
+    model.pricing!.reasoning_effort_multipliers = { max: 3, none: 0.5, high: 1.5 }
     const wrapper = mountTable([model], 1)
 
-    expect(wrapper.text()).toContain('modelPlaza.table.maxReasoningMultiplierBadge')
-    expect(wrapper.find('[title="modelPlaza.table.maxReasoningMultiplierHint"]').exists()).toBe(true)
+    const badges = wrapper.findAll('[data-reasoning-effort]')
+    expect(badges.map(badge => badge.attributes('data-reasoning-effort'))).toEqual(['none', 'high', 'max'])
+    expect(badges.every(badge => badge.attributes('title') === 'modelPlaza.table.reasoningMultiplierHint')).toBe(true)
+    expect(wrapper.text()).toContain('modelPlaza.table.reasoningMultiplierBadge')
+  })
+
+  it('shows the preserved max default for an unconfigured Fable model', () => {
+    const wrapper = mountTable([tokenModel({ name: 'claude-fable-5-1' })], 1)
+    expect(wrapper.find('[data-reasoning-effort="max"]').exists()).toBe(true)
+    expect(wrapper.find('[data-reasoning-effort="max"]').text()).toContain('max ×3')
+  })
+
+  it('uses an explicit max override instead of the Fable default', () => {
+    const model = tokenModel({ name: 'claude-fable-5-1' })
+    model.pricing!.reasoning_effort_multipliers = { max: 1 }
+    const wrapper = mountTable([model], 1)
+    expect(wrapper.find('[data-reasoning-effort="max"]').text()).toContain('max ×1')
+    expect(wrapper.text()).not.toContain('max ×3')
+  })
+
+  it('omits invalid or unsupported multipliers from display', () => {
+    const model = tokenModel()
+    model.pricing!.reasoning_effort_multipliers = { max: 0, high: Infinity, unknown: 2, low: 1 }
+    const wrapper = mountTable([model], 1)
+    expect(wrapper.findAll('[data-reasoning-effort]').map(badge => badge.attributes('data-reasoning-effort'))).toEqual(['low'])
   })
 
   it('倍率 ≠ 1 时价格列为折后实付价,官方价列保持原价', () => {

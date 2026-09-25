@@ -66,18 +66,7 @@ func (s *GatewayService) ForwardAsResponses(
 	isCompaction := account != nil && account.IsKiro() && apicompat.HasCompactionTrigger(&responsesReq)
 
 	// 3. Convert Responses → Anthropic
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequestWithOptions(&responsesReq, apicompat.ResponsesToAnthropicOptions{
-		EnableCompaction: account != nil && account.IsKiro(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
-	}
-
-	// 3. Force upstream streaming (Anthropic works best with streaming)
-	anthropicReq.Stream = true
-	reqStream := true
-
-	// 4. Model mapping
+	// Resolve the final upstream model before model-specific conversion.
 	mappedModel := originalModel
 	if account.Platform == PlatformKiro {
 		if next := account.GetMappedModel(originalModel); next != "" {
@@ -102,10 +91,22 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = compactModel
 		}
 	}
-	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body, mappedModel, originalModel)
-	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 mapping 完成之后。
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
-	anthropicReq.Model = mappedModel
+	if err := validateClaudeOpus55Request(body, mappedModel); err != nil {
+		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
+	responsesReq.Model = mappedModel
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequestWithOptions(&responsesReq, apicompat.ResponsesToAnthropicOptions{EnableCompaction: account != nil && account.IsKiro()})
+	if err != nil {
+		if claude.IsOpus55(mappedModel) {
+			writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
+		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
+	}
+
+	// 3. Force upstream streaming (Anthropic works best with streaming)
+	anthropicReq.Stream = true
+	reqStream := true
 	if isCompaction {
 		anthropicReq.ToolChoice = json.RawMessage(`{"type":"none"}`)
 		if anthropicReq.MaxTokens < compactionMinMaxTokens {
@@ -113,7 +114,6 @@ func (s *GatewayService) ForwardAsResponses(
 		}
 		anthropicReq.Thinking = nil
 		anthropicReq.OutputConfig = nil
-		reasoningEffort = nil
 	}
 
 	logger.L().Debug("gateway forward_as_responses: model mapping applied",
@@ -144,6 +144,7 @@ func (s *GatewayService) ForwardAsResponses(
 	// 7. Enforce cache_control block limit
 	anthropicBody = enforceCacheControlLimit(anthropicBody)
 
+	forwardedBody := anthropicBody
 	kiroDirectMode := isKiroDirectModeAccount(account)
 	var resp *http.Response
 	finishCapture := func() {}
@@ -194,14 +195,16 @@ func (s *GatewayService) ForwardAsResponses(
 
 		// 10. Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-		upstreamReq, _, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+		upstreamReq, finalBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
 		releaseUpstreamCtx()
 		if err != nil {
 			return nil, fmt.Errorf("build upstream request: %w", err)
 		}
 
+		forwardedBody = finalBody
+
 		// 11. Send request
-		s.captureOutboundRequest(c, account, upstreamReq, anthropicBody)
+		s.captureOutboundRequest(c, account, upstreamReq, forwardedBody)
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 		finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
 		if err != nil {
@@ -215,6 +218,11 @@ func (s *GatewayService) ForwardAsResponses(
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
+	reasoningEffort := NormalizeClaudeOutputEffort(gjson.GetBytes(forwardedBody, "output_config.effort").String())
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, forwardedBody, mappedModel)
+	if isCompaction {
+		reasoningEffort = nil
+	}
 
 	// 12. Handle error response with failover
 	if resp.StatusCode >= 400 {
@@ -623,6 +631,9 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}
 
 	// Convert to Responses format
+	if claude.IsOpus55(mappedModel) {
+		finalResp.Model = mappedModel
+	}
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
 	responsesResp.Model = originalModel // Use original model name
 
@@ -687,6 +698,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = originalModel
+	state.PreserveThinkingSignatures = claude.IsOpus55(mappedModel)
 	clientToolRestorer := apicompat.NewResponsesClientToolStreamRestorer(clientToolMapping)
 	var usage ClaudeUsage
 	var firstTokenMs *int
@@ -903,9 +915,10 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 }
 
 type anthropicBufferedBlockAccumulator struct {
-	text     strings.Builder
-	thinking strings.Builder
-	input    json.RawMessage
+	text      strings.Builder
+	thinking  strings.Builder
+	signature strings.Builder
+	input     json.RawMessage
 }
 
 type anthropicBufferedContentAccumulator struct {
@@ -919,6 +932,7 @@ func (a *anthropicBufferedContentAccumulator) start(response *apicompat.Anthropi
 	state := &anthropicBufferedBlockAccumulator{}
 	_, _ = state.text.WriteString(block.Text)
 	_, _ = state.thinking.WriteString(block.Thinking)
+	_, _ = state.signature.WriteString(block.Signature)
 	state.input = append(json.RawMessage(nil), block.Input...)
 	a.blocks = append(a.blocks, state)
 	response.Content = append(response.Content, block)
@@ -934,6 +948,8 @@ func (a *anthropicBufferedContentAccumulator) delta(index int, delta *apicompat.
 		_, _ = state.text.WriteString(delta.Text)
 	case "thinking_delta":
 		_, _ = state.thinking.WriteString(delta.Thinking)
+	case "signature_delta":
+		_, _ = state.signature.WriteString(delta.Signature)
 	case "input_json_delta":
 		state.input = appendRawJSON(state.input, delta.PartialJSON)
 	}
@@ -949,6 +965,7 @@ func (a *anthropicBufferedContentAccumulator) materialize(response *apicompat.An
 		}
 		response.Content[index].Text = state.text.String()
 		response.Content[index].Thinking = state.thinking.String()
+		response.Content[index].Signature = state.signature.String()
 		if len(state.input) > 0 {
 			response.Content[index].Input = append(json.RawMessage(nil), state.input...)
 		}

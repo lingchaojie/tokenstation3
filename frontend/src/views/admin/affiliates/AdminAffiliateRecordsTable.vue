@@ -36,7 +36,9 @@
             />
           </template>
           <template #cell-invitee="{ row }">
+            <span v-if="row.invitee_id == null" class="text-sm text-gray-400 dark:text-dark-500">-</span>
             <UserCell
+              v-else
               :id="row.invitee_id"
               :email="row.invitee_email"
               :username="row.invitee_username"
@@ -84,19 +86,22 @@
             <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
           <template #cell-payment_type="{ row }">
-            {{ t('payment.methods.' + row.payment_type, row.payment_type || '-') }}
+            <template v-if="row.payment_type">{{ t('payment.methods.' + row.payment_type, row.payment_type) }}</template>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
           <template #cell-order_status="{ row }">
-            <OrderStatusBadge :status="row.order_status" />
+            <OrderStatusBadge v-if="row.order_status" :status="row.order_status" />
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
           <template #cell-total_rebate="{ row }">
             <AmountText :value="row.total_rebate" />
           </template>
           <template #cell-order_amount="{ row }">
-            <AmountText :value="row.order_amount" />
+            <NullableAmountText :value="row.order_amount" />
           </template>
           <template #cell-pay_amount="{ row }">
-            <span class="text-sm text-gray-900 dark:text-white">¥{{ formatAmount(row.pay_amount) }}</span>
+            <span v-if="row.pay_amount == null" class="text-sm text-gray-400 dark:text-dark-500">-</span>
+            <span v-else class="text-sm text-gray-900 dark:text-white">¥{{ formatAmount(row.pay_amount) }}</span>
           </template>
           <template #cell-rebate_amount="{ row }">
             <AmountText :value="row.rebate_amount" strong />
@@ -139,6 +144,7 @@
         />
       </template>
     </TablePageLayout>
+
 
     <BaseDialog
       :show="overviewDialog"
@@ -333,6 +339,7 @@ function handleSort(key: string, order: 'asc' | 'desc') {
   pagination.page = 1
   void loadRecords()
 }
+
 
 function formatAmount(value: number | null | undefined): string {
   return Number(value || 0).toFixed(2)

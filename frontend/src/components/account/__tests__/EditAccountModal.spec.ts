@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { claudeModels } from '@/composables/useModelWhitelist'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, getOpenCodeGoUsageMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
+  getOpenCodeGoUsageMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
@@ -29,6 +30,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
+      getOpenCodeGoUsage: getOpenCodeGoUsageMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
@@ -426,6 +428,20 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('does not apply a previous account usage response after switching accounts', async () => {
+    let resolveOld!: (value: unknown) => void
+    getOpenCodeGoUsageMock.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }))
+    const first = { ...buildAccount(), opencode_go_usage: { account_id: 1, eligible: true, auto_refresh_enabled: false } }
+    const wrapper = mountModal(first)
+    const next = { ...buildAccount(), id: 2, opencode_go_usage: { account_id: 2, eligible: true, auto_refresh_enabled: false, snapshot: { status: 'ok', data: { rolling: { percent: 17 } } } } }
+    await wrapper.setProps({ account: next })
+    resolveOld({ ...first.opencode_go_usage, snapshot: { status: 'ok', data: { rolling: { percent: 99 } } } })
+    await flushPromises()
+    expect(wrapper.emitted('updated')).toBeUndefined()
+    expect(wrapper.get('[data-testid="opencode-go-usage-details"]').text()).not.toContain('99')
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     authIsSimpleMode.value = true
   })
@@ -1326,6 +1342,19 @@ describe('EditAccountModal', () => {
 	  expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.auto_pause_5h_disabled).toBe(true)
 	  expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.auto_pause_7d_disabled).toBeUndefined()
 	})
+
+  it('preserves Seedance when exactly two endpoint capabilities are selected', async () => {
+    const account = buildAccount()
+    account.credentials.openai_capabilities = ['chat_completions', 'seedance']
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="openai-endpoint-capability-seedance"]').element.checked).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_capabilities).toEqual(['chat_completions', 'seedance'])
+  })
 
   it('keeps at least one OpenAI APIKey endpoint capability selected', async () => {
     const account = buildAccount()

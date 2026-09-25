@@ -16,15 +16,15 @@ import (
 func TestAccountStatsModelPricingImageInputPriceRoundTrip(t *testing.T) {
 	t.Run("load", func(t *testing.T) {
 		repo, mock := newChannelModelPricingTimePricingRepo(t)
-		mock.ExpectQuery(`(?s)SELECT .*cache_read_price, image_input_price, image_output_price.*FROM channel_account_stats_model_pricing`).
+		mock.ExpectQuery(`(?s)SELECT .*cache_read_price, reasoning_effort_multipliers, image_input_price, image_output_price.*FROM channel_account_stats_model_pricing`).
 			WithArgs(sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"id", "rule_id", "platform", "models", "billing_mode", "input_price", "output_price",
-				"cache_write_price", "cache_write_1h_price", "cache_read_price", "image_input_price", "image_output_price", "per_request_price",
+				"cache_write_price", "cache_write_1h_price", "cache_read_price", "reasoning_effort_multipliers", "image_input_price", "image_output_price", "per_request_price",
 				"created_at", "updated_at",
 			}).AddRow(
 				int64(11), int64(7), "openai", `["gpt-image-2"]`, service.BillingModeToken,
-				nil, nil, nil, 7e-6, nil, 5e-6, nil, nil, time.Time{}, time.Time{},
+				nil, nil, nil, 7e-6, nil, "{}", 5e-6, nil, nil, time.Time{}, time.Time{},
 			))
 		expectEmptyModelPricingIntervals(mock)
 
@@ -53,10 +53,10 @@ func TestAccountStatsModelPricingImageInputPriceRoundTrip(t *testing.T) {
 			ImageInputPrice:   &imageInputPrice,
 			CacheWrite1hPrice: &cacheWrite1hPrice,
 		}
-		mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO channel_account_stats_model_pricing (rule_id, platform, models, billing_mode, input_price, output_price, cache_write_price, cache_write_1h_price, cache_read_price, image_input_price, image_output_price, per_request_price)")).
+		mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO channel_account_stats_model_pricing (rule_id, platform, models, billing_mode, input_price, output_price, cache_write_price, cache_write_1h_price, cache_read_price, reasoning_effort_multipliers, image_input_price, image_output_price, per_request_price)")).
 			WithArgs(
 				int64(7), "openai", []byte(`["gpt-image-2"]`), service.BillingModeToken,
-				nil, nil, nil, cacheWrite1hPrice, nil, imageInputPrice, nil, nil,
+				nil, nil, nil, cacheWrite1hPrice, nil, "{}", imageInputPrice, nil, nil,
 			).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(11), time.Time{}, time.Time{}))
 

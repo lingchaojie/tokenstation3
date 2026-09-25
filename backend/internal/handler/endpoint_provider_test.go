@@ -45,6 +45,15 @@ func TestInboundProviderFromPath(t *testing.T) {
 	}
 }
 
+func TestSeedanceTasksUseOpenAIUnifiedGroup(t *testing.T) {
+	for _, prefix := range []string{"", "/v1", "/api/v3", "/v3"} {
+		for _, suffix := range []string{"", "/task-123"} {
+			path := prefix + "/contents/generations/tasks" + suffix
+			require.Equal(t, service.PlatformOpenAI, InboundProviderFromPath(path), path)
+		}
+	}
+}
+
 func TestInboundEndpointMiddlewareMarksOnlyModelCatalogGETRequests(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, tt := range []struct {

@@ -139,6 +139,37 @@ func (s *OpenAIGatewayService) prepareOpenAIHTTPCaptureAttempt(c *gin.Context, a
 	if !s.openAIHTTPCaptureEnabled(c, account) {
 		return false
 	}
+	// A final builder can remove Lite client metadata after the forwarding
+	// body has been selected. Model/stream metadata remain unchanged, but the
+	// captured payload and its hash must come from the actual replayable wire
+	// request. Never consume req.Body or buffer another whole request here.
+	if req != nil && req.GetBody != nil {
+		replay, err := req.GetBody()
+		if err != nil || replay == nil {
+			AbortCaptureAttempt(c)
+			return false
+		}
+		defer func() { _ = replay.Close() }()
+		attempt, ok := beginCaptureAttemptForWireRequestHeaders(c.Request.Context(), c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
+		if !ok {
+			return false
+		}
+		var chunk [32 << 10]byte
+		for {
+			n, readErr := replay.Read(chunk[:])
+			if n > 0 && !attempt.WriteRequest(chunk[:n]) {
+				AbortCaptureAttempt(c)
+				return false
+			}
+			if readErr == io.EOF {
+				return true
+			}
+			if readErr != nil {
+				AbortCaptureAttempt(c)
+				return false
+			}
+		}
+	}
 	_, ok := beginCaptureAttemptForWireRequest(c.Request.Context(), c, s.capturePool, string(account.Platform), req, body, s.cfg.Gateway.Capture.MaxHeaderBytes)
 	return ok
 }

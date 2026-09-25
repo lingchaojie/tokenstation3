@@ -138,7 +138,7 @@ func tryCustomRulesWithUsage(
 		}
 		cost := calculateStatsCostWithUsage(pricing, tokens, usage)
 		if cost != nil {
-			*cost *= maxReasoningEffortBillingMultiplier(model, reasoningEffort, nil)
+			*cost *= modelReasoningEffortBillingMultiplier(model, reasoningEffort, pricing.ReasoningEffortMultipliers)
 		}
 		return cost
 	}

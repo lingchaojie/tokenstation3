@@ -214,6 +214,23 @@ describe('KeyUsageView daily detail', () => {
     wrapper.unmount()
   })
 
+  it.each([0, 20, 80])('cancels ring animation work when unmounted after %i ms', async (elapsed) => {
+    vi.useFakeTimers()
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(performance.now()), 16))
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id))
+    const wrapper = mount(KeyUsageView, {
+      global: { stubs: { RouterLink: { template: '<a><slot /></a>' }, LocaleSwitcher: true, Icon: true } },
+    })
+    await wrapper.find('input').setValue('sk-test-key')
+    await wrapper.find('input').trigger('keydown.enter')
+    await flushPromises()
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(elapsed)
+    wrapper.unmount()
+    await nextTick()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('queries the current local calendar date near midnight', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 6, 13, 0, 30))

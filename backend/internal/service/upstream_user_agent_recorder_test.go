@@ -98,10 +98,10 @@ func TestGatewayServiceBuildUpstreamRequestMimicRecordsUnifiedWireIdentity(t *te
 	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-opus-4-8", true, true)
 
 	require.NoError(t, err)
-	wantUA := claude.DefaultHeaders["User-Agent"]
+	wantUA := claude.DefaultHeaders()["User-Agent"]
 	require.Equal(t, wantUA, getHeaderRaw(req.Header, "User-Agent"))
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
 	version := ExtractCLIVersion(wantUA)
 	require.Contains(t, string(wireBody), "cc_version="+version+"."+computeClaudeCodeFingerprint(wireBody, version)+";")
 	require.Equal(t, []accountUpstreamUserAgentRecord{{
@@ -139,10 +139,10 @@ func TestGatewayServiceBuildCountTokensRequestMimicRecordsUnifiedWireIdentity(t 
 	req, _, err := svc.buildCountTokensRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-opus-4-8", true)
 
 	require.NoError(t, err)
-	wantUA := claude.DefaultHeaders["User-Agent"]
+	wantUA := claude.DefaultHeaders()["User-Agent"]
 	require.Equal(t, wantUA, getHeaderRaw(req.Header, "User-Agent"))
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
 	require.Equal(t, []accountUpstreamUserAgentRecord{{
 		accountID: 14,
 		userAgent: wantUA,

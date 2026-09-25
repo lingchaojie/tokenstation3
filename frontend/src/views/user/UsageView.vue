@@ -1344,17 +1344,9 @@ const escapeCSVValue = (value: unknown): string => {
 
   const str = String(value)
   const escaped = str.replace(/"/g, '""')
-
-  // Prevent formula injection by prefixing dangerous characters with single quote
-  if (/^[=+\-@\t\r]/.test(str)) {
-    return `"\'${escaped}"`
-  }
-
-  // Escape values containing comma, quote, or newline
-  if (/[,"\n\r]/.test(str)) {
-    return `"${escaped}"`
-  }
-
+  if (str === '-') return str
+  if (/^[=+\-@\t\r]/.test(str)) return `"\'${escaped}"`
+  if (/[,"\n\r]/.test(str)) return `"${escaped}"`
   return str
 }
 

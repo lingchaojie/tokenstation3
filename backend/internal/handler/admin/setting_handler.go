@@ -324,6 +324,9 @@ func (h *SettingHandler) buildSystemSettingsPayload(
 		OpenAICodexClientVersion:               settings.OpenAICodexClientVersion,
 		OpenAICodexClientVersionSynced:         settings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:      settings.OpenAICodexVersionAutoSyncEnabled,
+		ClaudeCodeClientVersion:                settings.ClaudeCodeClientVersion,
+		ClaudeCodeClientVersionSynced:          settings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled:       settings.ClaudeCodeVersionAutoSyncEnabled,
 
 		MinCodexVersion:                      settings.MinCodexVersion,
 		MaxCodexVersion:                      settings.MaxCodexVersion,
@@ -714,6 +717,8 @@ type UpdateSettingsRequest struct {
 	OpenAICodexUserAgent                   *string `json:"openai_codex_user_agent"`
 	OpenAICodexClientVersion               *string `json:"openai_codex_client_version"`
 	OpenAICodexVersionAutoSyncEnabled      *bool   `json:"openai_codex_version_auto_sync_enabled"`
+	ClaudeCodeClientVersion                *string `json:"claude_code_client_version"`
+	ClaudeCodeVersionAutoSyncEnabled       *bool   `json:"claude_code_version_auto_sync_enabled"`
 
 	// codex_cli_only 加固（global-only）
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -1818,6 +1823,16 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 
+	if req.ClaudeCodeClientVersion != nil {
+		// Used in outbound headers and billing attribution; empty follows auto-sync.
+		normalized := strings.TrimSpace(*req.ClaudeCodeClientVersion)
+		if normalized != "" && service.NormalizeClaudeCodeClientVersion(normalized) == "" {
+			response.Error(c, http.StatusBadRequest, "claude_code_client_version must be empty or a valid version (e.g. 2.1.258)")
+			return
+		}
+		req.ClaudeCodeClientVersion = &normalized
+	}
+
 	// codex_cli_only 加固：最低/最高 Codex 版本（空=禁用，或合法 semver；max>=min）
 	if req.MinCodexVersion != "" && !semverPattern.MatchString(req.MinCodexVersion) {
 		response.Error(c, http.StatusBadRequest, "min_codex_version must be empty or a valid semver (e.g. 0.141.0)")
@@ -2114,10 +2129,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}(),
 		OpenAICodexClientVersion:          stringSetting(req.OpenAICodexClientVersion, previousSettings.OpenAICodexClientVersion),
 		OpenAICodexVersionAutoSyncEnabled: boolValueOrDefault(req.OpenAICodexVersionAutoSyncEnabled, previousSettings.OpenAICodexVersionAutoSyncEnabled),
-		MinCodexVersion:                   strings.TrimSpace(req.MinCodexVersion),
-		MaxCodexVersion:                   strings.TrimSpace(req.MaxCodexVersion),
-		CodexCLIOnlyBlacklist:             strings.TrimSpace(req.CodexCLIOnlyBlacklist),
-		CodexCLIOnlyWhitelist:             strings.TrimSpace(req.CodexCLIOnlyWhitelist),
+		ClaudeCodeClientVersion: func() string {
+			if req.ClaudeCodeClientVersion != nil {
+				return *req.ClaudeCodeClientVersion
+			}
+			return previousSettings.ClaudeCodeClientVersion
+		}(),
+		ClaudeCodeClientVersionSynced:    previousSettings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled: boolValueOrDefault(req.ClaudeCodeVersionAutoSyncEnabled, previousSettings.ClaudeCodeVersionAutoSyncEnabled),
+		MinCodexVersion:                  strings.TrimSpace(req.MinCodexVersion),
+		MaxCodexVersion:                  strings.TrimSpace(req.MaxCodexVersion),
+		CodexCLIOnlyBlacklist:            strings.TrimSpace(req.CodexCLIOnlyBlacklist),
+		CodexCLIOnlyWhitelist:            strings.TrimSpace(req.CodexCLIOnlyWhitelist),
 		CodexCLIOnlyAllowAppServerClients: func() bool {
 			if req.CodexCLIOnlyAllowAppServerClients != nil {
 				return *req.CodexCLIOnlyAllowAppServerClients
@@ -2159,10 +2182,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			req.OpenAILowUpstreamRatePriorityEnabled,
 			previousSettings.OpenAILowUpstreamRatePriorityEnabled,
 		),
-		OpenAIOAuthSchedulingRateMultiplier: float64ValueOrDefault(
-			req.OpenAIOAuthSchedulingRateMultiplier,
-			previousSettings.OpenAIOAuthSchedulingRateMultiplier,
-		),
+		OpenAIOAuthSchedulingRateMultiplier: func() *float64 {
+			if _, sent := sentFields[service.SettingKeyOpenAIOAuthSchedulingRateMultiplier]; sent {
+				return req.OpenAIOAuthSchedulingRateMultiplier
+			}
+			return previousSettings.OpenAIOAuthSchedulingRateMultiplier
+		}(),
 		OpenAIAdvancedSchedulerStickyWeightedEnabled: func() bool {
 			if req.OpenAIAdvancedSchedulerStickyWeightedEnabled != nil {
 				return *req.OpenAIAdvancedSchedulerStickyWeightedEnabled
@@ -2940,6 +2965,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if req.OpenAICodexVersionAutoSyncEnabled != nil && before.OpenAICodexVersionAutoSyncEnabled != after.OpenAICodexVersionAutoSyncEnabled {
 		changed = append(changed, "openai_codex_version_auto_sync_enabled")
 	}
+	if before.ClaudeCodeClientVersion != after.ClaudeCodeClientVersion {
+		changed = append(changed, "claude_code_client_version")
+	}
+	if before.ClaudeCodeVersionAutoSyncEnabled != after.ClaudeCodeVersionAutoSyncEnabled {
+		changed = append(changed, "claude_code_version_auto_sync_enabled")
+	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")
 	}
@@ -2958,7 +2989,7 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if req.OpenAILowUpstreamRatePriorityEnabled != nil && before.OpenAILowUpstreamRatePriorityEnabled != after.OpenAILowUpstreamRatePriorityEnabled {
 		changed = append(changed, "openai_low_upstream_rate_priority_enabled")
 	}
-	if req.OpenAIOAuthSchedulingRateMultiplier != nil && before.OpenAIOAuthSchedulingRateMultiplier != after.OpenAIOAuthSchedulingRateMultiplier {
+	if !equalNullableFloat(before.OpenAIOAuthSchedulingRateMultiplier, after.OpenAIOAuthSchedulingRateMultiplier) {
 		changed = append(changed, "openai_oauth_scheduling_rate_multiplier")
 	}
 	if before.OpenAIAdvancedSchedulerStickyWeightedEnabled != after.OpenAIAdvancedSchedulerStickyWeightedEnabled {

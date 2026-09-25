@@ -119,8 +119,8 @@ import { ref, reactive, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
+import { PLATFORM_QUOTA_PLATFORMS } from '@/api/admin/users'
 import type { AdminUser, PlatformQuotaItem, PlatformQuotaPlatform, PlatformQuotaWindow } from '@/types'
-import { CONCRETE_PLATFORM_VALUES } from '@/constants/platforms'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 
 const props = defineProps<{ show: boolean; user: AdminUser | null }>()
@@ -128,8 +128,6 @@ const emit = defineEmits(['close', 'success'])
 
 const { t } = useI18n()
 const appStore = useAppStore()
-
-const PLATFORMS: PlatformQuotaPlatform[] = CONCRETE_PLATFORM_VALUES
 
 interface QuotaRow {
   platform: PlatformQuotaPlatform
@@ -171,7 +169,7 @@ function emptyRow(p: PlatformQuotaPlatform): QuotaRow {
 function normalize(items: PlatformQuotaItem[]): QuotaRow[] {
   const byPlatform = new Map<PlatformQuotaPlatform, PlatformQuotaItem>()
   for (const it of items) byPlatform.set(it.platform, it)
-  return PLATFORMS.map((p) => {
+  return PLATFORM_QUOTA_PLATFORMS.map((p) => {
     const it = byPlatform.get(p)
     if (!it) return emptyRow(p)
     return {
@@ -200,7 +198,7 @@ async function load() {
     savedPlatforms.value = persistedPlatforms(data.platform_quotas || [])
   } catch {
     appStore.showError(t('admin.users.platformQuota.loadFailed'))
-    quotas.value = PLATFORMS.map(emptyRow)
+    quotas.value = PLATFORM_QUOTA_PLATFORMS.map(emptyRow)
     savedPlatforms.value = new Set()
   } finally {
     loading.value = false
@@ -226,14 +224,12 @@ function onClearAll() {
 
 async function onSave() {
   if (!props.user) return
-  // 校验所有 input：v-model.number 在用户输入"0."等中间状态时会写回 NaN，
-  // 之前的 normalizeLimit(NaN) 静默返回 null（"无限制"），把"有限额"配置悄悄改成"无限制"。
-  // 这里在 save 前显式检测 NaN，提示用户修正后再提交。
+  // 拒绝非法数值，避免 normalizeLimit 将其静默转换为 null（无限额）。
   const invalid: string[] = []
   for (const row of quotas.value) {
     for (const win of ['daily', 'weekly', 'monthly'] as const) {
       const v = row[`${win}_limit_usd` as const]
-      if (typeof v === 'number' && Number.isNaN(v)) {
+      if (typeof v === 'number' && (!Number.isFinite(v) || v < 0)) {
         invalid.push(`${row.platform}.${win}`)
       }
     }
@@ -263,7 +259,7 @@ async function onSave() {
 }
 
 // 仅在合法输入下返回数字：null/undefined/NaN/±Inf/负数 → null（视为"无限额"）。
-// 调用方负责在 NaN 路径上做单独的用户提示（见 onSave）。
+// 调用方在保存前拦截非法数值（见 onSave）。
 function normalizeLimit(v: number | null | undefined): number | null {
   if (v === null || v === undefined) return null
   if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v

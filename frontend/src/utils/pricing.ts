@@ -25,6 +25,11 @@ export function formatScaled(value: number | null, scale: number, minFractionDig
 
 import type { UserPricingInterval } from '@/api/channels'
 
+/** Keep the implicit billing default aligned with the backend model matcher. */
+export function defaultReasoningEffortMultiplier(model: string, effort: string): number {
+  return effort === 'max' && /fable(?:-5-1|-5\.1|5\.1|51)(?!\d)/i.test(model.trim()) ? 3 : 1
+}
+
 type TokenPrices = Pick<UserPricingInterval, 'input_price' | 'output_price' | 'cache_write_price' | 'cache_write_1h_price' | 'cache_read_price'>
 
 export function resolveIntervalPrices(iv: UserPricingInterval, base: TokenPrices): UserPricingInterval {

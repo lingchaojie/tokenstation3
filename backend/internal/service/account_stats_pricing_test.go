@@ -37,10 +37,11 @@ func resolveAccountStatsCost(
 func tryCustomRules(
 	channel *Channel, accountID, groupID int64,
 	platform, model string, tokens UsageTokens, requestCount int,
+	reasoningEfforts ...string,
 ) *float64 {
 	return tryCustomRulesWithUsage(
 		channel, accountID, groupID, platform, model, tokens,
-		accountStatsCostUsage{requestCount: requestCount},
+		accountStatsCostUsage{requestCount: requestCount}, reasoningEfforts...,
 	)
 }
 

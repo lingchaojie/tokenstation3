@@ -92,8 +92,8 @@ func TestIdentityService_GetOrCreateFingerprint_UsesDefaultUAForInitialNonClaude
 	fp, err := svc.GetOrCreateFingerprint(context.Background(), 123, headers)
 	require.NoError(t, err)
 
-	require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent)
-	require.Equal(t, defaultFingerprint.UserAgent, cache.fingerprint.UserAgent)
+	require.Equal(t, defaultFingerprint().UserAgent, fp.UserAgent)
+	require.Equal(t, defaultFingerprint().UserAgent, cache.fingerprint.UserAgent)
 }
 
 func TestIdentityService_GetOrCreateFingerprint_ReplacesPollutedNonClaudeUAWithClaudeUA(t *testing.T) {
@@ -135,8 +135,8 @@ func TestIdentityService_GetOrCreateFingerprint_CleansPollutedNonClaudeUAOnNextN
 	require.NoError(t, err)
 
 	require.Equal(t, "stable-client-id", fp.ClientID)
-	require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent)
-	require.Equal(t, defaultFingerprint.UserAgent, cache.fingerprint.UserAgent)
+	require.Equal(t, defaultFingerprint().UserAgent, fp.UserAgent)
+	require.Equal(t, defaultFingerprint().UserAgent, cache.fingerprint.UserAgent)
 }
 
 func strconvQuote(v string) string {
