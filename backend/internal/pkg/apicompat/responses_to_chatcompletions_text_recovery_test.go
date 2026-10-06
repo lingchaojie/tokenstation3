@@ -15,8 +15,8 @@ import (
 // terminal output array was empty, so this upstream shape silently lost text.
 func TestSupplementResponseOutput_RecoversTextWhenTerminalMessageIsEmpty(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "Hello, "})
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "world"})
+	require.NoError(t, acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "Hello, "}))
+	require.NoError(t, acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "world"}))
 
 	resp := &ResponsesResponse{
 		ID:     "resp_empty_msg",
@@ -43,7 +43,7 @@ func TestSupplementResponseOutput_RecoversTextWhenTerminalMessageIsEmpty(t *test
 // Whitespace-only terminal text counts as missing too.
 func TestSupplementResponseOutput_RecoversTextWhenTerminalTextIsBlank(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "real text"})
+	require.NoError(t, acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "real text"}))
 
 	resp := &ResponsesResponse{
 		Status: "completed",
@@ -66,7 +66,7 @@ func TestSupplementResponseOutput_RecoversTextWhenTerminalTextIsBlank(t *testing
 // the accumulated text; existing items are kept.
 func TestSupplementResponseOutput_AppendsMessageWhenTerminalHasNoMessage(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "only in the stream"})
+	require.NoError(t, acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "only in the stream"}))
 
 	resp := &ResponsesResponse{
 		Status: "completed",
@@ -99,7 +99,7 @@ func TestSupplementResponseOutput_AppendsMessageWhenTerminalHasNoMessage(t *test
 // accumulated stream.
 func TestSupplementResponseOutput_KeepsTerminalTextAuthoritative(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "from the stream"})
+	require.NoError(t, acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "from the stream"}))
 
 	resp := &ResponsesResponse{
 		Status: "completed",
