@@ -186,7 +186,19 @@
                 {{ t('keys.useKeyModal.codexModelCatalog.description') }}
               </p>
               <p class="mt-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300">
-                {{ codexModelCatalogPath }}
+                {{ codexModelCatalogMode === 'remote' ? codexModelCatalogUrl : codexModelCatalogPath }}
+              </p>
+              <select
+                v-model="codexModelCatalogMode"
+                data-testid="codex-model-catalog-mode"
+                :aria-label="t('keys.useKeyModal.codexModelCatalog.mode')"
+                class="input mt-2 text-sm"
+              >
+                <option value="remote" :disabled="codexModelCatalogOversized">{{ t('keys.useKeyModal.codexModelCatalog.remote') }}</option>
+                <option value="file">{{ t('keys.useKeyModal.codexModelCatalog.local') }}</option>
+              </select>
+              <p v-if="codexModelCatalogOversized" class="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                {{ t('keys.useKeyModal.codexModelCatalog.oversized') }}
               </p>
             </div>
             <button
@@ -255,13 +267,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, h, watch, type Component } from 'vue'
+import { ref, computed, h, watch, onBeforeUnmount, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { saveAs } from 'file-saver'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
-import { fetchCodexModelsManifest } from '@/api/codex'
+import { buildCodexModelCatalogUrl, fetchCodexModelsManifest } from '@/api/codex'
 import type { GroupPlatform } from '@/types'
 import { buildClientConfigFiles } from './clientConfigFiles'
 import {
@@ -276,6 +288,7 @@ interface Props {
   baseUrl: string
   // 'unified' = provider-agnostic key that works with both Anthropic and OpenAI clients.
   platform: GroupPlatform | 'unified' | null
+  claudeCodeOnly?: boolean
   allowMessagesDispatch?: boolean
 }
 
@@ -311,6 +324,10 @@ type CodexModelManifestState = 'idle' | 'loading' | 'ready' | 'error'
 const codexModelManifestState = ref<CodexModelManifestState>('idle')
 const codexModelManifestContent = ref('')
 const codexModelManifestModelCount = ref(0)
+const codexModelCatalogMode = ref<'remote' | 'file'>('file')
+const codexModelManifestResponseBytes = ref(0)
+const codexModelCatalogOversized = computed(() => codexModelManifestResponseBytes.value > 1024 * 1024)
+const codexModelCatalogUrl = computed(() => buildCodexModelCatalogUrl(props.baseUrl))
 let codexModelManifestController: AbortController | null = null
 let codexModelManifestRequestID = 0
 
@@ -326,6 +343,10 @@ const codexModelCatalogPath = computed(() => {
   return joinConfigPath(configDir, 'codex-models.json', isWindows)
 })
 
+// Codex expands a leading ~/ on every platform but not %userprofile%, which it
+// resolves relative to the config directory, so config.toml always uses ~/.
+const CODEX_MODEL_CATALOG_CONFIG_PATH = '~/.codex/codex-models.json'
+
 const codexManifestContext = computed(() => {
   if (!showCodexModelCatalog.value) return ''
   return `${props.platform}|${props.baseUrl}|${props.apiKey}`
@@ -333,6 +354,7 @@ const codexManifestContext = computed(() => {
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
+  if (props.claudeCodeOnly) return 'claude'
   switch (props.platform) {
     case 'openai':
       return 'codex'
@@ -342,12 +364,14 @@ const defaultClientTab = computed(() => {
       return 'gemini'
     case 'antigravity':
       return 'claude'
+    case 'typesafe':
+      return 'systemone'
     default:
       return 'claude'
   }
 })
 
-watch(() => props.platform, () => {
+watch(() => [props.platform, props.claudeCodeOnly], () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
   codexAuthMode.value = 'legacy'
@@ -437,6 +461,9 @@ const SparkleIcon = {
 
 const clientTabs = computed((): TabConfig[] => {
   if (!props.platform) return []
+  if (props.claudeCodeOnly) {
+    return [{ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon }]
+  }
   switch (props.platform) {
     case 'unified':
       return [
@@ -481,6 +508,10 @@ const clientTabs = computed((): TabConfig[] => {
       return [
         { id: 'grok', label: t('keys.useKeyModal.cliTabs.grokCli'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+      ]
+    case 'typesafe':
+      return [
+        { id: 'systemone', label: t('keys.useKeyModal.cliTabs.systemOne'), icon: TerminalIcon }
       ]
     case 'deepseek':
       return [
@@ -576,6 +607,8 @@ const platformDescription = computed(() => {
       return activeClientTab.value === 'codex'
         ? t('keys.useKeyModal.deepseek.codexDescription')
         : t('keys.useKeyModal.deepseek.description')
+    case 'typesafe':
+      return t('keys.useKeyModal.typesafe.description')
     default:
       return t('keys.useKeyModal.description')
   }
@@ -633,6 +666,8 @@ const platformNote = computed(() => {
       return activeClientTab.value === 'codex'
         ? t('keys.useKeyModal.deepseek.codexNote')
         : t('keys.useKeyModal.note')
+    case 'typesafe':
+      return t('keys.useKeyModal.typesafe.note')
     default:
       return t('keys.useKeyModal.note')
   }
@@ -647,6 +682,7 @@ function resetCodexModelManifest() {
   codexModelManifestState.value = 'idle'
   codexModelManifestContent.value = ''
   codexModelManifestModelCount.value = 0
+  codexModelManifestResponseBytes.value = 0
 }
 
 async function loadCodexModelManifest() {
@@ -663,6 +699,8 @@ async function loadCodexModelManifest() {
     if (requestID !== codexModelManifestRequestID) return
     codexModelManifestContent.value = result.content
     codexModelManifestModelCount.value = result.modelCount
+    codexModelManifestResponseBytes.value = result.responseBytes
+    if (codexModelCatalogOversized.value) codexModelCatalogMode.value = 'file'
     codexModelManifestState.value = 'ready'
   } catch (error) {
     const errorName = error && typeof error === 'object' && 'name' in error
@@ -676,6 +714,8 @@ async function loadCodexModelManifest() {
     }
   }
 }
+
+onBeforeUnmount(resetCodexModelManifest)
 
 function downloadCodexModelManifest() {
   if (!codexModelManifestContent.value) return
@@ -776,8 +816,11 @@ const currentFiles = computed((): FileConfig[] => {
       codexAuthMode: codexAuthMode.value,
       codexModel,
       codexReasoningEffort,
-      codexModelCatalogPath: activeClientTab.value === 'codex'
-        ? codexModelCatalogPath.value
+      codexModelCatalogPath: activeClientTab.value === 'codex' && codexModelCatalogMode.value === 'file'
+        ? CODEX_MODEL_CATALOG_CONFIG_PATH
+        : undefined,
+      codexModelCatalogUrl: activeClientTab.value === 'codex' && codexModelCatalogMode.value === 'remote'
+        ? codexModelCatalogUrl.value
         : undefined
     }).map(({ hintKey, ...file }) => hintKey
       ? { ...file, hint: t(hintKey) }
@@ -838,6 +881,8 @@ const currentFiles = computed((): FileConfig[] => {
         return [generateOpenAIImagen2PythonSdkFile(apiBase, apiKey)]
       }
       return []
+    case 'typesafe':
+      return [generateSystemOneCurl(baseRoot, apiKey)]
     case 'openai':
       if (activeClientTab.value === 'openai-python-sdk') {
         return [generateOpenAIPythonSdkFile(apiBase, apiKey)]
@@ -868,6 +913,46 @@ const currentFiles = computed((): FileConfig[] => {
       return []
   }
 })
+
+function generateSystemOneCurl(baseUrl: string, apiKey: string): FileConfig {
+  const endpoint = `${baseUrl}/v1/systemone`
+  const payload = `{
+  "model": "jev-latest",
+  "state": "Text to evaluate",
+  "questions": {
+    "safety": {
+      "type": "noul",
+      "instructions": "Evaluate whether the text is unsafe"
+    }
+  }
+}`
+  if (activeTab.value === 'powershell') {
+    return {
+      path: 'PowerShell',
+      content: `$headers = @{ Authorization = "Bearer ${apiKey}" }
+$body = @'
+${payload}
+'@
+Invoke-RestMethod -Method Post -Uri "${endpoint}" -Headers $headers -ContentType "application/json" -Body $body`
+    }
+  }
+  if (activeTab.value === 'cmd') {
+    return {
+      path: 'Command Prompt',
+      content: String.raw`curl -X POST "${endpoint}" ^
+  -H "Authorization: Bearer ${apiKey}" ^
+  -H "Content-Type: application/json" ^
+  --data "{\"model\":\"jev-latest\",\"state\":\"Text to evaluate\",\"questions\":{\"safety\":{\"type\":\"noul\",\"instructions\":\"Evaluate whether the text is unsafe\"}}}"`
+    }
+  }
+  return {
+    path: 'Terminal',
+    content: `curl -X POST "${endpoint}" \\
+  -H "Authorization: Bearer ${apiKey}" \\
+  -H "Content-Type: application/json" \\
+  --data '${payload}'`
+  }
+}
 
 interface WorkBuddyModelConfig {
   id: string
@@ -1267,6 +1352,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'gpt-5.4-mini': openaiModel('GPT-5.4 Mini', 400000),
     'gpt-5.3-codex-spark': openaiModel('GPT-5.3 Codex Spark', 128000, 32000),
     'gpt-5.2': openaiModel('GPT-5.2', 400000),
+    'gpt-6.1-sol': openaiModel('GPT-6.1 Sol', 1050000, 128000, maxReasoningVariants),
     'gpt-6-sol': openaiModel('GPT-6 Sol', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
     'gpt-6-luna': openaiModel('GPT-6 Luna', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
     'codex-mini-latest': {
@@ -1545,6 +1631,11 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'claude-opus-5-5': {
       ...claudeModel('Claude Opus 5.5', 1000000, 128000, { type: 'adaptive' }),
       options: { thinking: { type: 'adaptive' }, effort: 'medium' },
+      variants: Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max'].map(effort => [effort, { effort }]))
+    },
+    'claude-sonnet-5-5': {
+      ...claudeModel('Claude Sonnet 5.5', 1000000, 128000, { type: 'adaptive' }),
+      options: { thinking: { type: 'adaptive' }, effort: 'high' },
       variants: Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max'].map(effort => [effort, { effort }]))
     },
     'claude-fable-5-1': claudeAdaptive('Claude Fable 5.1'),

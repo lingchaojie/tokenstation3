@@ -3593,3 +3593,36 @@ func (oauthPendingFlowTotpEncryptorStub) Encrypt(plaintext string) (string, erro
 func (oauthPendingFlowTotpEncryptorStub) Decrypt(ciphertext string) (string, error) {
 	return ciphertext, nil
 }
+
+func (s *oauthPendingFlowEmailCacheStub) IncrVerificationCodeAttempts(_ context.Context, email string, expected *service.VerificationCodeData) (int, error) {
+	data := s.verificationCodes[email]
+	if data == nil {
+		return 0, errors.New("verification code not found")
+	}
+	if expected == nil || data.Code != expected.Code || !data.CreatedAt.Equal(expected.CreatedAt) {
+		return 0, errors.New("verification code changed")
+	}
+	data.Attempts++
+	return data.Attempts, nil
+}
+
+func (s *oauthPendingFlowEmailCacheStub) ConsumeVerificationCode(_ context.Context, email string, expected *service.VerificationCodeData) (bool, error) {
+	data := s.verificationCodes[email]
+	if data == nil || expected == nil || data.Code != expected.Code || !data.CreatedAt.Equal(expected.CreatedAt) {
+		return false, nil
+	}
+	delete(s.verificationCodes, email)
+	return true, nil
+}
+
+func (s *oauthPendingFlowEmailCacheStub) ConsumeNotifyVerifyCode(context.Context, string, *service.VerificationCodeData) (bool, error) {
+	return false, nil
+}
+
+func (s *oauthPendingFlowEmailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string, *service.VerificationCodeData) (int, error) {
+	return 0, errors.New("notify verification code not found")
+}
+
+func (s *oauthPendingFlowEmailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
+}

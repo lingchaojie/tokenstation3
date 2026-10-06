@@ -155,6 +155,28 @@ func TestAPIKeyService_AutoBinding_NoIngressLeavesGroupUnresolved(t *testing.T) 
 	require.Nil(t, key.Group)
 }
 
+func TestB8deSystemOneRejectsDynamicBindingBeforeDefaultResolution(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkey.IngressProvider, PlatformTypeSafe)
+	for _, mode := range []string{APIKeyGroupBindingModeAuto, APIKeyGroupBindingModeDefaultFollow} {
+		t.Run(mode, func(t *testing.T) {
+			// Configured chat defaults must not accidentally route native TypeSafe.
+			svc := newAutoRoutingService(t, 10, 20)
+			key := &APIKey{GroupBindingMode: mode, KeyType: APIKeyTypeAnthropic, User: &User{ID: 7}}
+			err := svc.applyDefaultFollowGroup(ctx, key)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "explicitly bound")
+			require.Nil(t, key.Group)
+			require.Nil(t, key.GroupID)
+		})
+	}
+	for _, mode := range []string{APIKeyGroupBindingModeStatic, ""} {
+		group := &Group{ID: 30, Platform: PlatformTypeSafe}
+		key := &APIKey{GroupBindingMode: mode, GroupID: &group.ID, Group: group}
+		require.NoError(t, (&APIKeyService{}).applyDefaultFollowGroup(ctx, key))
+		require.Same(t, group, key.Group)
+	}
+}
+
 func TestAPIKeyService_Create_DefaultsToAutoBindingWhenNoProvider(t *testing.T) {
 	userID := int64(42)
 	customKey := "unified-create-key-1234567890"

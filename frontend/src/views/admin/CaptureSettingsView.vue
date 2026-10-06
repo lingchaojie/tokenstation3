@@ -96,6 +96,13 @@
               <Toggle v-model="form.platforms.grok" />
             </SettingRow>
             <SettingRow
+              data-test="capture-typesafe"
+              :title="t('admin.captureSettings.platforms.typesafe')"
+              :description="t('admin.captureSettings.platforms.typesafeDescription')"
+            >
+              <Toggle v-model="form.platforms.typesafe" />
+            </SettingRow>
+            <SettingRow
               data-test="capture-openai"
               :title="t('admin.captureSettings.platforms.openai')"
               :description="t('admin.captureSettings.platforms.openaiDescription')"
@@ -335,7 +342,7 @@ const historyRanges: CaptureHistoryRange[] = ['24h', '7d', '30d']
 const defaultPolicy = (): CaptureRuntimePolicy => ({
   version: 1,
   enabled: false,
-  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
+  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true, typesafe: false },
   outcomes: { success: true, terminal_error: true },
   content: { raw_request: true, raw_response: true, request_headers: true, response_headers: true },
   models_list_configs: { anthropic: ['claude-fable-5', 'claude-opus-5'], kiro: ['claude-fable-5', 'claude-opus-5'], openai: [] },
@@ -377,7 +384,7 @@ const lossReasons = computed(() => Object.entries(settings.value?.dropped_by_rea
 function copyPolicy(policy: CaptureRuntimePolicy): void {
   Object.assign(form, {
     ...policy,
-    platforms: { ...policy.platforms },
+    platforms: { ...defaultPolicy().platforms, ...policy.platforms },
     outcomes: { ...policy.outcomes },
     content: { ...policy.content },
     models_list_configs: {

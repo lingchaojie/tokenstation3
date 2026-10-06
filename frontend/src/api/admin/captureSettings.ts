@@ -12,6 +12,7 @@ export interface CaptureRuntimePolicy {
     gemini: boolean
     antigravity: boolean
     grok: boolean
+    typesafe: boolean
   }
   outcomes: {
     success: boolean

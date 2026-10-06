@@ -942,6 +942,7 @@
       :base-url="publicSettings?.api_base_url || ''"
       :platform="useKeyPlatform"
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch ?? false"
+      :claude-code-only="selectedKey?.group?.claude_code_only || false"
       @close="closeUseKeyModal"
     />
 
@@ -1011,6 +1012,7 @@ import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import {
+  CC_SWITCH_USAGE_SCRIPT,
   buildCcSwitchImportDeeplink,
   type CcSwitchClientType
 } from '@/utils/ccswitchImport'
@@ -1180,6 +1182,10 @@ const copiedKeyId = ref<number | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
 const columnDropdownRef = ref<HTMLElement | null>(null)
 const useKeyPlatform = computed<GroupPlatform | 'unified' | null>(() => {
+  const key = selectedKey.value
+  if (key?.group_binding_mode === 'static' && key.group_id && key.group?.platform === 'typesafe') {
+    return 'typesafe'
+  }
   const keyType = selectedKey.value?.key_type
   if (keyType === 'anthropic' || keyType === 'openai' || keyType === 'unified') {
     return keyType
@@ -1643,22 +1649,7 @@ const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
   // Unified keys work with both providers; CC-Switch imports as Claude Code (Anthropic).
   const platform = row.key_type === 'unified' ? 'anthropic' : row.key_type
 
-  const usageScript = `({
-    request: {
-      url: "{{baseUrl}}/v1/usage",
-      method: "GET",
-      headers: { "Authorization": "Bearer {{apiKey}}" }
-    },
-    extractor: function(response) {
-      const remaining = response?.remaining ?? response?.quota?.remaining ?? response?.balance;
-      const unit = response?.unit ?? response?.quota?.unit ?? "USD";
-      return {
-        isValid: response?.is_active ?? response?.isValid ?? true,
-        remaining,
-        unit
-      };
-    }
-  })`
+  const usageScript = CC_SWITCH_USAGE_SCRIPT
   const providerName = (publicSettings.value?.site_name || 'sub2api').trim() || 'sub2api'
   const deeplink = buildCcSwitchImportDeeplink({
     baseUrl,

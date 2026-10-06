@@ -361,6 +361,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   deepseek: 'DeepSeek',
   minimax: 'MiniMax',
   opencode_go: 'OpenCode',
+  typesafe: 'TypeSafe / Jev',
 }
 
 const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p
@@ -387,7 +388,7 @@ const platformCards = computed<FusedPlatformCard[]>(() => {
     if (hasAnyLimit(q)) platforms.add(platform)
   }
 
-  const PLATFORM_ORDER = ['anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
+  const PLATFORM_ORDER = ['anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe']
   const cards: FusedPlatformCard[] = []
 
   for (const p of platforms) {

@@ -14,6 +14,7 @@ import (
 )
 
 func TestInboundProviderFromPath(t *testing.T) {
+	require.Equal(t, service.PlatformTypeSafe, InboundProviderFromPath("/v1/systemone"), "do not resolve the Anthropic default for native TypeSafe requests")
 	cases := []struct {
 		path string
 		want string

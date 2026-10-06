@@ -546,7 +546,7 @@ func TestSettingService_ParseSettingsDefaultsOpenAIOAuthSchedulingRateMultiplier
 	require.Equal(t, testPtrFloat64(0.05), svc.parseSettings(map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.05"}).OpenAIOAuthSchedulingRateMultiplier)
 	require.Equal(t, testPtrFloat64(0), svc.parseSettings(map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0"}).OpenAIOAuthSchedulingRateMultiplier)
 	for _, raw := range []string{"", " ", "invalid", "-1", "NaN", "+Inf"} {
-		require.Nil(t, svc.parseSettings(map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: raw}).OpenAIOAuthSchedulingRateMultiplier, raw)
+		require.Equal(t, testPtrFloat64(1), svc.parseSettings(map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: raw}).OpenAIOAuthSchedulingRateMultiplier, raw)
 	}
 }
 

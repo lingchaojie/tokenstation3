@@ -163,7 +163,7 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 		"store":false,
 		"tools":[{"type":"web_search"}],
 		"tool_choice":{"type":"web_search"},
-		"input":[{"role":"user","content":"What is new in AI today?"}]
+		"input":[{"type":"message","role":"user","content":"What is new in AI today?"}]
 	}`, string(forcedPayload))
 
 	autoPayload, err := BuildWebChatResponsesPayload(context.Background(), fakeWebChatStorageWithoutOpens(t), caps, messages, true, WebChatCompletionsPayloadOptions{
@@ -178,7 +178,7 @@ func TestBuildWebChatResponsesPayload_IncludesWebSearchToolChoice(t *testing.T) 
 		"store":false,
 		"tools":[{"type":"web_search"}],
 		"tool_choice":"auto",
-		"input":[{"role":"user","content":"What is new in AI today?"}]
+		"input":[{"type":"message","role":"user","content":"What is new in AI today?"}]
 	}`, string(autoPayload))
 }
 

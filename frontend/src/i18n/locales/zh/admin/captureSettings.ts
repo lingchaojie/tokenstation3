@@ -34,6 +34,8 @@ export default {
       gemini: 'Gemini',
       antigravity: 'Antigravity',
       grok: 'Grok',
+      typesafe: 'TypeSafe',
+      typesafeDescription: '仅原生 /v1/systemone；默认关闭，需管理员显式开启，仍受下方结果、内容和用户/分组范围限制。',
       openai: 'OpenAI 文本接口',
       openaiDescription: '支持 /v1/responses、/v1/chat/completions、/v1/messages 和 Responses WebSocket；不包含图片、视频和 Embeddings。',
     },

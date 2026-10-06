@@ -13,9 +13,9 @@ const (
 	// entry platform or bypass mixed-scheduling eligibility checks.
 	RequiredAccountPlatform Key = "ctx_required_account_platform"
 
-	// IngressProvider 当前请求按入口路径（SDK 端点）推断出的 provider（anthropic/openai），
+	// IngressProvider 当前请求按入口路径（SDK 端点）推断出的 provider，
 	// 由 handler.InboundEndpointMiddleware 设置。统一（auto 绑定模式）Key 在鉴权时据此
-	// 解析对应 provider 的默认分组。
+	// 解析 anthropic/openai 的默认分组；typesafe 用于明确拒绝动态绑定 Key。
 	IngressProvider Key = "ctx_ingress_provider"
 
 	// IngressModel 当前请求体里的顶层 model 字段。由 handler.InboundEndpointMiddleware

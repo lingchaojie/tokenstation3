@@ -339,6 +339,7 @@ func expectedGroupLifecycleBuckets(groupID int64) []SchedulerBucket {
 		PlatformDeepseek,
 		PlatformMiniMax,
 		PlatformOpenCodeGo,
+		PlatformTypeSafe,
 	}
 	buckets := make([]SchedulerBucket, 0, len(platforms)*2+2)
 	for _, platform := range platforms {

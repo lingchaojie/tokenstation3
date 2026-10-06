@@ -66,7 +66,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	// Resolve the mapped model before choosing its thinking/tool protocol.
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
-	if err := validateClaudeOpus55Request(body, upstreamModel); err != nil {
+	if err := validateClaude55Request(body, upstreamModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -439,6 +439,11 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 		if event.Type == "message_start" && event.Message != nil {
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
+
+		// Keep the outward Responses/Chat usage on the same normalized buckets used
+		// for billing, including converter handlers that consume event usage.
+		syncAnthropicResponsesUsage(anthState, usage)
+		normalizeAnthropicEventUsageForResponses(event, usage)
 
 		// 客户端已断开：跳过转换与写出，继续读上游直到流结束（usage 完整、
 		// 连接及时归还），不再提前 return。

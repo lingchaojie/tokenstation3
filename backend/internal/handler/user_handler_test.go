@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -932,4 +933,35 @@ func TestUserHandlerStartIdentityBindingReturnsAuthorizeURL(t *testing.T) {
 	require.Contains(t, resp.Data.AuthorizeURL, "/api/v1/auth/oauth/wechat/bind/start")
 	require.Contains(t, resp.Data.AuthorizeURL, "intent=bind_current_user")
 	require.Contains(t, resp.Data.AuthorizeURL, "redirect=%2Fsettings%2Fprofile")
+}
+
+func (s *userHandlerEmailCacheStub) IncrVerificationCodeAttempts(_ context.Context, _ string, expected *service.VerificationCodeData) (int, error) {
+	if s.data == nil {
+		return 0, errors.New("verification code not found")
+	}
+	if expected == nil || s.data.Code != expected.Code || !s.data.CreatedAt.Equal(expected.CreatedAt) {
+		return 0, errors.New("verification code changed")
+	}
+	s.data.Attempts++
+	return s.data.Attempts, nil
+}
+
+func (s *userHandlerEmailCacheStub) ConsumeVerificationCode(_ context.Context, _ string, expected *service.VerificationCodeData) (bool, error) {
+	if s.data == nil || expected == nil || s.data.Code != expected.Code || !s.data.CreatedAt.Equal(expected.CreatedAt) {
+		return false, nil
+	}
+	s.data = nil
+	return true, nil
+}
+
+func (s *userHandlerEmailCacheStub) ConsumeNotifyVerifyCode(context.Context, string, *service.VerificationCodeData) (bool, error) {
+	return false, nil
+}
+
+func (s *userHandlerEmailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string, *service.VerificationCodeData) (int, error) {
+	return 0, errors.New("notify verification code not found")
+}
+
+func (s *userHandlerEmailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
 }

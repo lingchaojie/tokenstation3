@@ -163,6 +163,8 @@ describe('CaptureSettingsView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="capture-openai"] [role="switch"]').attributes('aria-checked')).toBe('false')
+    // Legacy settings without the new field must never enable it implicitly.
+    expect(wrapper.get('[data-test="capture-typesafe"] [role="switch"]').attributes('aria-checked')).toBe('false')
     expect(wrapper.get('[data-test="capture-master"] [role="switch"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.text()).toContain('admin.captureSettings.content.warning')
     expect(wrapper.text()).toContain('ClickHouse 传输异常')
@@ -252,13 +254,14 @@ describe('CaptureSettingsView', () => {
     await flushPromises()
 
     await wrapper.get('[data-test="capture-openai"] [role="switch"]').trigger('click')
+    await wrapper.get('[data-test="capture-typesafe"] [role="switch"]').trigger('click')
     await wrapper.get('[data-test="capture-save"]').trigger('click')
     await flushPromises()
 
     expect(updateCaptureSettings).toHaveBeenCalledWith(expect.objectContaining({
       version: 1,
       enabled: false,
-      platforms: { anthropic: true, kiro: true, openai: true, gemini: true, antigravity: true, grok: true },
+      platforms: { anthropic: true, kiro: true, openai: true, gemini: true, antigravity: true, grok: true, typesafe: true },
       outcomes: { success: true, terminal_error: true },
       content: {
         raw_request: true,

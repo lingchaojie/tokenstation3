@@ -19,6 +19,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
 	"entgo.io/ent/dialect"
@@ -258,17 +260,21 @@ func TestAuthServiceBindEmailIdentity_RejectsAliasOfExistingEmailOnAnotherUser(t
 }
 
 func TestAuthServiceBindEmailIdentity_AllowsOnlyOneConcurrentAliasVariant(t *testing.T) {
-	cache := &emailBindCacheStub{
-		data: &service.VerificationCodeData{
-			Code:      "123456",
-			CreatedAt: time.Now().UTC(),
-			ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
-		},
-	}
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	cache := repository.NewEmailCache(rdb)
 	svc, _, client := newAuthServiceForEmailBind(t, nil, cache, nil)
 
 	ctx := context.Background()
 	unique := fmt.Sprintf("%d", time.Now().UnixNano())
+	// Distinct alias addresses have independent code keys even though binding
+	// canonicalizes them to the same inbox. Use the actual cache for this race.
+	for _, alias := range []string{"one", "two"} {
+		require.NoError(t, cache.SetVerificationCode(ctx, "inbox-"+unique+"+"+alias+"@gmail.com", &service.VerificationCodeData{
+			Code: "123456", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
+		}, time.Minute))
+	}
 	first := createEmailBindTestUser(
 		t,
 		client,
@@ -1164,4 +1170,35 @@ func cloneEmailBindUser(user *service.User) *service.User {
 	}
 	cloned := *user
 	return &cloned
+}
+
+func (s *emailBindCacheStub) IncrVerificationCodeAttempts(_ context.Context, _ string, expected *service.VerificationCodeData) (int, error) {
+	if s.data == nil {
+		return 0, errors.New("verification code not found")
+	}
+	if expected == nil || s.data.Code != expected.Code || !s.data.CreatedAt.Equal(expected.CreatedAt) {
+		return 0, errors.New("verification code changed")
+	}
+	s.data.Attempts++
+	return s.data.Attempts, nil
+}
+
+func (s *emailBindCacheStub) ConsumeVerificationCode(_ context.Context, _ string, expected *service.VerificationCodeData) (bool, error) {
+	if s.data == nil || expected == nil || s.data.Code != expected.Code || !s.data.CreatedAt.Equal(expected.CreatedAt) {
+		return false, nil
+	}
+	s.data = nil
+	return true, nil
+}
+
+func (s *emailBindCacheStub) ConsumeNotifyVerifyCode(context.Context, string, *service.VerificationCodeData) (bool, error) {
+	return false, nil
+}
+
+func (s *emailBindCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string, *service.VerificationCodeData) (int, error) {
+	return 0, errors.New("notify verification code not found")
+}
+
+func (s *emailBindCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
 }

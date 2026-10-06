@@ -75,14 +75,14 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			mappedModel = normalized
 		}
 	}
-	if err := validateClaudeOpus55Request(body, mappedModel); err != nil {
+	if err := validateClaude55Request(body, mappedModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
 	responsesReq.Model = mappedModel
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)
 	if err != nil {
-		if claude.IsOpus55(mappedModel) {
+		if isClaude55SignedThinkingModel(mappedModel) {
 			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		}
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
@@ -567,16 +567,12 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 		// Extract usage from message_delta
 		if event.Type == "message_delta" && event.Usage != nil {
-			if mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage) {
-				replaceAnthropicResponsesStateUsage(anthState, usage)
-			}
+			mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage)
 		}
 		// Also capture usage from message_start (carries cache fields)
 		if event.Type == "message_start" && event.Message != nil {
 			providerPayloadObserved = true
-			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
-				replaceAnthropicResponsesStateUsage(anthState, usage)
-			}
+			mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage)
 		}
 		if anthropicSSEEventHasSemanticOutput(payload) {
 			semanticOutput = true
@@ -584,6 +580,11 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if event.Type == "message_stop" {
 			terminalObserved = true
 		}
+
+		// Keep the outward Responses/Chat usage on the same normalized buckets used
+		// for billing, including converter handlers that consume event usage.
+		syncAnthropicResponsesUsage(anthState, usage)
+		normalizeAnthropicEventUsageForResponses(event, usage)
 
 		// Chain: Anthropic event → Responses events → CC chunks
 		responsesEvents := apicompat.AnthropicEventToResponsesEvents(event, anthState)

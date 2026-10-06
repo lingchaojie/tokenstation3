@@ -25,8 +25,8 @@ func TestSettingHandler_OAuthSchedulingRateRoundTrip(t *testing.T) {
 	}{
 		{"absent keeps default", nil, `{}`, "1", float64(1), http.StatusOK},
 		{"omitted preserves override", map[string]string{service.SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.7"}, `{}`, "0.7", 0.7, http.StatusOK},
-		{"clear override", map[string]string{service.SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.7"}, `{"openai_oauth_scheduling_rate_multiplier":null}`, "", nil, http.StatusOK},
-		{"omitted preserves cleared", map[string]string{service.SettingKeyOpenAIOAuthSchedulingRateMultiplier: ""}, `{}`, "", nil, http.StatusOK},
+		{"null is rejected", map[string]string{service.SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.7"}, `{"openai_oauth_scheduling_rate_multiplier":null}`, "", nil, http.StatusBadRequest},
+		{"omitted normalizes legacy empty", map[string]string{service.SettingKeyOpenAIOAuthSchedulingRateMultiplier: ""}, `{}`, "1", float64(1), http.StatusOK},
 		{"set override", nil, `{"openai_oauth_scheduling_rate_multiplier":0.7}`, "0.7", 0.7, http.StatusOK},
 		{"zero is explicit", nil, `{"openai_oauth_scheduling_rate_multiplier":0}`, "0", float64(0), http.StatusOK},
 		{"negative is rejected", nil, `{"openai_oauth_scheduling_rate_multiplier":-1}`, "", nil, http.StatusBadRequest},

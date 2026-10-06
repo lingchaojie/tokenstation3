@@ -99,6 +99,11 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 		apiKey, err := apiKeyService.GetByKey(c.Request.Context(), apiKeyString)
 		if err != nil {
+			if errors.Is(err, service.ErrSystemOneStaticKeyRequired) {
+				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+				AbortWithError(c, http.StatusForbidden, "SYSTEMONE_STATIC_KEY_REQUIRED", service.ErrSystemOneStaticKeyRequired.Error())
+				return
+			}
 			if errors.Is(err, service.ErrAPIKeyNotFound) {
 				recordInvalidAuthFailure(c, apiKeyService)
 				MarkIngressRejected(c, IngressRejectInvalidAPIKey)

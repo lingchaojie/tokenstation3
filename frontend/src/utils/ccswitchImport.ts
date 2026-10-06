@@ -24,6 +24,27 @@ function gatewayRoot(baseUrl: string): string {
   return baseUrl.trim().replace(/\/v1\/?$/, '').replace(/\/+$/, '')
 }
 
+/**
+ * Imports keep the bare gateway root. Users may subsequently edit CC Switch's
+ * stored base URL to include /v1, so balance queries normalize it independently.
+ */
+export const CC_SWITCH_USAGE_SCRIPT = `({
+    request: {
+      url: "{{baseUrl}}".replace(/\\/+$/, "").replace(/\\/v1$/, "") + "/v1/usage",
+      method: "GET",
+      headers: { "Authorization": "Bearer {{apiKey}}" }
+    },
+    extractor: function(response) {
+      const remaining = response?.remaining ?? response?.quota?.remaining ?? response?.balance;
+      const unit = response?.unit ?? response?.quota?.unit ?? "USD";
+      return {
+        isValid: response?.is_active ?? response?.isValid ?? true,
+        remaining,
+        unit
+      };
+    }
+  })`
+
 export function resolveCcSwitchImportConfig(
   platform: GroupPlatform | undefined | null,
   clientType: CcSwitchClientType,

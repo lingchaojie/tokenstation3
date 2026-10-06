@@ -364,7 +364,7 @@ export async function updateAPIKeyRoutes(
 // Keep aligned with backend/internal/service/domain_constants.go AllowedQuotaPlatforms.
 export const PLATFORM_QUOTA_PLATFORMS = [
   'anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'grok',
-  'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go',
+  'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe',
 ] as const
 export type PlatformQuotaPlatform = typeof PLATFORM_QUOTA_PLATFORMS[number]
 export type PlatformQuotaWindow = 'daily' | 'weekly' | 'monthly'

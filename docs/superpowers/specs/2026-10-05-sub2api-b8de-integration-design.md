@@ -120,7 +120,9 @@ spool 和 WebChat 的清理与记录路径；遵循 `docs/kiro-upstream-sync.md`
 
 ### TypeSafe 与管理安全
 
-System One 使用独立原生协议，不误入聊天协议转换；接入本站鉴权、统一 Key、
+System One 使用独立原生协议，不误入聊天协议转换；接入本站鉴权，
+按 2026-10-06 用户补充决定仅接受显式绑定 TypeSafe 分组的 Key；统一 Key 和
+default-follow Key 明确拒绝，不新增第三类默认路由或迁移。继续接入
 审核、计费、平台额度和错误处理链，不复活 Composite 依赖。
 后台账号 / 分组 / 渠道、前端平台枚举、API 类型及模型展示保持契约一致。
 既有内部 TypeSafe 审核配置不会因新平台入口而被重写。

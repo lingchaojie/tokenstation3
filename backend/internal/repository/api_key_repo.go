@@ -75,6 +75,42 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 	return translatePersistenceError(err, nil, service.ErrAPIKeyExists)
 }
 
+var _ service.APIKeyCountLimitedCreator = (*apiKeyRepository)(nil)
+
+// CreateWithLimit owns its transaction. Lock the stable user row, not the key
+// rows: an empty key set must also serialize. READ COMMITTED makes the count
+// after acquiring the lock see the preceding creator's committed insertion.
+func (r *apiKeyRepository) CreateWithLimit(ctx context.Context, key *service.APIKey, maxActive int) error {
+	if maxActive <= 0 {
+		return r.Create(ctx, key)
+	}
+	tx, err := r.client.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.User.Query().Where(user.IDEQ(key.UserID)).ForUpdate().Only(ctx); err != nil {
+		return err
+	}
+	transactionRepo := &apiKeyRepository{client: tx.Client()}
+	count, err := transactionRepo.CountByUserID(ctx, key.UserID)
+	if err != nil {
+		return err
+	}
+	if count >= int64(maxActive) {
+		return service.ErrAPIKeyCountExceeded
+	}
+	created := *key
+	if err := transactionRepo.Create(ctx, &created); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	*key = created
+	return nil
+}
+
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
 	m, err := r.activeQuery().
 		Where(apikey.IDEQ(id)).
@@ -729,6 +765,17 @@ func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, par
 func apiKeyListOrder(params pagination.PaginationParams) []func(*entsql.Selector) {
 	sortBy := strings.ToLower(strings.TrimSpace(params.SortBy))
 	sortOrder := params.NormalizedSortOrder(pagination.SortOrderDesc)
+
+	if sortBy == "group" {
+		// Sort before pagination, keeping ungrouped keys last in either direction.
+		opts := []entsql.OrderTermOption{entsql.OrderNullsLast()}
+		tieOrder := dbent.Asc(apikey.FieldID)
+		if sortOrder == pagination.SortOrderDesc {
+			opts = append(opts, entsql.OrderDesc())
+			tieOrder = dbent.Desc(apikey.FieldID)
+		}
+		return []func(*entsql.Selector){apikey.ByGroupField(group.FieldName, opts...), tieOrder}
+	}
 
 	var field string
 	switch sortBy {

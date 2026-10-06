@@ -152,6 +152,10 @@ type webChatAuthCacheStub struct {
 	deleteAttempts []int64
 }
 
+func (s *webChatAuthCacheStub) IncrementCreateCount(context.Context, int64, time.Duration) (int64, error) {
+	panic("unexpected visible-key creation limit call for hidden WebChat auth")
+}
+
 func (s *webChatAuthCacheStub) GetCreateAttemptCount(context.Context, int64) (int, error) {
 	return 0, nil
 }

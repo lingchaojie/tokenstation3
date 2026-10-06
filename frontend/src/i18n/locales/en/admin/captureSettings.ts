@@ -34,6 +34,8 @@ export default {
       gemini: 'Gemini',
       antigravity: 'Antigravity',
       grok: 'Grok',
+      typesafe: 'TypeSafe',
+      typesafeDescription: 'Native /v1/systemone only. Off by default; explicit opt-in still follows the outcome, content, and user/group scope controls below.',
       openai: 'OpenAI text APIs',
       openaiDescription: 'Supports /v1/responses, /v1/chat/completions, /v1/messages, and Responses WebSocket; excludes images, video, and embeddings.',
     },
