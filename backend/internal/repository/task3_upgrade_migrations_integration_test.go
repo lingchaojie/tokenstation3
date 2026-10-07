@@ -31,6 +31,8 @@ var task3ApprovedUpgradeMigrations = []string{
 	"243_opencode_go_platform.sql",
 	"244_content_moderation_engine_meta.sql",
 	"245_channel_reasoning_effort_multipliers.sql",
+	"246_add_payment_order_bonus_amount.sql",
+	"247_add_typesafe_platform.sql",
 }
 
 func TestTask3MigrationsUpgradePersisted230Fixture(t *testing.T) {

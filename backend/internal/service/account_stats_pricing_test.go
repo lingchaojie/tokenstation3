@@ -1358,6 +1358,55 @@ func TestApplyAccountStatsCost_VideoRuleUsesDefaultResolutionWhenMetadataMissing
 	require.InDelta(t, 0.30, *usageLog.AccountStatsCost, 1e-12)
 }
 
+// Customer billing gates do not reduce the local provider-cost estimate.
+func TestOpenAIGatewayServiceRecordUsage_AccountStatsLongContextIndependentOfBillingGate(t *testing.T) {
+	const baseCost = 0.78
+	const longContextCost = 1.545
+	for _, tt := range []struct {
+		name             string
+		groupLongContext bool
+		accountExtra     map[string]any
+		wantTotalCost    float64
+		wantAccountCost  float64
+	}{
+		{name: "group_on_account_off", groupLongContext: true, wantTotalCost: longContextCost, wantAccountCost: longContextCost},
+		{name: "group_off_account_off", wantTotalCost: baseCost, wantAccountCost: longContextCost},
+		{
+			name:            "group_off_account_on",
+			accountExtra:    map[string]any{"openai_long_context_billing_enabled": true},
+			wantTotalCost:   longContextCost,
+			wantAccountCost: longContextCost,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+			svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+			swapInOpenAILadderCatalog(t, svc)
+			svc.channelService = newTestChannelServiceForStats(t, &Channel{ID: 1, Status: StatusActive}, 1, PlatformOpenAI)
+			apiKey := openAIRecordUsageAPIKeyWithGroup(svc, 1015, tt.groupLongContext)
+			apiKey.GroupID = i64p(1)
+
+			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+				Result: &OpenAIForwardResult{
+					RequestID: "resp_account_stats_long_context_" + tt.name,
+					Usage:     OpenAIUsage{InputTokens: 300000, OutputTokens: 2000},
+					Model:     "gpt-5.4-2026-03-05",
+					Duration:  time.Second,
+				},
+				APIKey:  apiKey,
+				User:    &User{ID: 2015},
+				Account: &Account{ID: 3015, Platform: PlatformOpenAI, Extra: tt.accountExtra},
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, usageRepo.lastLog)
+			require.InDelta(t, tt.wantTotalCost, usageRepo.lastLog.TotalCost, 1e-10)
+			require.NotNil(t, usageRepo.lastLog.AccountStatsCost)
+			require.InDelta(t, tt.wantAccountCost, *usageRepo.lastLog.AccountStatsCost, 1e-10)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers for resolveAccountStatsCost tests
 // ---------------------------------------------------------------------------

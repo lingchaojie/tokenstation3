@@ -51,6 +51,11 @@ func TestOpenAISchedulingRateFallback(t *testing.T) {
 			} {
 				account.RateMultiplier = tt.configured
 				rate, ok := openAISchedulingRate(account, now, nil)
+				if accountType == AccountTypeOAuth {
+					require.True(t, ok)
+					require.Equal(t, float64(1), rate, "OAuth scheduling never follows billing rate")
+					continue
+				}
 				require.Equal(t, tt.known, ok)
 				if ok {
 					require.Equal(t, tt.want, rate)
@@ -69,7 +74,7 @@ func TestOpenAISchedulingRateFallback(t *testing.T) {
 	for _, override := range []float64{-1, math.NaN(), math.Inf(1)} {
 		rate, ok := openAISchedulingRate(oauth, now, &override)
 		require.True(t, ok)
-		require.Equal(t, 0.3, rate)
+		require.Equal(t, float64(1), rate)
 	}
 	_, ok := openAISchedulingRate(nil, now, nil)
 	require.False(t, ok)
@@ -83,10 +88,16 @@ func TestOpenAISchedulingRateFallbackSharedByBothModes(t *testing.T) {
 			expensive := &Account{ID: 2, Platform: PlatformOpenAI, Type: accountType, RateMultiplier: floatPtr(0.8)}
 			accounts := []*Account{cheap, expensive}
 			order := newOpenAILegacyUpstreamRateOrder(accounts, now, nil)
-			require.True(t, order.enabled)
-			require.Negative(t, order.compare(cheap, expensive))
 			factors := openAIUpstreamCostFactors(accounts, now, nil)
-			require.Greater(t, factors[cheap.ID], factors[expensive.ID])
+			if accountType == AccountTypeAPIKey {
+				require.True(t, order.enabled)
+				require.Negative(t, order.compare(cheap, expensive))
+				require.Greater(t, factors[cheap.ID], factors[expensive.ID])
+			} else {
+				require.False(t, order.enabled)
+				require.Zero(t, order.compare(cheap, expensive))
+				require.Equal(t, factors[cheap.ID], factors[expensive.ID])
+			}
 			if accountType == AccountTypeOAuth {
 				order = newOpenAILegacyUpstreamRateOrder(accounts, now, floatPtr(0.7))
 				require.False(t, order.enabled)
@@ -97,7 +108,7 @@ func TestOpenAISchedulingRateFallbackSharedByBothModes(t *testing.T) {
 	}
 }
 
-func TestOpenAIOAuthSchedulingRateRuntimePreservesExplicitClear(t *testing.T) {
+func TestOpenAIOAuthSchedulingRateRuntimeKeepsNumericPolicy(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
 	for _, tt := range []struct {
@@ -106,7 +117,7 @@ func TestOpenAIOAuthSchedulingRateRuntimePreservesExplicitClear(t *testing.T) {
 		want   *float64
 	}{
 		{"absent", map[string]string{}, floatPtr(1)},
-		{"cleared", map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: ""}, nil},
+		{"legacy empty", map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: ""}, floatPtr(1)},
 		{"zero", map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0"}, floatPtr(0)},
 		{"override", map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.7"}, floatPtr(0.7)},
 	} {

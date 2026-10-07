@@ -1072,3 +1072,34 @@ func TestCanBypassRegistrationDisabledForOAuth(t *testing.T) {
 		})
 	}
 }
+
+func (s *emailCacheStub) IncrVerificationCodeAttempts(_ context.Context, _ string, expected *VerificationCodeData) (int, error) {
+	if s.data == nil {
+		return 0, errors.New("verification code not found")
+	}
+	if expected == nil || s.data.Code != expected.Code || !s.data.CreatedAt.Equal(expected.CreatedAt) {
+		return 0, errors.New("verification code changed")
+	}
+	s.data.Attempts++
+	return s.data.Attempts, nil
+}
+
+func (s *emailCacheStub) ConsumeVerificationCode(_ context.Context, _ string, expected *VerificationCodeData) (bool, error) {
+	if s.data == nil || expected == nil || s.data.Code != expected.Code || !s.data.CreatedAt.Equal(expected.CreatedAt) {
+		return false, nil
+	}
+	s.data = nil
+	return true, nil
+}
+
+func (s *emailCacheStub) ConsumeNotifyVerifyCode(context.Context, string, *VerificationCodeData) (bool, error) {
+	return false, nil
+}
+
+func (s *emailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string, *VerificationCodeData) (int, error) {
+	return 0, errors.New("notify verification code not found")
+}
+
+func (s *emailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
+}

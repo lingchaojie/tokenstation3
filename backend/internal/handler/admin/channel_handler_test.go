@@ -565,7 +565,7 @@ func TestSyncPricingModels_ValidPlatform_EmptyService(t *testing.T) {
 	svc := service.NewPricingService(nil, nil)
 	router := setupSyncPricingModelsRouter(svc)
 
-	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "kiro", "grok", "kimi", "zhipu", "deepseek"} {
+	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "kiro", "grok", "kimi", "zhipu", "deepseek", "minimax", "typesafe"} {
 		req := httptest.NewRequest(http.MethodGet, "/channels/pricing/sync-models?platform="+platform, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)

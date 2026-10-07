@@ -2064,6 +2064,8 @@ func TestMatchingPlatforms(t *testing.T) {
 		{"anthropic returns itself", PlatformAnthropic, []string{PlatformAnthropic}},
 		{"gemini returns itself", PlatformGemini, []string{PlatformGemini}},
 		{"openai returns itself", PlatformOpenAI, []string{PlatformOpenAI}},
+		{"typesafe returns itself", PlatformTypeSafe, []string{PlatformTypeSafe}},
+		{"kiro returns itself", PlatformKiro, []string{PlatformKiro}},
 	}
 
 	for _, tt := range tests {

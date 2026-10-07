@@ -16,6 +16,7 @@ export interface ClientConfigInput {
   codexModel?: string
   codexReasoningEffort?: string | null
   codexModelCatalogPath?: string
+  codexModelCatalogUrl?: string
 }
 
 export interface ClientConfigFile {
@@ -201,8 +202,11 @@ http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
   const reasoningEffortLine = input.codexReasoningEffort === null
     ? ''
     : `model_reasoning_effort = "${escapeTomlBasicString(input.codexReasoningEffort || 'xhigh')}"\n`
-  const modelCatalogLine = input.codexModelCatalogPath
+  const modelCatalogLine = input.codexModelCatalogPath && !input.codexModelCatalogUrl
     ? `model_catalog_json = "${escapeTomlBasicString(input.codexModelCatalogPath)}"\n`
+    : ''
+  const remoteCatalogLine = input.codexModelCatalogUrl
+    ? `model_catalog_url = "${escapeTomlBasicString(input.codexModelCatalogUrl)}"\n`
     : ''
   const configContent = `model_provider = "linx2ai"
 model = "${codexModel}"
@@ -214,7 +218,7 @@ windows_wsl_setup_acknowledged = true
 [model_providers.linx2ai]
 name = "linx2ai"
 base_url = "${bare}"
-wire_api = "responses"
+${remoteCatalogLine}wire_api = "responses"
 ${providerAuthConfig}
 
 [features]

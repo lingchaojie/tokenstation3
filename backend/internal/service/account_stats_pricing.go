@@ -101,6 +101,8 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 	if len(reasoningEfforts) > 0 {
 		reasoningEffort = reasoningEfforts[0]
 	}
+	// Customer-billing switches do not discount the estimated provider cost.
+	// Keep the catalog's applicable long-context pricing independent of them.
 	breakdown, err := billingService.CalculateCostUnified(CostInput{
 		Ctx:             context.Background(),
 		Model:           model,

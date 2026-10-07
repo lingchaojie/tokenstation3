@@ -2987,6 +2987,9 @@ func openAISchedulingRate(account *Account, now time.Time, oauthSchedulingRateMu
 		if rate := oauthSchedulingRateMultiplier; rate != nil && *rate >= 0 && !math.IsNaN(*rate) && !math.IsInf(*rate, 0) {
 			return *rate, true
 		}
+		// An absent/invalid setting must not turn a billing rate into a
+		// scheduling override. Explicit zero remains valid above.
+		return defaultOpenAIOAuthSchedulingRateMultiplier, true
 	} else if rate, ok := openAIFreshUpstreamBillingRate(account, now); ok {
 		return rate, true
 	}

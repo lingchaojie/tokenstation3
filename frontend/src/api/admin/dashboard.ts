@@ -252,6 +252,7 @@ export async function getApiKeyUsageTrend(
 
 export interface UserTrendParams extends Omit<TrendParams, 'exclude_user_ids'> {
   limit?: number
+  metric?: 'tokens' | 'actual_cost'
 }
 
 export interface UserTrendResponse {

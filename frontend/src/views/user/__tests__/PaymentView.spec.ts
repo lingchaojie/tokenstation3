@@ -7,6 +7,7 @@ import PaymentView from '../PaymentView.vue'
 import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import AmountInput from '@/components/payment/AmountInput.vue'
+import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
@@ -374,6 +375,65 @@ async function mountSubscriptionPlanList(planCount: number) {
   await flushPromises()
   return wrapper
 }
+
+describe('PaymentView recharge campaigns', () => {
+  async function mountRecharge(checkout: Partial<CheckoutInfoResponse>) {
+    vi.useRealTimers()
+    routeState.path = '/purchase'
+    routeState.query = {}
+    createOrder.mockReset()
+    window.localStorage.clear()
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture(checkout))
+    const wrapper = shallowMount(PaymentView, { global: { stubs: paymentViewStubs } })
+    await flushPromises()
+    return wrapper
+  }
+
+  it.each(['bonus', 'discount'] as const)('shows the approved %s quote without changing the input amount', async (mode) => {
+    const wrapper = await mountRecharge({
+      recharge_bonus_mode: mode,
+      recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 10 }],
+      recharge_bonus_notice: '**Offer**<script>alert(1)</script><img src=x onerror=alert(1)>',
+    })
+    wrapper.getComponent(AmountInput).vm.$emit('update:modelValue', 100)
+    await flushPromises()
+    const notice = wrapper.get('[data-testid="recharge-bonus-notice"]')
+    expect(notice.html()).toContain('<strong>Offer</strong>')
+    expect(notice.html()).not.toContain('<script')
+    expect(notice.html()).not.toContain('onerror')
+    expect(wrapper.getComponent(AmountInput).props('modelValue')).toBe(100)
+    expect(wrapper.get('[data-testid="recharge-credited-row"]').text()).toContain(mode === 'bonus' ? '$110.00' : '$100.00')
+    expect(wrapper.find('[data-testid="recharge-discount-row"]').exists()).toBe(mode === 'discount')
+    expect(wrapper.find('[data-testid="recharge-bonus-row"]').exists()).toBe(mode === 'bonus')
+    if (mode === 'discount') {
+      const pay = wrapper.findAll('span').find(node => node.text() === 'payment.actualPay')!
+      expect(pay.element.parentElement?.textContent).toContain(formatPaymentAmount(90, 'CNY'))
+    }
+  })
+
+  it('quotes each method in its own currency before switching and rounds fees to that currency', async () => {
+    const limit = checkoutInfoFixture().data.methods.wxpay!
+    const wrapper = await mountRecharge({
+      recharge_bonus_mode: 'discount',
+      recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 15 }],
+      recharge_fee_rate: 0.1,
+      methods: {
+        wxpay: { ...limit, currency: 'CNY', single_min: 86 },
+        stripe: { ...limit, currency: 'JPY', single_min: 86 },
+      },
+    })
+    wrapper.getComponent(AmountInput).vm.$emit('update:modelValue', 101)
+    await flushPromises()
+    const selector = wrapper.getComponent(PaymentMethodSelector)
+    expect(selector.props('methods')).toEqual([
+      expect.objectContaining({ type: 'wxpay', available: false }),
+      expect.objectContaining({ type: 'stripe', available: true }),
+    ])
+    expect(selector.props('selected')).toBe('stripe')
+    const pay = wrapper.findAll('span').find(node => node.text() === 'payment.actualPay')!
+    expect(pay.element.parentElement?.textContent).toContain(formatPaymentAmount(87, 'JPY'))
+  })
+})
 
 describe('PaymentView help text', () => {
   beforeEach(() => {

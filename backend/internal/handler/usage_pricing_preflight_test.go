@@ -7,12 +7,48 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// Removing SystemOne's synchronous pricing preflight must lose the terminal
+// failure classification even though the provider's response is already sent.
+func TestB8deSystemOneMissingUsageClassifiedBeforeCapture(t *testing.T) {
+	c, recorder := newSystemOneHandlerContext(validSystemOneHandlerBody)
+	h := &GatewayHandler{gatewayService: &service.GatewayService{}}
+	groupID := int64(7)
+	key := &service.APIKey{
+		ID: 4, UserID: 9, User: &service.User{ID: 9}, GroupID: &groupID,
+		Group: &service.Group{ID: groupID, Platform: service.PlatformTypeSafe},
+	}
+	account := &service.Account{ID: 11, Platform: service.PlatformTypeSafe}
+	result := &service.SystemOneForwardResult{
+		ForwardResult: service.ForwardResult{
+			RequestID: "systemone-missing-usage", Model: "jev-latest",
+			UpstreamModel: "jev-latest", CaptureResponseComplete: true,
+		},
+		StatusCode: http.StatusOK, ContentType: "application/json",
+		Body: []byte(`{"answers":{}}`),
+	}
+	c.Data(result.StatusCode, result.ContentType, result.Body)
+
+	h.recordSystemOneUsage(c, key, account, nil, service.ChannelMappingResult{},
+		"jev-latest", []byte(validSystemOneHandlerBody), result, 9, time.Now())
+
+	require.True(t, result.CaptureTerminalError)
+	require.True(t, result.CaptureResponseComplete)
+	require.False(t, result.UpstreamFailed, "missing usage must not penalize the provider account")
+	marked, ok := service.GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "usage_pricing_unavailable", marked.Code)
+	require.Equal(t, http.StatusBadGateway, marked.IntendedStatus)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, `{"answers":{}}`, recorder.Body.String(), "do not append a second response")
+}
 
 func TestFinalizeGatewayUsagePricingValidationPreservesProviderCompletionProof(t *testing.T) {
 	tests := []struct {

@@ -27,7 +27,7 @@ func requestModelForTest(h *GatewayHandler, group *service.Group, modelID, etag 
 
 func TestRetrieveModelMatchesVisibleCatalogue(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, platform := range []string{service.PlatformOpenAI, service.PlatformAnthropic, service.PlatformGemini, service.PlatformGrok} {
+	for _, platform := range []string{service.PlatformOpenAI, service.PlatformAnthropic, service.PlatformGemini, service.PlatformGrok, service.PlatformTypeSafe} {
 		for _, mapped := range []bool{false, true} {
 			name := platform + "/fallback"
 			if mapped {

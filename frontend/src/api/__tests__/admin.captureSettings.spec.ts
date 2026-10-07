@@ -20,7 +20,7 @@ import {
 const policy: CaptureRuntimePolicy = {
   version: 1,
   enabled: false,
-  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true },
+  platforms: { anthropic: true, kiro: true, openai: false, gemini: true, antigravity: true, grok: true, typesafe: false },
   outcomes: { success: true, terminal_error: true },
   content: {
     raw_request: true,

@@ -829,6 +829,14 @@ func TestAPIKeyAuthMarksOnlyExpectedIngressRejections(t *testing.T) {
 			wantCode:   "INTERNAL_ERROR",
 		},
 		{
+			name:       "native TypeSafe rejects dynamic key without reporting invalid credentials",
+			path:       "/t",
+			key:        "valid-shape",
+			repoErr:    service.ErrSystemOneStaticKeyRequired,
+			wantStatus: http.StatusForbidden,
+			wantCode:   "SYSTEMONE_STATIC_KEY_REQUIRED",
+		},
+		{
 			name:       "auth lookup bulkhead rejection is an admission rejection",
 			path:       "/t",
 			key:        "valid-shape",

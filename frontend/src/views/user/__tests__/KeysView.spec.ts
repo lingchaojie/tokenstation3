@@ -210,6 +210,7 @@ const PaginationStub = {
   template: `
     <div>
       <button data-test="page-size-50" @click="$emit('update:pageSize', 50)">50</button>
+      <button data-test="page-2" @click="$emit('update:page', 2)">Page 2</button>
     </div>
   `,
 }
@@ -294,6 +295,24 @@ describe('user KeysView column settings', () => {
     getAvailableGroups.mockResolvedValue([])
     getUserGroupRates.mockResolvedValue({})
     isCurrentStep.mockReturnValue(false)
+  })
+
+  it.each([
+    { binding: 'static', keyType: 'unknown', expected: 'typesafe' },
+    { binding: 'auto', keyType: 'unified', expected: 'unified' },
+    { binding: 'default_follow', keyType: 'anthropic', expected: 'anthropic' },
+  ] as const)('selects the correct guide for $binding keys without routing unified keys to TypeSafe', async ({ binding, keyType, expected }) => {
+    const key: ApiKey = {
+      ...createApiKey(),
+      key_type: keyType,
+      group_binding_mode: binding,
+      group_id: 10,
+      group: { id: 10, platform: 'typesafe', claude_code_only: false } as ApiKey['group'],
+    }
+    listKeys.mockResolvedValueOnce({ items: [key], total: 1, page: 1, page_size: 20, pages: 1 })
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'keys.useKey').trigger('click')
+    expect(wrapper.findComponent({ name: 'UseKeyModal' }).props('platform')).toBe(expected)
   })
 
   it.each([
@@ -510,7 +529,10 @@ describe('user KeysView column settings', () => {
     expect(currentConcurrencyColumn?.sortable).toBe(true)
   })
 
-  it('keeps filters and selected page size when sorting by current concurrency', async () => {
+  it.each([
+    { key: 'current_concurrency', order: 'asc' },
+    { key: 'current_concurrency', order: 'desc' },
+  ] as const)('keeps filters and resets pagination and selection when sorting $key $order', async ({ key, order }) => {
     const wrapper = await mountView()
 
     await wrapper.get('[data-test="page-size-50"]').trigger('click')
@@ -524,19 +546,27 @@ describe('user KeysView column settings', () => {
     await selects[0].vm.$emit('update:modelValue', 'active')
     await flushPromises()
 
+    await wrapper.get('[data-test="page-2"]').trigger('click')
+    await flushPromises()
+    const table = wrapper.findComponent({ name: 'DataTable' })
+    table.vm.$emit('update:selectedKeys', [1])
+    await nextTick()
+    expect(table.props('selectedKeys')).toEqual([1])
+    expect(visibleColumnMeta(wrapper).find((column) => column.key === key)?.sortable).toBe(true)
     listKeys.mockClear()
 
-    await wrapper.get('[data-test="sort-current-concurrency"]').trigger('click')
+    table.vm.$emit('sort', key, order)
     await flushPromises()
 
+    expect(table.props('selectedKeys')).toEqual([])
     expect(listKeys).toHaveBeenLastCalledWith(
       1,
       50,
       {
         search: 'target',
         status: 'active',
-        sort_by: 'current_concurrency',
-        sort_order: 'asc',
+        sort_by: key,
+        sort_order: order,
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
