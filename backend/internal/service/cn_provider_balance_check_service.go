@@ -336,8 +336,13 @@ func (s *CNProviderBalanceCheckService) applyBalanceResult(ctx context.Context, 
 			return cnBalanceNoChange
 		}
 		reason := cnBalanceLowReason(fmt.Sprintf("余额 %.4g %s 低于阈值 %.2f", result.Balance, result.Currency, threshold))
-		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, time.Now().Add(s.cooldown()), reason); err != nil {
+		until := time.Now().Add(s.cooldown())
+		applied, err := replaceProbeTempUnschedulable(ctx, s.accountRepo, account, &until, reason)
+		if err != nil {
 			log.Printf("[CNBalance] pause account %d failed: %v", account.ID, err)
+			return cnBalanceNoChange
+		}
+		if !applied {
 			return cnBalanceNoChange
 		}
 		log.Printf("[CNBalance] paused account %d (%s): balance=%.4g %s", account.ID, account.Platform, result.Balance, result.Currency)
@@ -346,8 +351,12 @@ func (s *CNProviderBalanceCheckService) applyBalanceResult(ctx context.Context, 
 
 	// 余额健康：仅清除「本服务写入」的临时停调（reason 前缀匹配），不触碰其他子系统。
 	if account.TempUnschedulableUntil != nil && strings.HasPrefix(account.TempUnschedulableReason, cnBalanceLowReasonPrefix) {
-		if err := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); err != nil {
+		applied, err := replaceProbeTempUnschedulable(ctx, s.accountRepo, account, nil, "")
+		if err != nil {
 			log.Printf("[CNBalance] clear account %d failed: %v", account.ID, err)
+			return cnBalanceNoChange
+		}
+		if !applied {
 			return cnBalanceNoChange
 		}
 		log.Printf("[CNBalance] reactivated account %d (%s): balance=%.4g %s", account.ID, account.Platform, result.Balance, result.Currency)

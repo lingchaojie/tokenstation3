@@ -345,15 +345,19 @@ func (u *commandCodeUsage) balance(now time.Time) *CNProviderBalanceResult {
 // 不受滚动窗口限制，上游已允许继续请求。只清除 commandCodeUsageLimitReason 前缀的停调，
 // 积分不足、花费上限、管理员规则等其他原因的停调不受影响。
 func clearCommandCodeWindowCooldown(ctx context.Context, repo AccountRepository, account *Account, usage *commandCodeUsage, now time.Time) bool {
-	if usage == nil || usage.credits.Credits == nil || usage.credits.Credits.PurchasedCredits <= 0 {
+	if account == nil || usage == nil || usage.credits.Credits == nil || usage.credits.Credits.PurchasedCredits <= 0 {
 		return false
 	}
 	if account.TempUnschedulableUntil == nil || !now.Before(*account.TempUnschedulableUntil) ||
 		!strings.HasPrefix(account.TempUnschedulableReason, commandCodeUsageLimitReason) {
 		return false
 	}
-	if err := repo.ClearTempUnschedulable(ctx, account.ID); err != nil {
+	applied, err := replaceProbeTempUnschedulable(ctx, repo, account, nil, "")
+	if err != nil {
 		slog.Warn("command_code_usage_limit_clear_failed", "account_id", account.ID, "error", err)
+		return false
+	}
+	if !applied {
 		return false
 	}
 	slog.Info("command_code_usage_limit_cleared", "account_id", account.ID,

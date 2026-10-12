@@ -366,6 +366,28 @@ func (r *commandCodeCheckRepo) SetTempUnschedulable(_ context.Context, id int64,
 	return nil
 }
 
+func (r *commandCodeCheckRepo) CompareAndSetTempUnschedulable(_ context.Context, id int64, expectedUntil *time.Time, expectedReason string, until *time.Time, reason string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.accounts {
+		account := &r.accounts[i]
+		if account.ID != id {
+			continue
+		}
+		if account.TempUnschedulableReason != expectedReason ||
+			(account.TempUnschedulableUntil == nil) != (expectedUntil == nil) ||
+			(account.TempUnschedulableUntil != nil && !account.TempUnschedulableUntil.Equal(*expectedUntil)) {
+			return false, nil
+		}
+		account.TempUnschedulableUntil, account.TempUnschedulableReason = until, reason
+		if until != nil {
+			r.paused = append(r.paused, id)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 type commandCodeBalanceProber struct {
 	mu      sync.Mutex
 	probed  []int64
@@ -589,7 +611,7 @@ func TestCommandCodeSpendLimitScope(t *testing.T) {
 	require.False(t, commandCodeSpendLimitIsModelScoped([]byte(`spending limit reached`)))
 }
 
-// commandCodeStatefulRepo 把停调写回同一个账号对象，用于验证完整的状态转换。
+// commandCodeStatefulRepo stores a row separately from detached probe reads.
 type commandCodeStatefulRepo struct {
 	AccountRepository
 	account    *Account
@@ -598,6 +620,10 @@ type commandCodeStatefulRepo struct {
 
 func (r *commandCodeStatefulRepo) GetByID(_ context.Context, _ int64) (*Account, error) {
 	clone := *r.account
+	if clone.TempUnschedulableUntil != nil {
+		until := *clone.TempUnschedulableUntil
+		clone.TempUnschedulableUntil = &until
+	}
 	return &clone, nil
 }
 
@@ -606,8 +632,10 @@ func (r *commandCodeStatefulRepo) UpdateExtra(_ context.Context, _ int64, _ map[
 }
 
 func (r *commandCodeStatefulRepo) SetTempUnschedulable(_ context.Context, _ int64, until time.Time, reason string) error {
-	r.account.TempUnschedulableUntil = &until
-	r.account.TempUnschedulableReason = reason
+	if r.account.TempUnschedulableUntil == nil || r.account.TempUnschedulableUntil.Before(until) {
+		r.account.TempUnschedulableUntil = &until
+		r.account.TempUnschedulableReason = reason
+	}
 	return nil
 }
 
@@ -616,6 +644,20 @@ func (r *commandCodeStatefulRepo) ClearTempUnschedulable(_ context.Context, _ in
 	r.account.TempUnschedulableUntil = nil
 	r.account.TempUnschedulableReason = ""
 	return nil
+}
+
+func (r *commandCodeStatefulRepo) CompareAndSetTempUnschedulable(ctx context.Context, id int64, expectedUntil *time.Time, expectedReason string, until *time.Time, reason string) (bool, error) {
+	if r.account.ID != id || r.account.TempUnschedulableReason != expectedReason ||
+		(r.account.TempUnschedulableUntil == nil) != (expectedUntil == nil) ||
+		(r.account.TempUnschedulableUntil != nil && !r.account.TempUnschedulableUntil.Equal(*expectedUntil)) {
+		return false, nil
+	}
+	if until == nil {
+		return true, r.ClearTempUnschedulable(ctx, id)
+	}
+	value := *until
+	r.account.TempUnschedulableUntil, r.account.TempUnschedulableReason = &value, reason
+	return true, nil
 }
 
 func commandCodeCreditsBody(purchased float64) string {
