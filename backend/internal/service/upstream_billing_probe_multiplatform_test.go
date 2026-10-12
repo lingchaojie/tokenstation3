@@ -17,7 +17,7 @@ func TestUpstreamBillingProbeIdentityCoversAllAPIKeyPlatforms(t *testing.T) {
 	for _, platform := range []string{
 		PlatformOpenAI, PlatformGrok, PlatformAnthropic, PlatformGemini, PlatformAntigravity,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo,
-		PlatformTypeSafe,
+		PlatformTypeSafe, PlatformCommandCode, PlatformCline,
 	} {
 		require.True(t, IsUpstreamBillingProbeIdentity(platform, AccountTypeAPIKey), platform)
 		require.True(t, isUpstreamBillingProbeAccount(&Account{Platform: platform, Type: AccountTypeAPIKey}), platform)
@@ -25,6 +25,7 @@ func TestUpstreamBillingProbeIdentityCoversAllAPIKeyPlatforms(t *testing.T) {
 	require.False(t, IsUpstreamBillingProbeIdentity(PlatformOpenAI, AccountTypeOAuth))
 	require.False(t, IsUpstreamBillingProbeIdentity(PlatformGrok, AccountTypeOAuth))
 	require.False(t, IsUpstreamBillingProbeIdentity(PlatformAnthropic, AccountTypeBedrock))
+	require.False(t, IsUpstreamBillingProbeIdentity(PlatformKiro, AccountTypeAPIKey))
 	require.False(t, IsUpstreamBillingProbeIdentity("", AccountTypeAPIKey))
 	require.False(t, IsUpstreamBillingProbeIdentity("future-platform", AccountTypeAPIKey))
 	require.False(t, isUpstreamBillingProbeAccount(nil))

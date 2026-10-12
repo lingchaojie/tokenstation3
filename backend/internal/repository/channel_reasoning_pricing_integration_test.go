@@ -157,10 +157,9 @@ func TestGroupReasoningPricingRoundTripAndBilling(t *testing.T) {
 		require.NoError(t, err)
 		requireReasoningPricingIntegrationMaps(t, loaded.ModelPricing, map[string]map[string]float64{"claude-fable-5-1": expected})
 		for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", ""} {
+			// Unconfigured Fable efforts, including max, use the standard 1x price.
+			// Persisted administrator mappings still override that default.
 			multiplier := 1.0
-			if effort == "max" {
-				multiplier = 3 // Fable 5.1 preserves the site's implicit default.
-			}
 			if configured, ok := expected[effort]; ok {
 				multiplier = configured
 			}

@@ -1695,6 +1695,8 @@ type CostInput struct {
 	Resolver                  *ModelPricingResolver // 定价解析器
 	Resolved                  *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
 	LongContextBillingEnabled *bool
+	// DisableModelLongContextPricing 豁免模型价卡的长上下文附加费，不改变自定义区间价格。
+	DisableModelLongContextPricing bool
 }
 
 // CalculateCostUnified 统一计费入口，支持三种计费模式。
@@ -1706,7 +1708,7 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, 
 		if input.LongContextBillingEnabled != nil {
 			applyLongContextBilling = *input.LongContextBillingEnabled
 		}
-		breakdown, err := s.calculateCostInternalWithPolicy(input.Model, input.Tokens, input.RateMultiplier, input.ServiceTier, nil, applyLongContextBilling)
+		breakdown, err := s.calculateCostInternalWithPolicy(input.Model, input.Tokens, input.RateMultiplier, input.ServiceTier, nil, applyLongContextBilling && !input.DisableModelLongContextPricing)
 		if err == nil {
 			applyCostBreakdownMultiplier(breakdown, modelReasoningEffortBillingMultiplier(input.Model, input.ReasoningEffort, nil))
 		}
@@ -1793,10 +1795,8 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 			pricing = &cloned
 		}
 	}
-	// Official long-context ladders apply only when interval pricing has not
-	// already taken over and the resolver's final group/channel policy enables
-	// them. Validation must use that same final decision.
-	applyLongCtx := len(resolved.Intervals) == 0 && contextTierPricingEnabled
+	// Model long-context exemptions do not disable explicit interval pricing.
+	applyLongCtx := len(resolved.Intervals) == 0 && contextTierPricingEnabled && !input.DisableModelLongContextPricing
 	if err := validateModelPricingForUsage(pricing, input.Tokens, input.ServiceTier, applyLongCtx); err != nil {
 		return nil, fmt.Errorf("incomplete token pricing for model: %s: %w", input.Model, err)
 	}

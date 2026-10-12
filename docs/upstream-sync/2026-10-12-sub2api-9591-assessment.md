@@ -2,7 +2,7 @@
 
 状态：范围和冲突预评估完成；用户已选择平台迁移方案 A，并纳入 GPT-6.1 Sol
 订阅长上下文豁免。
-尚未合并、推送或部署。Fable 隐式 3 倍撤销已由用户明确要求。
+普通 merge 已进入整合，尚未推送或部署。Fable 隐式 3 倍撤销已由用户明确要求。
 
 ## 同步坐标
 
@@ -19,8 +19,7 @@
 | KIRO 参考 | `6ba76ea105e065a5aa8dd2b8d2957528ed58935b`，本轮不推进 |
 
 本地 dev 原来落后 origin/dev 169 commits，已以 fast-forward 对齐。
-原工作区 `.gitignore` / `AGENTS.md` 的用户修改保留；本地生产配置不读取、
-不复制、不提交。本轮 GitHub Actions 查询不涉及生产 API 或真实 provider 调用。
+原工作区 `.gitignore` / `AGENTS.md` 的用户修改保留；仅查阅本地正式服操作约束，不复制或提交凭据；本轮 GitHub Actions 查询不涉及生产 API 或真实 provider 调用。
 Git 配置中的代理不可连接，本轮 fetch 使用命令级 `http.proxy=`，未修改全局配置。
 
 ## 安全巡检证据与修复范围
@@ -57,7 +56,7 @@ Fable 5.1 max 未配置倍率时恢复 1 倍；显式 effort 配置继续优先�
 先修改既有回归测试证明旧代码失败，再修改共享默认逻辑和前端提示，
 保留显式倍率及其他模型、Astra Ultrafast 回归。
 
-## 待决定：平台目录与迁移
+## 已确认：平台目录与迁移（方案 A）
 
 上游 `e2939cd8f` / `874871a25` 新增 Command Code / Cline，
 `3b89cc08d` / `7ffa38a8a` 引入前后端平台目录，
@@ -77,7 +76,7 @@ Fable 5.1 max 未配置倍率时恢复 1 倍；显式 effort 配置继续优先�
 以后新增平台仍需要迁移。
 方案 C：本轮暂不接新平台，保留现有数据库 CHECK；只兼容既有平台的目录重构。
 
-## 待决定：GPT-6.1 Sol 订阅长上下文费用
+## 已确认：GPT-6.1 Sol 订阅长上下文费用
 
 上游 `43768680d38ccdbd8fffc2cb91d3c1fc778a61c6` 取消实际 OpenAI
 OAuth-like 订阅凭据转发 GPT-6.1 Sol 时的模型长上下文附加费。
@@ -99,4 +98,4 @@ API Key 凭据仍按原 API 价卡；显式自定义区间定价、分组倍率�
 经独立 reviewer 全量复审通过后，才能非强推 dev，并等待精确 SHA 全部 CI。
 main 仅 fast-forward 与 origin/main 对齐，不把 dev 发布到 main。
 
-当前只完成调查与准备，尚无本轮最终代码测试、独立复审或 CI 成功声明。
+当前整合与本地验证进行中，最终独立复审、push 和精确 SHA CI 尚未完成。

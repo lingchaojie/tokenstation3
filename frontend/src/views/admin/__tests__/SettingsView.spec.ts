@@ -2061,7 +2061,7 @@ describe("admin SettingsView platform quota matrix", () => {
     getProviders.mockResolvedValue({ data: [] });
   });
 
-  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 12 平台行", async () => {
+  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 14 平台行", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -2082,9 +2082,11 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(html).toContain("minimax");
     expect(html).toContain("opencode_go");
     expect(html).toContain("typesafe");
+    expect(html).toContain("command_code");
+    expect(html).toContain("cline");
   });
 
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 12 平台）", async () => {
+  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 14 平台）", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -2113,6 +2115,8 @@ describe("admin SettingsView platform quota matrix", () => {
       "minimax",
       "opencode_go",
       "typesafe",
+      "command_code",
+      "cline",
     ];
     expect(Object.keys(quotas).sort()).toEqual([...platforms].sort());
     for (const p of platforms) {
@@ -2128,13 +2132,13 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
   });
 
-  it("加载后 form.default_platform_quotas 含全 12 平台，从嵌套 JSON 正确读取数值", async () => {
+  it("加载后 form.default_platform_quotas 含全 14 平台，从嵌套 JSON 正确读取数值", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       default_platform_quotas: {
         anthropic: { daily: 5, weekly: null, monthly: null },
         openai:    { daily: null, weekly: 12.5, monthly: null },
-        // 其余 10 个平台缺失 -> 应被归一化为全 null
+        // 其余 12 个平台缺失 -> 应被归一化为全 null
       },
     });
 
@@ -2161,6 +2165,8 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(quotas["minimax"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["opencode_go"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["typesafe"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["command_code"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["cline"]).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("空输入（v-model.number 产出 \"\"）在提交时清洗为 null 而非空字符串", async () => {

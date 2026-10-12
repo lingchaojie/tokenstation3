@@ -9,6 +9,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/lib/pq"
 )
@@ -91,6 +92,9 @@ func NewUserPlatformQuotaRepository(client *dbent.Client) UserPlatformQuotaRepos
 func (r *userPlatformQuotaRepository) BulkInsertInitial(ctx context.Context, records []UserPlatformQuotaRecord) error {
 	if len(records) == 0 {
 		return nil
+	}
+	if err := validateQuotaPlatforms(records); err != nil {
+		return err
 	}
 
 	client := clientFromContext(ctx, r.client)
@@ -177,6 +181,9 @@ func (r *userPlatformQuotaRepository) ListByUser(ctx context.Context, userID int
 //
 // 上层正常路径（注册时 BulkInsertInitial）保证 limit 在记录创建时就被写入。
 func (r *userPlatformQuotaRepository) IncrementUsageWithReset(ctx context.Context, userID int64, platform string, cost float64, now time.Time) error {
+	if err := validateQuotaPlatform(platform); err != nil {
+		return err
+	}
 	return r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
 		existing, err := txClient.UserPlatformQuota.Query().
 			Where(
@@ -337,6 +344,9 @@ func monthlyMaybeReset(prevUsage float64, prevStart *time.Time, cost float64, no
 //
 // 仅改 *_limit_usd + deleted_at + updated_at，保留 *_usage_usd / *_window_start。
 func (r *userPlatformQuotaRepository) UpsertForUser(ctx context.Context, userID int64, records []UserPlatformQuotaRecord) error {
+	if err := validateQuotaPlatforms(records); err != nil {
+		return err
+	}
 	return r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
 		platforms := make([]string, 0, len(records))
 		for _, rec := range records {
@@ -454,6 +464,11 @@ func (r *userPlatformQuotaRepository) BatchSnapshotUsage(ctx context.Context, sn
 		return nil
 	}
 
+	for _, snapshot := range snapshots {
+		if err := validateQuotaPlatform(snapshot.Platform); err != nil {
+			return err
+		}
+	}
 	client := clientFromContext(ctx, r.client)
 
 	for start := 0; start < len(snapshots); start += batchRows {
@@ -503,6 +518,24 @@ func (r *userPlatformQuotaRepository) BatchSnapshotUsage(ctx context.Context, sn
 			}
 			return err
 		}
+	}
+	return nil
+}
+
+// validateQuotaPlatforms 在原生 SQL 写入前校验平台须为平台清单中的具体平台，
+// 取代迁移 248 删除的 user_platform_quotas_platform_check 约束（原生 SQL 不经过 ent Validate）。
+func validateQuotaPlatforms(records []UserPlatformQuotaRecord) error {
+	for _, rec := range records {
+		if err := validateQuotaPlatform(rec.Platform); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateQuotaPlatform(platform string) error {
+	if !domain.IsConcretePlatform(platform) {
+		return fmt.Errorf("user_platform_quotas: platform %q is not allowed", platform)
 	}
 	return nil
 }

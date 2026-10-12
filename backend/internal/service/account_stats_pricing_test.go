@@ -1424,3 +1424,39 @@ func newTestChannelServiceForStats(t *testing.T, channel *Channel, groupID int64
 	cs.cache.Store(cache)
 	return cs
 }
+
+func TestApplyAccountStatsCost_SubscriptionExemptionPreservesCustomRules(t *testing.T) {
+	for _, tc := range []struct {
+		name                              string
+		exempt, customerPrice, customRule bool
+		want                              float64
+	}{
+		{name: "provider_cost_by_default", want: 0.233},
+		{name: "subscription_provider_cost", exempt: true, want: 0.1215},
+		{name: "subscription_customer_price", exempt: true, customerPrice: true, want: 0.75},
+		{name: "subscription_explicit_interval", exempt: true, customerPrice: true, customRule: true, want: 1.215},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &Channel{ID: 1, Status: StatusActive, ApplyPricingToAccountStats: tc.customerPrice}
+			if tc.customRule {
+				channel.AccountStatsPricingRules = []AccountStatsPricingRule{{
+					AccountIDs: []int64{1},
+					Pricing: []ChannelModelPricing{{Models: []string{"gpt-6.1-sol"}, Intervals: []PricingInterval{{
+						MinTokens:  100,
+						InputPrice: testPtrFloat64(0.01), OutputPrice: testPtrFloat64(0.02), CacheReadPrice: testPtrFloat64(0.001),
+					}}}},
+				}}
+			}
+			cs := newTestChannelServiceForStats(t, channel, 10, PlatformOpenAI)
+			bs := newTestBillingServiceWithPrices(map[string]*ModelPricing{"gpt-6.1-sol": {
+				InputPricePerToken: 0.001, OutputPricePerToken: 0.002, CacheReadPricePerToken: 0.0001,
+				LongContextInputThreshold: 100, LongContextInputMultiplier: 2, LongContextOutputMultiplier: 1.5,
+			}})
+			usageLog := &UsageLog{}
+			applyAccountStatsCost(context.Background(), usageLog, cs, bs, 1, 10, "gpt-6.1-sol", "public-alias",
+				UsageTokens{InputTokens: 101, OutputTokens: 10, CacheReadTokens: 5}, 0.75, time.Time{}, tc.exempt)
+			require.NotNil(t, usageLog.AccountStatsCost)
+			require.InDelta(t, tc.want, *usageLog.AccountStatsCost, 1e-12)
+		})
+	}
+}

@@ -81,6 +81,7 @@ var upstreamSyncMigrationFilenames = []string{
 	"245_channel_reasoning_effort_multipliers.sql",
 	"246_add_payment_order_bonus_amount.sql",
 	"247_add_typesafe_platform.sql",
+	"248_drop_platform_check_constraints.sql",
 }
 
 func TestUpstreamSyncMigrationSequenceStartsAfterLocal190(t *testing.T) {

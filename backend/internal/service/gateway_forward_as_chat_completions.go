@@ -553,10 +553,22 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if event == nil {
 			return false
 		}
-		// Drop Anthropic keepalive pings before OpenAI conversion:
-		// leaking `event: ping` frames crashes OpenAI-stream clients.
-		// Error events must still forward — they carry upstream failures.
 		if event.Type == "ping" {
+			// Heartbeats share the first-output stage so a silent upstream can
+			// still fail over before the response is committed to the client.
+			if err := staged.write(c, writeHeaders, ": ping\n\n", semanticOutput || (terminalObserved && providerPayloadObserved)); err != nil {
+				var clientWriteErr *stagedConvertedClientWriteError
+				if errors.As(err, &clientWriteErr) {
+					clientDisconnected = true
+				} else {
+					stagedWriteErr = err
+				}
+				return true
+			}
+			if staged.committed {
+				captureWebChatStreamString(ctx, ": ping\n\n")
+				c.Writer.Flush()
+			}
 			return false
 		}
 		if firstChunk {

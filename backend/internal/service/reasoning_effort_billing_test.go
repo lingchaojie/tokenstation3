@@ -229,7 +229,7 @@ func TestAccountStatsCustomRulesUseOwnReasoningEffortMultipliers(t *testing.T) {
 					ReasoningEffortMultipliers: map[string]float64{"high": 1.5},
 				}},
 			}}}
-			for effort, multiplier := range map[string]float64{"high": 1.5, "max": 3} {
+			for effort, multiplier := range map[string]float64{"high": 1.5, "max": 1} {
 				cost := tryCustomRules(channel, 1, 100, PlatformAnthropic, "claude-fable-5-1", UsageTokens{InputTokens: 100}, 2, effort)
 				require.NotNil(t, cost)
 				base := 0.2

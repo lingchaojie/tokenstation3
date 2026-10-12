@@ -1,39 +1,23 @@
+import { reactive, watchSyncEffect } from 'vue'
 import type { AccountPlatform, GroupPlatform } from '@/types'
+import { listPlatforms } from './platformCatalog'
 
-export interface PlatformOption<T extends string = string> {
+export type PlatformOption<T extends string = string> = {
   value: T
   label: string
 }
 
-/**
- * Concrete upstream platforms supported by accounts and request routing.
- * Keep platform selectors derived from this catalog so newly added providers
- * do not silently disappear from list filters.
- */
-export const CONCRETE_PLATFORM_OPTIONS = [
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'gemini', label: 'Gemini' },
-  { value: 'antigravity', label: 'Antigravity' },
-  { value: 'kiro', label: 'Kiro' },
-  { value: 'grok', label: 'Grok' },
-  { value: 'kimi', label: 'Kimi' },
-  { value: 'zhipu', label: 'Zhipu GLM' },
-  { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'minimax', label: 'MiniMax' },
-  { value: 'opencode_go', label: 'OpenCode' },
-  { value: 'typesafe', label: 'TypeSafe / Jev' }
-] as const satisfies readonly PlatformOption<AccountPlatform>[]
+/** Concrete account and group platforms registered in the shared catalog. */
+export const CONCRETE_PLATFORM_OPTIONS: PlatformOption<AccountPlatform>[] = reactive([])
+export const CONCRETE_PLATFORM_VALUES: AccountPlatform[] = reactive([])
+export const GROUP_PLATFORM_OPTIONS: PlatformOption<GroupPlatform>[] = reactive([])
+export const GROUP_PLATFORM_VALUES: GroupPlatform[] = reactive([])
 
-export const CONCRETE_PLATFORM_VALUES = CONCRETE_PLATFORM_OPTIONS.map(
-  (option) => option.value,
-) as AccountPlatform[]
-
-/** Platforms that can own a group. */
-export const GROUP_PLATFORM_OPTIONS = [
-  ...CONCRETE_PLATFORM_OPTIONS
-] as const satisfies readonly PlatformOption<GroupPlatform>[]
-
-export const GROUP_PLATFORM_VALUES = GROUP_PLATFORM_OPTIONS.map(
-  (option) => option.value,
-) as GroupPlatform[]
+watchSyncEffect(() => {
+  const concrete = listPlatforms().map(spec => ({ value: spec.id, label: spec.display_name }))
+  const values = concrete.map(option => option.value)
+  CONCRETE_PLATFORM_OPTIONS.splice(0, CONCRETE_PLATFORM_OPTIONS.length, ...concrete)
+  CONCRETE_PLATFORM_VALUES.splice(0, CONCRETE_PLATFORM_VALUES.length, ...values)
+  GROUP_PLATFORM_OPTIONS.splice(0, GROUP_PLATFORM_OPTIONS.length, ...concrete)
+  GROUP_PLATFORM_VALUES.splice(0, GROUP_PLATFORM_VALUES.length, ...values)
+})

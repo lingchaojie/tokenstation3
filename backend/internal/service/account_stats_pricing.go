@@ -20,9 +20,10 @@ import (
 // totalCost 是本次请求的客户计费（倍率前），用于优先级 3。
 // serviceTier 是最终参与用户计费的 OpenAI 服务层级，用于 provider 定价。
 type accountStatsCostUsage struct {
-	requestCount int
-	usageUnits   float64
-	sizeTier     string
+	requestCount                   int
+	usageUnits                     float64
+	sizeTier                       string
+	disableModelLongContextPricing bool
 }
 
 // pricingAt 与本次客户计费使用同一时刻，避免跨峰谷请求的成本与售价错位。
@@ -61,7 +62,8 @@ func resolveAccountStatsCostWithUsage(
 
 	// 账号是否向用户收取长上下文溢价，不改变 provider 的实际成本。
 	// 因此实际命中的 provider 长上下文价格必须先于客户计费回退。
-	if billingService != nil {
+	// 已确认的订阅模型豁免只跳过模型价卡附加费，显式自定义规则仍保持最高优先级。
+	if billingService != nil && !usage.disableModelLongContextPricing {
 		if cost := tryLongContextModelFilePricing(billingService, upstreamModel, tokens, serviceTier, pricingAt, reasoningEffort); cost != nil {
 			return cost
 		}
@@ -78,7 +80,7 @@ func resolveAccountStatsCostWithUsage(
 
 	// 优先级 4：模型定价文件（LiteLLM）默认价格
 	if billingService != nil {
-		return tryModelFilePricing(billingService, upstreamModel, tokens, serviceTier, pricingAt, reasoningEffort)
+		return tryModelFilePricingWithPolicy(billingService, upstreamModel, tokens, serviceTier, pricingAt, usage.disableModelLongContextPricing, reasoningEffort)
 	}
 
 	return nil
@@ -97,6 +99,10 @@ func tryLongContextModelFilePricing(billingService *BillingService, model string
 // 每加一个定价特性都要手工镜像一次。解析器不配置渠道或分组，保持优先级 3 的
 // 语义：只取模型定价文件，不引入自定义售价。
 func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, reasoningEfforts ...string) *float64 {
+	return tryModelFilePricingWithPolicy(billingService, model, tokens, serviceTier, pricingAt, false, reasoningEfforts...)
+}
+
+func tryModelFilePricingWithPolicy(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, disableModelLongContextPricing bool, reasoningEfforts ...string) *float64 {
 	reasoningEffort := ""
 	if len(reasoningEfforts) > 0 {
 		reasoningEffort = reasoningEfforts[0]
@@ -104,14 +110,15 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 	// Customer-billing switches do not discount the estimated provider cost.
 	// Keep the catalog's applicable long-context pricing independent of them.
 	breakdown, err := billingService.CalculateCostUnified(CostInput{
-		Ctx:             context.Background(),
-		Model:           model,
-		Tokens:          tokens,
-		RateMultiplier:  1,
-		ServiceTier:     normalizeBillingServiceTier(serviceTier),
-		ReasoningEffort: reasoningEffort,
-		PricingAt:       pricingAt,
-		Resolver:        NewModelPricingResolver(nil, billingService),
+		Ctx:                            context.Background(),
+		Model:                          model,
+		Tokens:                         tokens,
+		RateMultiplier:                 1,
+		ServiceTier:                    normalizeBillingServiceTier(serviceTier),
+		ReasoningEffort:                reasoningEffort,
+		PricingAt:                      pricingAt,
+		Resolver:                       NewModelPricingResolver(nil, billingService),
+		DisableModelLongContextPricing: disableModelLongContextPricing,
 	})
 	if err != nil || breakdown == nil || breakdown.TotalCost < 0 {
 		return nil
@@ -355,6 +362,7 @@ func applyAccountStatsCost(
 	tokens UsageTokens,
 	totalCost float64,
 	pricingAt time.Time,
+	disableModelLongContextPricing ...bool,
 ) {
 	if usageLog == nil {
 		return
@@ -364,6 +372,9 @@ func applyAccountStatsCost(
 		model = requestedModel
 	}
 	usage := accountStatsCostUsage{requestCount: 1}
+	if len(disableModelLongContextPricing) > 0 {
+		usage.disableModelLongContextPricing = disableModelLongContextPricing[0]
+	}
 	if usageLog.VideoCount > 0 {
 		usage.requestCount = usageLog.VideoCount
 		resolution := ""

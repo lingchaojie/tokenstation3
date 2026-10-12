@@ -127,12 +127,13 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     popupTotal.value = 0
   }
 
-  async function markAsRead(id: number): Promise<void> {
+  async function markAsRead(id: number): Promise<boolean> {
     await announcementsAPI.markRead(id)
     const ann = announcements.value.find((a) => a.id === id)
     if (ann) {
       ann.read_at = new Date().toISOString()
     }
+    return true
   }
 
   async function markAllAsRead() {

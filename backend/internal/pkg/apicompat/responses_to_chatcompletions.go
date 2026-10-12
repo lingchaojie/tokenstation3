@@ -15,7 +15,8 @@ import (
 
 // ResponsesToChatCompletions converts a Responses API response into a Chat
 // Completions response. Text output items are concatenated into
-// choices[0].message.content; function_call items become tool_calls.
+// choices[0].message.content, refusal parts into choices[0].message.refusal;
+// function_call items become tool_calls.
 func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatCompletionsResponse {
 	id := resp.ID
 	if id == "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
 
@@ -71,35 +72,19 @@ func hasOpenAIModelSeriesPrefix(model string) bool {
 	return false
 }
 
-func isConcreteRequestPlatform(platform string) bool {
-	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe:
-		return true
-	default:
-		return false
-	}
-}
-
 // IsOpenAICompatiblePlatform reports whether a platform can be reached through
 // OpenAI-compatible gateway entry points.
 func IsOpenAICompatiblePlatform(platform string) bool {
-	switch platform {
-	case PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
-		return true
-	default:
-		return false
-	}
+	return domain.UsesOpenAIGateway(platform)
 }
 
-// NormalizeOpenAICompatiblePlatform returns the canonical OpenAI-compatible
-// platform value used by account/group validation.
+// NormalizeOpenAICompatiblePlatform preserves registered OpenAI gateway
+// platforms for exact account selection, defaulting other values to OpenAI.
 func NormalizeOpenAICompatiblePlatform(platform string) string {
-	switch platform {
-	case PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
+	if IsOpenAICompatiblePlatform(platform) {
 		return platform
-	default:
-		return PlatformOpenAI
 	}
+	return PlatformOpenAI
 }
 
 func WithOpenAICompatiblePlatform(ctx context.Context, platform string) context.Context {
