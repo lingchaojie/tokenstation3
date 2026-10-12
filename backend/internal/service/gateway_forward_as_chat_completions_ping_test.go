@@ -190,7 +190,7 @@ func TestHandleCCStreamingFromAnthropic_PingDoesNotSetFirstToken(t *testing.T) {
 	require.Empty(t, writer.Body.String(), "heartbeats must not commit an invalid stream")
 }
 
-func TestHandleCCStreamingFromAnthropic_PingWriteFailureStopsDownstream(t *testing.T) {
+func TestHandleCCStreamingFromAnthropic_PingWriteFailureDrainsUsage(t *testing.T) {
 	for _, withUsage := range []bool{false, true} {
 		name := "zero_input_usage"
 		if withUsage {
@@ -206,6 +206,7 @@ func TestHandleCCStreamingFromAnthropic_PingWriteFailureStopsDownstream(t *testi
 			stream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_failure\",\"usage\":{\"input_tokens\":" + input + "}}}\n\n" +
 				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"hello\"}}\n\n"
 			stream += "event: ping\ndata: {\"type\":\"ping\"}\n\n" +
+				"event: ping\ndata: {\"type\":\"ping\"}\n\n" +
 				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n" +
 				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 			result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(
@@ -218,7 +219,9 @@ func TestHandleCCStreamingFromAnthropic_PingWriteFailureStopsDownstream(t *testi
 			require.Zero(t, writer.writesAfterError)
 			require.Zero(t, writer.flushesAfterError)
 			require.NotContains(t, writer.Body.String(), "[DONE]")
-			require.Zero(t, result.Usage.OutputTokens)
+			require.Equal(t, 7, result.Usage.OutputTokens, "client disconnect must not truncate provider billing usage")
+			require.True(t, result.ClientDisconnect)
+			require.True(t, result.CaptureResponseComplete)
 			if withUsage {
 				require.Equal(t, 10, result.Usage.InputTokens)
 			} else {

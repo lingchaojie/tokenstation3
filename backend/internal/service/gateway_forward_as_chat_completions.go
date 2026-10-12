@@ -554,15 +554,20 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			return false
 		}
 		if event.Type == "ping" {
+			if clientDisconnected {
+				return false
+			}
 			// Heartbeats share the first-output stage so a silent upstream can
 			// still fail over before the response is committed to the client.
 			if err := staged.write(c, writeHeaders, ": ping\n\n", semanticOutput || (terminalObserved && providerPayloadObserved)); err != nil {
 				var clientWriteErr *stagedConvertedClientWriteError
 				if errors.As(err, &clientWriteErr) {
 					clientDisconnected = true
-				} else {
-					stagedWriteErr = err
+					// Drain the provider's terminal usage just as for failed
+					// content writes; disconnecting must not truncate billing.
+					return false
 				}
+				stagedWriteErr = err
 				return true
 			}
 			if staged.committed {

@@ -304,7 +304,9 @@ func (s *CNProviderQuotaService) applyClineWallets(ctx context.Context, account 
 
 	switch until, reason := clinePassWalletState(subscribed, tiers, now, fallback); {
 	case until != nil:
-		s.setClineWalletLimit(ctx, account, clinePassRateLimitKey, *until, reason, now)
+		if canReplaceClineWalletLimitFromProbe(account, clinePassRateLimitKey, now) {
+			s.setClineWalletLimit(ctx, account, clinePassRateLimitKey, *until, reason, now)
+		}
 	case account.isRateLimitActiveForKey(clinePassRateLimitKey):
 		reason := account.modelRateLimitReason(clinePassRateLimitKey)
 		if strings.HasPrefix(reason, clinePassLimitReason) || strings.HasPrefix(reason, clinePassNoSubscriptionReason) {
@@ -321,13 +323,34 @@ func (s *CNProviderQuotaService) applyClineWallets(ctx context.Context, account 
 	}
 	switch low := balance.Balance <= 0 || balance.Balance < threshold; {
 	case low:
-		s.setClineWalletLimit(ctx, account, clineCreditsRateLimitKey, fallback,
-			fmt.Sprintf("%s: balance %.4g USD below threshold %.2f", clineCreditsLowReason, balance.Balance, threshold), now)
+		if canReplaceClineWalletLimitFromProbe(account, clineCreditsRateLimitKey, now) {
+			s.setClineWalletLimit(ctx, account, clineCreditsRateLimitKey, fallback,
+				fmt.Sprintf("%s: balance %.4g USD below threshold %.2f", clineCreditsLowReason, balance.Balance, threshold), now)
+		}
 	case account.isRateLimitActiveForKey(clineCreditsRateLimitKey):
 		reason := account.modelRateLimitReason(clineCreditsRateLimitKey)
 		if strings.HasPrefix(reason, clineCreditsReason) || strings.HasPrefix(reason, clineCreditsLowReason) {
 			s.setClineWalletLimit(ctx, account, clineCreditsRateLimitKey, now, "", now)
 		}
+	}
+}
+
+// canReplaceClineWalletLimitFromProbe preserves active restrictions whose
+// recovery cannot be proven by account probes. Replacing their reason would
+// let the next healthy probe clear an unrelated spend/inference/entitlement cap.
+func canReplaceClineWalletLimitFromProbe(account *Account, scope string, now time.Time) bool {
+	resetAt := account.modelRateLimitResetAt(scope)
+	if resetAt == nil || !now.Before(*resetAt) {
+		return true
+	}
+	reason := account.modelRateLimitReason(scope)
+	switch scope {
+	case clinePassRateLimitKey:
+		return strings.HasPrefix(reason, clinePassLimitReason) || strings.HasPrefix(reason, clinePassNoSubscriptionReason)
+	case clineCreditsRateLimitKey:
+		return strings.HasPrefix(reason, clineCreditsReason) || strings.HasPrefix(reason, clineCreditsLowReason)
+	default:
+		return false
 	}
 }
 

@@ -83,4 +83,94 @@ describe('ops settings load guard', () => {
     await flushPromises()
     expect(wrapper.get('button.btn-primary').attributes('disabled')).toBeUndefined()
   })
+
+  it.each(['before', 'after'] as const)(
+    'does not unlock stale settings when the old load succeeds %s the reopened load fails',
+    async (oldCompletes) => {
+      const old = deferred<object>()
+      const current = deferred<object>()
+      opsAPI.getMetricThresholds.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+      const wrapper = await openDialog()
+      await wrapper.setProps({ show: false })
+      await wrapper.setProps({ show: true })
+
+      if (oldCompletes === 'before') {
+        old.resolve({ sla_percent_min: 11 })
+        await flushPromises()
+        expect(wrapper.get('button.btn-primary').attributes('disabled')).toBeDefined()
+        await (wrapper.vm as unknown as View).saveAllSettings()
+        expect(opsAPI.updateMetricThresholds).not.toHaveBeenCalled()
+        expect(showError).not.toHaveBeenCalled()
+      }
+      current.reject(new Error('current load failed'))
+      await flushPromises()
+      if (oldCompletes === 'after') {
+        old.resolve({ sla_percent_min: 11 })
+        await flushPromises()
+      }
+
+      expect(wrapper.get('button.btn-primary').attributes('disabled')).toBeDefined()
+      await (wrapper.vm as unknown as View).saveAllSettings()
+      expect(opsAPI.updateAlertRuntimeSettings).not.toHaveBeenCalled()
+      expect(opsAPI.updateEmailNotificationConfig).not.toHaveBeenCalled()
+      expect(opsAPI.updateAdvancedSettings).not.toHaveBeenCalled()
+      expect(opsAPI.updateMetricThresholds).not.toHaveBeenCalled()
+      expect(wrapper.emitted('saved')).toBeUndefined()
+      expect(showError).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('keeps the reopened load pending without reporting an obsolete failure', async () => {
+    const old = deferred<object>()
+    const current = deferred<object>()
+    opsAPI.getMetricThresholds.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+    const wrapper = await openDialog()
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    old.reject(new Error('obsolete load failed'))
+    await flushPromises()
+
+    expect(showError).not.toHaveBeenCalled()
+    expect(wrapper.get('button.btn-primary').attributes('disabled')).toBeDefined()
+    await (wrapper.vm as unknown as View).saveAllSettings()
+    expect(opsAPI.updateMetricThresholds).not.toHaveBeenCalled()
+
+    current.resolve({ sla_percent_min: 97 })
+    await flushPromises()
+    expect(wrapper.get('button.btn-primary').attributes('disabled')).toBeUndefined()
+  })
+
+  it('saves only the reopened session values when an older load succeeds last', async () => {
+    const old = deferred<object>()
+    const current = deferred<object>()
+    opsAPI.getAlertRuntimeSettings
+      .mockResolvedValueOnce({ evaluation_interval_seconds: 10 })
+      .mockResolvedValueOnce({ evaluation_interval_seconds: 30 })
+    opsAPI.getMetricThresholds.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+    const wrapper = await openDialog()
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    current.resolve({ sla_percent_min: 97 })
+    await flushPromises()
+    old.resolve({ sla_percent_min: 11 })
+    await flushPromises()
+
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(opsAPI.updateAlertRuntimeSettings).toHaveBeenCalledWith(expect.objectContaining({ evaluation_interval_seconds: 30 }))
+    expect(opsAPI.updateMetricThresholds).toHaveBeenCalledWith(expect.objectContaining({ sla_percent_min: 97 }))
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+  })
+
+  it.each(['close', 'unmount'] as const)('ignores a pending load error after %s', async (action) => {
+    const pending = deferred<object>()
+    opsAPI.getMetricThresholds.mockReturnValueOnce(pending.promise)
+    const wrapper = await openDialog()
+    if (action === 'close') await wrapper.setProps({ show: false })
+    else wrapper.unmount()
+    pending.reject(new Error('closed session load failed'))
+    await flushPromises()
+
+    expect(showError).not.toHaveBeenCalled()
+  })
 })

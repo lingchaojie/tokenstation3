@@ -4817,16 +4817,17 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       } else {
         editAccountMode.value = resolveProviderAccountMode(newAccount.platform, credentials.account_mode)
       }
-      const storedProtocol = credentials.api_protocol
+      const storedProtocol = typeof credentials.api_protocol === 'string' ? credentials.api_protocol.trim() : ''
+      const defaultProtocol = providerRoutesByModel(newAccount.platform) ? 'adaptive' : 'chat_completions'
       editApiProtocol.value =
         storedProtocol === 'adaptive' ||
         storedProtocol === 'chat_completions' ||
         storedProtocol === 'anthropic' ||
         storedProtocol === 'responses'
           ? storedProtocol
-          : 'chat_completions'
+          : defaultProtocol
       if (!cnSupportsNativeResponses(newAccount.platform, currentOpenCodeOrCNMode()) && editApiProtocol.value === 'responses') {
-        editApiProtocol.value = 'chat_completions'
+        editApiProtocol.value = defaultProtocol
       }
       const adaptiveDefaults = defaultCNAdaptiveBaseUrls(newAccount.platform, currentOpenCodeOrCNMode())
       const storedBaseUrls = (credentials.api_base_urls as Record<string, unknown> | undefined) || {}
