@@ -55,3 +55,30 @@
 原 A/B 与早期生成日志位于 /tmp，恢复时已不存在，其结果仅保留为当时的
 历史观察。最终生成检查及完整后端验证使用 0bd 的新持久日志替代最终证明。
 不提交原始日志、工具二进制、正式服本地说明或凭据；未连接正式服。
+
+## 21e9 后的完整复审与最终修复
+
+基础设施 35 路径复审给出 SAFE；后端完整 194 路径、前端完整 148 路径均
+给出 NOT SAFE，确认两个 P2 域，旧结论不批准随后版本：
+
+- Command Code 额度与余额探测的窗口恢复，以及周期余额的健康清除/短缺续停，
+  都可能依据网络探测前旧快照清除或覆盖期间新写入的花费限制。四个确定性
+  overlay 场景均失败，周期场景使用仓库原有时间只增不减条件复现覆盖。
+  最终以完整 temp deadline/reason tuple 原子比较更新；更新与 outbox 在同一
+  SQL CTE 内提交，失败一起回滚；只有 applied 才改本地快照和报告状态变化。
+  拒绝写入时读取权威缓存，已删除账户移出缓存。详见 temp-probe-cas-fix.md。
+- 本地合法 Token 定价的视频会保留 VideoCount=1 和 BillingModeToken，已有
+  RecordUsage 回归证明；只过滤 billing_mode=video 不足以判断媒体身份。共享
+  用户/管理员 DTO 新增 video_count（零省略），前端 optional 字段及 formatter
+  以数量过滤，保留原 Token 定价。DTO 三个 RED 场景与 UI 三个 RED 场景均
+  观察失败后修复通过，whole DTO suite 及两文件 59 项 GREEN。
+
+提交为视频身份 031df8290 与 temp CAS f31205d579f7a3b08c1bed05f34940d0dd570139。
+最终完整后端 generation/unit/integration/lint/govulncheck/三组 race/embed/web
+均对应 f312，详细命令与时间在 validation.json。前端 444 files / 3551 tests、
+critical 775 / WebChat 75、lint/typecheck/build 对应 031df，1057 文件与 f312
+逐字节一致，清单 SHA256：
+`a10c15e532a933c8e088b18c41a04b725328fb217f1f465f54b5c3a98d2f4c01`。
+同类问题检查涵盖新 CN/Command Code/Cline 探测恢复路径；旧 OAuth refresh
+路径未因本轮修改，不扩大 API Key 探测修复到该独立行为。
+推送仍等待最终版本的全新独立全量复审与上游范围选择。
