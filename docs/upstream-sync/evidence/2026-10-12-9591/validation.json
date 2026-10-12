@@ -1,0 +1,146 @@
+{
+  "production_sha": "896ca30d6b809f72ddb20a455e2410508792183d",
+  "checks": [
+    {
+      "command": [
+        "go",
+        "build",
+        "-tags=embed",
+        "-trimpath",
+        "-o",
+        "/tmp/tokenstation3-896ca-server",
+        "./cmd/server"
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
+      "start": "2026-10-12T11:42:58.841278+00:00",
+      "end": "2026-10-12T11:45:20.427417+00:00",
+      "duration": 137.56839679200039,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-build-embed.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    },
+    {
+      "command": [
+        "/tmp/tokenstation3-20261012-security/bin/govulncheck",
+        "./..."
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
+      "start": "2026-10-12T11:46:28.817306+00:00",
+      "end": "2026-10-12T11:46:45.980824+00:00",
+      "duration": 16.31524174900005,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-govulncheck.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "-p",
+        "1",
+        "-timeout=20m",
+        "-tags=integration",
+        "./..."
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
+      "start": "2026-10-12T11:42:58.830672+00:00",
+      "end": "2026-10-12T11:50:19.017482+00:00",
+      "duration": 427.56776795500036,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-integration.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    },
+    {
+      "command": [
+        "/tmp/tokenstation3-20261012-security/bin/golangci-lint",
+        "run",
+        "--timeout=30m",
+        "--concurrency=2",
+        "--max-issues-per-linter=0",
+        "--max-same-issues=0"
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
+      "start": "2026-10-12T11:42:58.831358+00:00",
+      "end": "2026-10-12T11:46:36.679749+00:00",
+      "duration": 211.0151121699996,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-lint.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "-p",
+        "1",
+        "-race",
+        "-timeout=10m",
+        "-tags=unit",
+        "./internal/repository",
+        "-run",
+        "Test(EnableHTTP2KeepAlive|BuildUpstreamTransport_(HTTP2|LongStreamH2|NonHTTP2|NegotiatesExpectedProtocol)|HTTP2PingPolicy|OpsOutputTPSOverviewFailurePolicy)"
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
+      "start": "2026-10-12T11:57:06.201292+00:00",
+      "end": "2026-10-12T11:57:14.156174+00:00",
+      "duration": 6.926242203000584,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-race-repository.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "-p",
+        "1",
+        "-race",
+        "-timeout=20m",
+        "-tags=unit",
+        "./internal/handler",
+        "./internal/service",
+        "./internal/service/openai_ws_v2",
+        "./internal/repository",
+        "-run",
+        "Test(OpenAIResponsesWebSocket_(GroupRateChange|KeyMoved|FailedKeyRefresh)|RefreshOpenAIWSTurnBillingAPIKey|OpenAIWSTurnBillingAPIKeys|HandleCCStreamingFromAnthropic_Ping|Relay_ImageUsage|ApplyAccountStatsCost_SubscriptionExemption|ModelProtocolCatalog)"
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
+      "start": "2026-10-12T11:46:27.661093+00:00",
+      "end": "2026-10-12T11:55:38.342245+00:00",
+      "duration": 534.4461359790002,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-race.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "-p",
+        "2",
+        "-timeout=20m",
+        "-tags=unit",
+        "./..."
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
+      "start": "2026-10-12T11:42:58.828820+00:00",
+      "end": "2026-10-12T11:49:36.477015+00:00",
+      "duration": 385.91519983800026,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-unit.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    }
+  ],
+  "race_scope": "handler/service/WS relay selected tests; initial repository invocation compiled only, separate HTTP2/TPS repository race exercises tests"
+}
