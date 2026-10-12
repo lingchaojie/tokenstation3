@@ -411,7 +411,12 @@ func (s *CNProviderQuotaService) setClineWalletLimit(ctx context.Context, accoun
 	// the detached account. Both DB and local state use the same generation.
 	replacementAccount := &Account{}
 	setAccountModelRateLimitSnapshot(replacementAccount, scope, until, reason, now)
-	replacement, err := json.Marshal(replacementAccount.Extra[modelRateLimitsKey].(map[string]any)[scope])
+	replacementLimits, ok := replacementAccount.Extra[modelRateLimitsKey].(map[string]any)
+	if !ok {
+		slog.Warn("cline_wallet_limit_snapshot_invalid", "account_id", account.ID, "scope", scope)
+		return
+	}
+	replacement, err := json.Marshal(replacementLimits[scope])
 	if err != nil {
 		slog.Warn("cline_wallet_limit_snapshot_invalid", "account_id", account.ID, "scope", scope, "error", err)
 		return
