@@ -142,5 +142,17 @@
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     }
   ],
-  "race_scope": "handler/service/WS relay selected tests; initial repository invocation compiled only, separate HTTP2/TPS repository race exercises tests"
+  "race_scope": "handler/service/WS relay selected tests; initial repository invocation compiled only, separate HTTP2/TPS repository race exercises tests",
+  "generation": {
+    "production_sha": "896ca30d6b809f72ddb20a455e2410508792183d",
+    "command": [
+      "make",
+      "-C",
+      "backend",
+      "check-generate"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/tokenstation3-20261012-896ca-generate.log",
+    "log_sha256": "5957965599a63ebc843abdac53ea1ebf766f83bf6b702f1b41b5fa52f88b0fe9"
+  }
 }

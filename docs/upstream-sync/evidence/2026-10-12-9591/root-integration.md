@@ -19,7 +19,7 @@ Coordinates: ours c517f84cd, base b8dece9000c68815a5b867ca5a1e6f236e173905, upst
 - EasyPay: strict notification field set plus dropping unsigned caller return-query parameters prevents sign reuse; keep signed resume params generated later and existing idempotent fulfillment/reward ledger. Mock-only verification.
 - Setup: random absent credentials only when bootstrapping actual first admin; existing deployments skip changes, configured credentials validated against login email/bcrypt72-byte constraints. No production config access.
 - Moderation config save uses transactional setter when supported; deleted-group rejection and runtime replacement occur only after save. Existing whitelist/audit-only flow stays.
-- Web fallback bypasses expanded bare API aliases while keeping local frontend paths and embedded asset fixture SVG contract. New bypass list does not register excluded audio/search endpoints.
+- Web fallback bypasses expanded bare API aliases while keeping local frontend paths and embedded asset fixture PNG contract. New bypass list does not register excluded audio/search endpoints.
 - Ops outputTPS type is frontend JSON contract; repository owner excludes image/video requests and aggregates per-request output durations/TTFT.
 - Migration248 is quota-only CHECK removal, existing242..247 immutable; static migration guard rewritten coordinate without Composite table access. Local historical checksum guard extended only approved248 addition.
 - Generated Ent/Wire: rebuilt exclusively from final local schemas; generated runtime and Wire match prior bytes because only validator implementation behind schema changed.
