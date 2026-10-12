@@ -55,6 +55,7 @@ describe('formatUsageOutputRate', () => {
     { image_count: 1 },
     { image_output_tokens: 100 },
     { billing_mode: 'image' },
+    { billing_mode: 'video' },
     { request_type: 'live' as const },
     { request_type: 'unknown' as const },
   ])('omits non-text or unknown request rates: %j', (fields) => {

@@ -75,7 +75,7 @@ export const formatUsageOutputRate = (row: Pick<UsageLog,
   'output_tokens' | 'duration_ms' | 'image_count' | 'image_output_tokens' | 'billing_mode' | 'request_type'
 >): string => {
   const { output_tokens: outputTokens, duration_ms: durationMs } = row
-  if (row.image_count > 0 || row.image_output_tokens > 0 || row.billing_mode === 'image'
+  if (row.image_count > 0 || row.image_output_tokens > 0 || row.billing_mode === 'image' || row.billing_mode === 'video'
     || (row.request_type && !['sync', 'stream', 'ws_v2', 'cyber'].includes(row.request_type))
     || !Number.isFinite(outputTokens) || outputTokens <= 0
     || durationMs == null || !Number.isFinite(durationMs) || durationMs <= 0) {

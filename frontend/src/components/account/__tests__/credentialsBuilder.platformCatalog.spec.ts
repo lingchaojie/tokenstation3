@@ -191,6 +191,21 @@ describe('credentialsBuilder derives multi-protocol data from the platform catal
 })
 
 describe('credentialsBuilder built-in Command Code provider', () => {
+  it.each([' chat_completions ', '\tanthropic\n', ' responses '])(
+    'uses the explicit base URL for padded native protocol %j', api_protocol => {
+      const account = (base_url: string, chat_completions: string) => ({
+        platform: 'command_code', type: 'apikey',
+        credentials: { api_protocol, base_url, api_base_urls: { chat_completions } }
+      })
+      const official = 'https://api.commandcode.ai/provider/v1'
+      const relay = 'https://relay.example.com/v1'
+      expect(cnQuotaCellVisible(account(official, relay))).toBe(true)
+      expect(cnBalanceCellVisible(account(official, relay))).toBe(true)
+      expect(cnQuotaCellVisible(account(relay, official))).toBe(false)
+      expect(cnBalanceCellVisible(account(relay, official))).toBe(false)
+    }
+  )
+
   it('uses the Command Code endpoints and routes Claude / GPT by model', () => {
     expect(isMultiProtocolApiKeyPlatform('command_code')).toBe(true)
     expect(providerRoutesByModel('command_code')).toBe(true)
@@ -228,6 +243,19 @@ describe('credentialsBuilder built-in Command Code provider', () => {
 })
 
 describe('credentialsBuilder built-in Cline provider', () => {
+  it('uses the protocol-specific endpoint for padded adaptive protocol', () => {
+    const account = (base_url: string, chat_completions: string) => ({
+      platform: 'cline', type: 'apikey',
+      credentials: { api_protocol: ' adaptive ', base_url, api_base_urls: { chat_completions } }
+    })
+    const official = 'https://api.cline.bot/api/v1'
+    const relay = 'https://relay.example.com/v1'
+    expect(cnQuotaCellVisible(account(official, relay))).toBe(false)
+    expect(cnBalanceCellVisible(account(official, relay))).toBe(false)
+    expect(cnQuotaCellVisible(account(relay, official))).toBe(true)
+    expect(cnBalanceCellVisible(account(relay, official))).toBe(true)
+  })
+
   it('only offers Chat Completions and routes by inbound protocol', () => {
     expect(isMultiProtocolApiKeyPlatform('cline')).toBe(true)
     expect(providerRoutesByModel('cline')).toBe(false)

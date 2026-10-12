@@ -568,9 +568,10 @@ function cnUsageCellAccountMode(account: CNUsageCellAccount): string {
 
 /** 与后端 Account.GetAPIProtocol 一致：按模型分流的供应商未指定原生协议时为 adaptive。 */
 function accountUsesAdaptiveProtocol(platform: string, mode: string, protocol: unknown): boolean {
-  if (protocol === 'adaptive') return true
-  if (protocol === 'chat_completions' || protocol === 'anthropic') return false
-  if (protocol === 'responses' && cnSupportsNativeResponses(platform, mode)) return false
+  const apiProtocol = typeof protocol === 'string' ? protocol.trim() : ''
+  if (apiProtocol === 'adaptive') return true
+  if (apiProtocol === 'chat_completions' || apiProtocol === 'anthropic') return false
+  if (apiProtocol === 'responses' && cnSupportsNativeResponses(platform, mode)) return false
   return providerRoutesByModel(platform)
 }
 
