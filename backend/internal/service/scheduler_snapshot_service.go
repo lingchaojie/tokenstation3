@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
@@ -608,15 +609,15 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 			continue
 		}
 		accountGroupIDs := s.normalizeGroupIDs(account.GroupIDs)
-		switch account.Platform {
-		case PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe:
+		switch {
+		case account.Platform != PlatformAntigravity && account.Platform != PlatformKiro && isConcreteRequestPlatform(account.Platform):
 			addPlatformGroups(account.Platform, accountGroupIDs)
-		case PlatformAntigravity:
+		case account.Platform == PlatformAntigravity:
 			// 批量更新可能刚关闭 mixed_scheduling，仍需清理两个兼容平台的旧快照。
 			addPlatformGroups(PlatformAntigravity, accountGroupIDs)
 			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
 			addPlatformGroups(PlatformGemini, accountGroupIDs)
-		case PlatformKiro:
+		case account.Platform == PlatformKiro:
 			// 批量更新可能刚关闭 mixed_scheduling，仍需清理 Anthropic mixed 旧快照。
 			addPlatformGroups(PlatformKiro, accountGroupIDs)
 			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
@@ -846,21 +847,16 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 	return s.rebuildBuckets(ctx, buckets, reason)
 }
 
-func schedulerSnapshotPlatforms() [12]string {
-	return [12]string{
-		PlatformAnthropic,
-		PlatformGemini,
-		PlatformOpenAI,
-		PlatformAntigravity,
-		PlatformKiro,
-		PlatformGrok,
-		PlatformKimi,
-		PlatformZhipu,
-		PlatformDeepseek,
-		PlatformMiniMax,
-		PlatformOpenCodeGo,
-		PlatformTypeSafe,
+// schedulerSnapshotPlatforms retains the historical scheduler order while
+// including every registered platform. Display order is independent of rebuild order.
+func schedulerSnapshotPlatforms() []string {
+	platforms := []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI}
+	for _, platform := range domain.ConcretePlatformIDs() {
+		if platform != PlatformAnthropic && platform != PlatformGemini && platform != PlatformOpenAI {
+			platforms = append(platforms, platform)
+		}
 	}
+	return platforms
 }
 
 // 生命周期辅助函数有意排除 group0；full rebuild 构造 group0 canonical 集时必须显式调用 canonical helper。

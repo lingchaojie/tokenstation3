@@ -75,7 +75,7 @@ func TestCalculateOpenAIRecordUsageCost_EmptyCandidatesIsPricingUnavailable(t *t
 
 	_, err := svc.calculateOpenAIRecordUsageCost(
 		context.Background(), nil, apiKey, nil,
-		1.0, 1.0, 1.0, 1.0, UsageTokens{InputTokens: 100}, "", nil, time.Time{},
+		1.0, 1.0, 1.0, 1.0, UsageTokens{InputTokens: 100}, "", nil, false, time.Time{},
 	)
 	require.Error(t, err)
 	require.True(t, isUsagePricingUnavailableError(err),
@@ -89,15 +89,15 @@ func TestShouldForwardOpenAIResponsesViaNativeAnthropic(t *testing.T) {
 			Type:        AccountTypeAPIKey,
 			Credentials: map[string]any{"api_protocol": APIProtocolAnthropic},
 		}
-		require.True(t, shouldForwardOpenAIResponsesViaNativeAnthropic(account), platform)
+		require.Equal(t, APIProtocolAnthropic, resolveUpstreamProtocol(account, APIProtocolResponses, "", nil), platform)
 	}
 
-	require.False(t, shouldForwardOpenAIResponsesViaNativeAnthropic(&Account{
+	require.NotEqual(t, APIProtocolAnthropic, resolveUpstreamProtocol(&Account{
 		Platform:    PlatformKimi,
 		Type:        AccountTypeAPIKey,
 		Credentials: map[string]any{"api_protocol": APIProtocolAdaptive},
-	}), "adaptive 协议仍由既有探测/协议路由决定，不在本次补线中扩大")
-	require.False(t, shouldForwardOpenAIResponsesViaNativeAnthropic(nil))
+	}, APIProtocolResponses, "", nil), "adaptive 协议仍由既有探测/协议路由决定，不在本次补线中扩大")
+	require.NotEqual(t, APIProtocolAnthropic, resolveUpstreamProtocol(nil, APIProtocolResponses, "", nil))
 }
 
 func TestResponsesStreamingFromNativeAnthropic_ClientDisconnectDrainsUsage(t *testing.T) {

@@ -349,6 +349,7 @@ describe('user UsageView tooltip', () => {
     await nextTick()
 
     const columns = wrapper.get('[data-test="usage-columns"]').text().split(',')
+    expect(columns).toContain('latency')
     expect(columns).toContain('billing_type')
     expect(columns.indexOf('billing_type')).toBeLessThan(columns.indexOf('billing_mode'))
   })

@@ -557,7 +557,8 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe'
+/** Group platforms are concrete platforms from the shared catalog. */
+export type GroupPlatform = AccountPlatform
 export type KiroEndpointMode = 'q' | 'krs' | 'auto'
 
 // 'unified' marks a provider-agnostic key (group_binding_mode = 'auto') that the
@@ -888,7 +889,9 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe'
+/** Platforms with dedicated frontend UI; other catalog platforms use the shared API Key flow. */
+export type KnownAccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe' | 'command_code' | 'cline'
+export type AccountPlatform = KnownAccountPlatform | (string & {})
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1772,6 +1775,9 @@ export interface UsageLog {
   image_input_cost: number
   image_output_tokens: number
   image_output_cost: number
+
+  // 视频数量；历史接口未返回时为空，独立于计费模式。
+  video_count?: number
 
   // User-Agent
   user_agent: string | null

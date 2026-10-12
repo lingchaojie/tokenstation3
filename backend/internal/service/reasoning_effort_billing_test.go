@@ -35,11 +35,14 @@ func TestReasoningEffortBillingMultiplier(t *testing.T) {
 func TestModelReasoningEffortDefaultsAndOverrides(t *testing.T) {
 	for _, model := range []string{"claude-fable-5-1", "vendor/claude-fable-5.1-20260901", "fable51-thinking"} {
 		for _, multipliers := range []map[string]float64{nil, {}, {"high": 2}} {
-			require.Equal(t, 3.0, modelReasoningEffortBillingMultiplier(model, " MAX ", multipliers))
+			require.Equal(t, 1.0, modelReasoningEffortBillingMultiplier(model, " MAX ", multipliers))
 			require.Equal(t, 1.0, modelReasoningEffortBillingMultiplier(model, "xhigh", multipliers))
 		}
 		for _, override := range []float64{0.5, 1, 1.5, 4} {
 			require.Equal(t, override, modelReasoningEffortBillingMultiplier(model, "max", map[string]float64{"max": override}))
+		}
+		for _, invalid := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+			require.Equal(t, 1.0, modelReasoningEffortBillingMultiplier(model, "max", map[string]float64{"max": invalid}))
 		}
 	}
 	for _, model := range []string{"claude-fable-5", "claude-fable-5-11", "gpt-6-sol", "custom-model"} {
@@ -226,7 +229,7 @@ func TestAccountStatsCustomRulesUseOwnReasoningEffortMultipliers(t *testing.T) {
 					ReasoningEffortMultipliers: map[string]float64{"high": 1.5},
 				}},
 			}}}
-			for effort, multiplier := range map[string]float64{"high": 1.5, "max": 3} {
+			for effort, multiplier := range map[string]float64{"high": 1.5, "max": 1} {
 				cost := tryCustomRules(channel, 1, 100, PlatformAnthropic, "claude-fable-5-1", UsageTokens{InputTokens: 100}, 2, effort)
 				require.NotNil(t, cost)
 				base := 0.2

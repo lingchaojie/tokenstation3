@@ -114,7 +114,7 @@ const handleClose = () => {
 useDialogFocus({
   dialogRef,
   isOpen: () => props.show,
-  closeOnEscape: () => props.closeOnEscape,
+  closeOnEscape: () => props.closeOnEscape && [...openDialogs].pop() === dialogId,
   onEscape: () => emit('close'),
   onOpened: () => {
     if (modalBodyRef.value) modalBodyRef.value.scrollTop = 0

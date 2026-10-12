@@ -29,12 +29,22 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { PlatformQuotaItem, PlatformQuotaPlatform } from '@/api/admin/users'
+import type { PlatformQuotaItem } from '@/api/admin/users'
+import { listPlatformIds } from '@/constants/platformCatalog'
 
 const props = defineProps<{ quotas?: PlatformQuotaItem[] }>()
 const { t } = useI18n()
 
-const PLATFORM_ORDER: PlatformQuotaPlatform[] = ['anthropic', 'openai', 'kiro', 'gemini', 'antigravity', 'grok', 'typesafe']
+// 保留既有额度单元格的显示顺序，目录中的其他平台依次追加。
+const LEGACY_PLATFORM_ORDER = ['anthropic', 'openai', 'kiro', 'gemini', 'antigravity', 'grok', 'typesafe']
+function platformRank(platform: string): number {
+  const order = [
+    ...LEGACY_PLATFORM_ORDER,
+    ...listPlatformIds().filter(id => !LEGACY_PLATFORM_ORDER.includes(id))
+  ]
+  const index = order.indexOf(platform)
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index
+}
 
 // 仅展示「至少一档限额非空」的平台（配额列，非用量列）
 const configured = computed(() => {
@@ -47,11 +57,7 @@ const configured = computed(() => {
         q.monthly_limit_usd != null
     )
     .slice()
-    .sort((a, b) => {
-      const ai = PLATFORM_ORDER.indexOf(a.platform)
-      const bi = PLATFORM_ORDER.indexOf(b.platform)
-      return (ai === -1 ? PLATFORM_ORDER.length : ai) - (bi === -1 ? PLATFORM_ORDER.length : bi)
-    })
+    .sort((a, b) => platformRank(a.platform) - platformRank(b.platform))
 })
 
 // 去尾零、最多 2 位小数：100→"100"，90.5→"90.5"，0.42→"0.42"

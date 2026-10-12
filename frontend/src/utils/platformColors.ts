@@ -2,10 +2,13 @@
  * Centralized platform color definitions.
  *
  * All components that need platform-specific styling should import from here
- * instead of defining their own color mappings.
+ * instead of defining their own color mappings. Platforms registered only on
+ * the server (see constants/platformCatalog) use the neutral *_DEFAULT styles.
  */
 
-export type Platform = 'anthropic' | 'openai' | 'antigravity' | 'gemini' | 'kiro' | 'grok' | 'typesafe'
+import { getPlatformSpec } from '@/constants/platformCatalog'
+
+export type Platform = 'anthropic' | 'openai' | 'antigravity' | 'gemini' | 'kiro' | 'grok' | 'typesafe' | 'command_code' | 'cline'
 
 // ── Badge (bg + text + border, for inline badges with border) ───────
 const BADGE: Record<Platform, string> = {
@@ -16,6 +19,8 @@ const BADGE: Record<Platform, string> = {
   kiro: 'bg-teal-500/10 text-teal-600 border-teal-500/30 dark:text-teal-400',
   grok: 'bg-zinc-800/10 text-zinc-800 border-zinc-800/30 dark:bg-zinc-500/10 dark:text-zinc-200 dark:border-zinc-500/30',
   typesafe: 'bg-sky-500/10 text-sky-700 border-sky-500/30 dark:text-sky-300',
+  command_code: 'bg-neutral-500/10 text-neutral-700 border-neutral-500/30 dark:text-neutral-300',
+  cline: 'bg-violet-500/10 text-violet-600 border-violet-500/30 dark:text-violet-400',
 }
 const BADGE_DEFAULT = 'bg-slate-500/10 text-slate-600 border-slate-500/30 dark:text-slate-400'
 
@@ -28,6 +33,8 @@ const BADGE_LIGHT: Record<Platform, string> = {
   kiro: 'bg-teal-500/10 text-teal-600 dark:bg-teal-500/10 dark:text-teal-300',
   grok: 'bg-zinc-800/10 text-zinc-800 dark:bg-zinc-500/10 dark:text-zinc-200',
   typesafe: 'bg-sky-500/10 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300',
+  command_code: 'bg-neutral-500/10 text-neutral-700 dark:bg-neutral-500/10 dark:text-neutral-300',
+  cline: 'bg-violet-500/10 text-violet-600 dark:bg-violet-500/10 dark:text-violet-300',
 }
 
 // ── Border ──────────────────────────────────────────────────────────
@@ -39,6 +46,8 @@ const BORDER: Record<Platform, string> = {
   kiro: 'border-teal-500/20 dark:border-teal-500/20',
   grok: 'border-zinc-800/20 dark:border-zinc-500/20',
   typesafe: 'border-sky-500/20 dark:border-sky-500/20',
+  command_code: 'border-neutral-500/20 dark:border-neutral-500/20',
+  cline: 'border-violet-500/20 dark:border-violet-500/20',
 }
 const BORDER_DEFAULT = 'border-gray-200 dark:border-dark-700'
 
@@ -51,6 +60,8 @@ const BORDER_STRONG: Record<Platform, string> = {
   kiro: 'border-teal-500/35 dark:border-teal-500/30',
   grok: 'border-zinc-800/35 dark:border-zinc-500/35',
   typesafe: 'border-sky-500/35 dark:border-sky-500/30',
+  command_code: 'border-neutral-500/35 dark:border-neutral-500/30',
+  cline: 'border-violet-500/35 dark:border-violet-500/30',
 }
 const BORDER_STRONG_DEFAULT = 'border-gray-300 dark:border-dark-600'
 
@@ -64,6 +75,8 @@ const ACCENT: Record<Platform, string> = {
   kiro: '#14b8a6', // teal-500
   grok: '#71717a', // zinc-500
   typesafe: '#0ea5e9', // sky-500
+  command_code: '#737373', // neutral-500
+  cline: '#8b5cf6', // violet-500（Cline 品牌紫 #9F58FA）
 }
 const ACCENT_DEFAULT = '#14b8a6' // primary-500 (teal)
 
@@ -76,6 +89,8 @@ const ACCENT_BAR: Record<Platform, string> = {
   kiro: 'bg-gradient-to-r from-teal-400 to-teal-500',
   grok: 'bg-gradient-to-r from-zinc-700 to-zinc-900',
   typesafe: 'bg-gradient-to-r from-sky-400 to-sky-500',
+  command_code: 'bg-gradient-to-r from-neutral-400 to-neutral-500',
+  cline: 'bg-gradient-to-r from-violet-400 to-violet-500',
 }
 const ACCENT_BAR_DEFAULT = 'bg-gradient-to-r from-primary-400 to-primary-500'
 
@@ -88,6 +103,8 @@ const TEXT: Record<Platform, string> = {
   kiro: 'text-teal-600 dark:text-teal-400',
   grok: 'text-zinc-800 dark:text-zinc-200',
   typesafe: 'text-sky-700 dark:text-sky-300',
+  command_code: 'text-neutral-700 dark:text-neutral-300',
+  cline: 'text-violet-600 dark:text-violet-400',
 }
 const TEXT_DEFAULT = 'text-primary-600 dark:text-primary-400'
 
@@ -100,6 +117,8 @@ const ICON: Record<Platform, string> = {
   kiro: 'text-teal-500 dark:text-teal-400',
   grok: 'text-zinc-800 dark:text-zinc-200',
   typesafe: 'text-sky-500 dark:text-sky-300',
+  command_code: 'text-neutral-500 dark:text-neutral-300',
+  cline: 'text-violet-500 dark:text-violet-400',
 }
 const ICON_DEFAULT = 'text-primary-500 dark:text-primary-400'
 
@@ -112,6 +131,8 @@ const BUTTON: Record<Platform, string> = {
   kiro: 'bg-teal-600 text-white hover:bg-teal-700 active:bg-teal-800 dark:bg-teal-600/80 dark:hover:bg-teal-600',
   grok: 'bg-zinc-800 text-white hover:bg-zinc-900 active:bg-black dark:bg-zinc-700 dark:hover:bg-zinc-600',
   typesafe: 'bg-sky-600 text-white hover:bg-sky-700 active:bg-sky-800 dark:bg-sky-600/80 dark:hover:bg-sky-600',
+  command_code: 'bg-neutral-500 text-white hover:bg-neutral-600 active:bg-neutral-700 dark:bg-neutral-500/80 dark:hover:bg-neutral-500',
+  cline: 'bg-violet-500 text-white hover:bg-violet-600 active:bg-violet-700 dark:bg-violet-500/80 dark:hover:bg-violet-500',
 }
 const BUTTON_DEFAULT = 'bg-primary-500 text-white hover:bg-primary-600 dark:bg-primary-600 dark:hover:bg-primary-500'
 
@@ -124,6 +145,8 @@ const DISCOUNT: Record<Platform, string> = {
   kiro: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
   grok: 'bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200',
   typesafe: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
+  command_code: 'bg-neutral-100 text-neutral-800 dark:bg-neutral-900/40 dark:text-neutral-300',
+  cline: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
 }
 const DISCOUNT_DEFAULT = 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
 
@@ -136,6 +159,8 @@ const GRADIENT: Record<Platform, string> = {
   kiro: 'from-teal-500 to-teal-600',
   grok: 'from-zinc-700 to-zinc-900',
   typesafe: 'from-sky-500 to-sky-600',
+  command_code: 'from-neutral-500 to-neutral-600',
+  cline: 'from-violet-500 to-violet-600',
 }
 const GRADIENT_DEFAULT = 'from-primary-500 to-primary-600'
 
@@ -148,6 +173,8 @@ const GRADIENT_TEXT: Record<Platform, string> = {
   kiro: 'text-teal-100',
   grok: 'text-zinc-100',
   typesafe: 'text-sky-100',
+  command_code: 'text-neutral-100',
+  cline: 'text-violet-100',
 }
 const GRADIENT_TEXT_DEFAULT = 'text-primary-100'
 
@@ -159,13 +186,15 @@ const GRADIENT_SUBTEXT: Record<Platform, string> = {
   kiro: 'text-teal-200',
   grok: 'text-zinc-300',
   typesafe: 'text-sky-200',
+  command_code: 'text-neutral-200',
+  cline: 'text-violet-200',
 }
 const GRADIENT_SUBTEXT_DEFAULT = 'text-primary-200'
 
 // ── Public API ──────────────────────────────────────────────────────
 
 function isPlatform(p: string): p is Platform {
-  return p === 'anthropic' || p === 'openai' || p === 'antigravity' || p === 'gemini' || p === 'kiro' || p === 'grok' || p === 'typesafe'
+  return p === 'anthropic' || p === 'openai' || p === 'antigravity' || p === 'gemini' || p === 'kiro' || p === 'grok' || p === 'typesafe' || p === 'command_code' || p === 'cline'
 }
 
 export function platformBadgeClass(p: string): string {
@@ -220,20 +249,7 @@ export function platformGradientSubtextClass(p: string): string {
   return isPlatform(p) ? GRADIENT_SUBTEXT[p] : GRADIENT_SUBTEXT_DEFAULT
 }
 
+/** 平台展示名：来自平台清单（后端 domain/platforms.go），新登记的平台同样适用。 */
 export function platformLabel(p: string): string {
-  switch (p) {
-    case 'anthropic': return 'Anthropic'
-    case 'openai': return 'OpenAI'
-    case 'antigravity': return 'Antigravity'
-    case 'gemini': return 'Gemini'
-    case 'kiro': return 'Kiro'
-    case 'grok': return 'Grok'
-    case 'kimi': return 'Kimi'
-    case 'zhipu': return 'Zhipu GLM'
-    case 'deepseek': return 'DeepSeek'
-    case 'minimax': return 'MiniMax'
-    case 'opencode_go': return 'OpenCode'
-    case 'typesafe': return 'TypeSafe / Jev'
-    default: return p || 'API'
-  }
+  return getPlatformSpec(p)?.display_name ?? (p || 'API')
 }

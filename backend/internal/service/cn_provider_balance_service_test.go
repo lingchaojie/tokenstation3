@@ -59,7 +59,12 @@ type cnBalanceStateRepo struct {
 }
 
 func (r *cnBalanceStateRepo) GetByID(context.Context, int64) (*Account, error) {
-	return r.account, nil
+	clone := *r.account
+	if clone.TempUnschedulableUntil != nil {
+		until := *clone.TempUnschedulableUntil
+		clone.TempUnschedulableUntil = &until
+	}
+	return &clone, nil
 }
 
 func (r *cnBalanceStateRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
@@ -67,14 +72,33 @@ func (r *cnBalanceStateRepo) UpdateExtra(_ context.Context, _ int64, updates map
 	return nil
 }
 
-func (r *cnBalanceStateRepo) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
+func (r *cnBalanceStateRepo) SetTempUnschedulable(_ context.Context, _ int64, until time.Time, reason string) error {
 	r.pauseCalls++
+	if r.account.TempUnschedulableUntil == nil || r.account.TempUnschedulableUntil.Before(until) {
+		r.account.TempUnschedulableUntil, r.account.TempUnschedulableReason = &until, reason
+	}
 	return nil
 }
 
 func (r *cnBalanceStateRepo) ClearTempUnschedulable(context.Context, int64) error {
 	r.clearCalls++
+	r.account.TempUnschedulableUntil, r.account.TempUnschedulableReason = nil, ""
 	return nil
+}
+
+func (r *cnBalanceStateRepo) CompareAndSetTempUnschedulable(ctx context.Context, id int64, expectedUntil *time.Time, expectedReason string, until *time.Time, reason string) (bool, error) {
+	if r.account.ID != id || r.account.TempUnschedulableReason != expectedReason ||
+		(r.account.TempUnschedulableUntil == nil) != (expectedUntil == nil) ||
+		(r.account.TempUnschedulableUntil != nil && !r.account.TempUnschedulableUntil.Equal(*expectedUntil)) {
+		return false, nil
+	}
+	if until == nil {
+		return true, r.ClearTempUnschedulable(ctx, id)
+	}
+	r.pauseCalls++
+	value := *until
+	r.account.TempUnschedulableUntil, r.account.TempUnschedulableReason = &value, reason
+	return true, nil
 }
 
 func TestCNProviderBalanceServiceRejectsMalformedHTTP200WithoutPersisting(t *testing.T) {

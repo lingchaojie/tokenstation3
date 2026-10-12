@@ -150,7 +150,7 @@ describe('PricingEntryCard request multipliers', () => {
     })
     expect(wrapper.get<HTMLInputElement>('[data-reasoning-effort="max"]').element.value).toBe('')
     expect(wrapper.get('[data-reasoning-effort="max"]').attributes('placeholder'))
-      .toBe('Default: 3')
+      .toBe('Default: 1')
     expect(wrapper.get('[data-reasoning-effort="high"]').attributes('placeholder')).toBe('Default: 1')
   })
 

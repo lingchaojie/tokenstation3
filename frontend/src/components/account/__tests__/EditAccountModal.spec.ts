@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { claudeModels } from '@/composables/useModelWhitelist'
+import { mount } from '@vue/test-utils'
+import {
+  BUILTIN_PLATFORM_CATALOG,
+  resetPlatformCatalog,
+  setPlatformCatalog
+} from '@/constants/platformCatalog'
 
 const { updateAccountMock, checkMixedChannelRiskMock, getOpenCodeGoUsageMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
@@ -653,6 +659,207 @@ describe('EditAccountModal', () => {
       account_mode: 'go',
       api_protocol: 'adaptive',
       base_url: 'https://opencode.ai/zen/go/v1'
+    })
+  })
+
+  it.each([undefined, '', 'unknown-protocol'])(
+    'preserves implicit Command Code routing on an unrelated edit with protocol %j',
+    async (protocol) => {
+      const account = buildAccount()
+      account.platform = 'command_code'
+      account.credentials = {
+        api_key: 'sk-command-test',
+        account_mode: 'payg',
+        ...(protocol === undefined ? {} : { api_protocol: protocol }),
+        base_url: 'https://relay.example.com/legacy/v1',
+        api_base_urls: {
+          chat_completions: 'https://chat-relay.example.com/v1',
+          anthropic: 'https://claude-relay.example.com',
+          responses: 'https://responses-relay.example.com/v1'
+        },
+        protocol_rules: [{ pattern: 'custom-*', protocol: 'anthropic' }]
+      }
+      updateAccountMock.mockReset().mockResolvedValue(account)
+      checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+      const wrapper = mountModal(account)
+
+      await wrapper.get('form#edit-account-form input[type="text"]').setValue('Renamed Command Code')
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+      await flushPromises()
+
+      expect(updateAccountMock.mock.calls[0]?.[1]).toMatchObject({
+        name: 'Renamed Command Code',
+        credentials: {
+          api_protocol: 'adaptive',
+          base_url: 'https://chat-relay.example.com/v1',
+          api_base_urls: {
+            chat_completions: 'https://chat-relay.example.com/v1',
+            anthropic: 'https://claude-relay.example.com',
+            responses: 'https://responses-relay.example.com/v1'
+          },
+          protocol_rules: [{ pattern: 'custom-*', protocol: 'anthropic' }]
+        }
+      })
+      wrapper.unmount()
+    }
+  )
+
+  it.each(['adaptive', 'chat_completions', 'anthropic', 'responses', ' responses '])(
+    'preserves explicit Command Code protocol %j on an unrelated edit',
+    async (protocol) => {
+      const account = buildAccount()
+      account.platform = 'command_code'
+      account.credentials = {
+        api_key: 'sk-command-test',
+        account_mode: 'payg',
+        api_protocol: protocol,
+        base_url: 'https://relay.example.com/v1'
+      }
+      updateAccountMock.mockReset().mockResolvedValue(account)
+      checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+      const wrapper = mountModal(account)
+
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+      await flushPromises()
+
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_protocol).toBe(protocol.trim())
+      wrapper.unmount()
+    }
+  )
+
+  it('keeps the implicit Chat Completions default for a by-inbound provider', async () => {
+    const account = buildAccount()
+    account.platform = 'cline'
+    account.credentials = { api_key: 'sk-cline-test', base_url: 'https://relay.example.com/v1' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      api_protocol: 'chat_completions',
+      base_url: 'https://relay.example.com/v1'
+    })
+    wrapper.unmount()
+  })
+
+  describe('providers using the generic form', () => {
+    beforeEach(() => {
+      setPlatformCatalog({
+        platforms: [
+          ...BUILTIN_PLATFORM_CATALOG.platforms,
+          {
+            id: 'acme_router',
+            display_name: 'Acme Router',
+            gateway: 'openai',
+            cn_provider: false,
+            multi_protocol: {
+              default_mode: 'standard',
+              routing: 'by_model',
+              modes: [
+                {
+                  mode: 'standard',
+                  base_urls: {
+                    chat_completions: 'https://api.acme-router.example/provider/v1',
+                    anthropic: 'https://api.acme-router.example/provider'
+                  },
+                  protocol_rules: [{ pattern: 'claude-*', protocol: 'anthropic' }]
+                },
+                {
+                  mode: 'team',
+                  base_urls: {
+                    chat_completions: 'https://team.acme-router.example/provider/v1',
+                    anthropic: 'https://team.acme-router.example/provider'
+                  },
+                  protocol_rules: [{ pattern: 'sonnet-*', protocol: 'anthropic' }]
+                }
+              ]
+            }
+          }
+        ],
+      })
+      checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    })
+
+    afterEach(() => {
+      resetPlatformCatalog()
+    })
+
+    function commandCodeAccount() {
+      const account = buildAccount()
+      account.platform = 'acme_router'
+      account.credentials = {
+        api_key: 'sk-cc',
+        account_mode: 'standard',
+        api_protocol: 'adaptive',
+        base_url: 'https://relay.example.com/v1',
+        api_base_urls: {
+          chat_completions: 'https://relay.example.com/v1',
+          anthropic: 'https://relay.example.com'
+        },
+        protocol_rules: [{ pattern: 'custom-*', protocol: 'anthropic' }]
+      }
+      updateAccountMock.mockReset().mockResolvedValue(account)
+      return account
+    }
+
+    it.each(['unknown-protocol', 'responses'])(
+      'keeps a by-model provider adaptive when stored protocol %j is unsupported',
+      async (protocol) => {
+        const account = commandCodeAccount()
+        account.credentials.api_protocol = protocol
+        const wrapper = mountModal(account)
+        await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+        await flushPromises()
+
+        expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+          api_protocol: 'adaptive',
+          api_base_urls: {
+            chat_completions: 'https://relay.example.com/v1',
+            anthropic: 'https://relay.example.com'
+          },
+          protocol_rules: [{ pattern: 'custom-*', protocol: 'anthropic' }]
+        })
+        wrapper.unmount()
+      }
+    )
+
+    it('preserves stored endpoints and rules on submit', async () => {
+      const wrapper = mountModal(commandCodeAccount())
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+      expect(updateAccountMock).toHaveBeenCalledTimes(1)
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+        account_mode: 'standard',
+        api_protocol: 'adaptive',
+        base_url: 'https://relay.example.com/v1',
+        api_base_urls: {
+          chat_completions: 'https://relay.example.com/v1',
+          anthropic: 'https://relay.example.com'
+        },
+        protocol_rules: [{ pattern: 'custom-*', protocol: 'anthropic' }]
+      })
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_base_urls).not.toHaveProperty('responses')
+    })
+
+    it('offers the provider modes and keeps customised endpoints when switching mode', async () => {
+      const wrapper = mountModal(commandCodeAccount())
+      const modeButtons = wrapper.get('[data-testid="edit-generic-account-mode"]').findAll('button')
+      expect(modeButtons.map(button => button.text())).toEqual(['standard', 'team'])
+      await modeButtons[1].trigger('click')
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+        account_mode: 'team',
+        // 自定义端点与规则不是上一模式的默认值，切换模式时保留。
+        api_base_urls: {
+          chat_completions: 'https://relay.example.com/v1',
+          anthropic: 'https://relay.example.com'
+        },
+        protocol_rules: [{ pattern: 'custom-*', protocol: 'anthropic' }]
+      })
     })
   })
 

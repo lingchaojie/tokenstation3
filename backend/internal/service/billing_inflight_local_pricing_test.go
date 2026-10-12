@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUpstreamB8dePricingPreservation(t *testing.T) {
-	require.Equal(t, 3.0, modelReasoningEffortBillingMultiplier("claude-fable-5-1", "max", nil))
+func TestInflightPricing_FableDefaultAndUltrafastMultiplier(t *testing.T) {
+	require.Equal(t, 1.0, modelReasoningEffortBillingMultiplier("claude-fable-5-1", "max", nil))
 	require.Equal(t, 1.0, modelReasoningEffortBillingMultiplier("claude-fable-5-1", "max", map[string]float64{"max": 1}))
 	svc := newInflightEstimateGateway(t, nil)
 	group := &Group{ID: 5, RateMultiplier: 1}
@@ -21,11 +21,11 @@ func TestUpstreamB8dePricingPreservation(t *testing.T) {
 	req.ReasoningEffort = "max"
 	maximum, ok := svc.EstimateInflightReservation(context.Background(), key, req)
 	require.True(t, ok)
-	require.InDelta(t, standard*3, maximum, 1e-12)
-	group.ModelPricing = []ChannelModelPricing{{Models: []string{req.Model}, BillingMode: BillingModeToken, ReasoningEffortMultipliers: map[string]float64{"max": 1}}}
+	require.InDelta(t, standard, maximum, 1e-12)
+	group.ModelPricing = []ChannelModelPricing{{Models: []string{req.Model}, BillingMode: BillingModeToken, ReasoningEffortMultipliers: map[string]float64{"max": 3}}}
 	explicit, ok := svc.EstimateInflightReservation(context.Background(), key, req)
 	require.True(t, ok)
-	require.InDelta(t, standard, explicit, 1e-12)
+	require.InDelta(t, standard*3, explicit, 1e-12)
 	group.ModelPricing = nil
 	req.Model, req.ReasoningEffort = "gpt-6-astra", ""
 	standard, ok = svc.EstimateInflightReservation(context.Background(), key, req)

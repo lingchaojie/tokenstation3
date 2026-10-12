@@ -222,7 +222,7 @@ ${remoteCatalogLine}wire_api = "responses"
 ${providerAuthConfig}
 
 [features]
-goals = true`
+${input.codexModelCatalogUrl ? 'api_key_model_discovery = true\n' : ''}goals = true`
   const authContent = `{
   "OPENAI_API_KEY": "${input.apiKey}"
 }`

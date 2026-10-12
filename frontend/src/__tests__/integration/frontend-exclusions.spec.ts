@@ -16,6 +16,11 @@ describe('excluded frontend products remain unreachable', () => {
       'src/utils/featureFlags.ts',
       'src/i18n/locales/en/admin/index.ts',
       'src/i18n/locales/zh/admin/index.ts',
+      'src/constants/platforms.ts',
+      'src/constants/platformCatalog.ts',
+      'src/constants/platformCatalog.builtin.json',
+      'src/views/admin/GroupsView.vue',
+      'src/views/admin/ChannelsView.vue',
       'package.json'
     ].map(source).join('\n')
 

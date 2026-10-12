@@ -152,10 +152,9 @@ describe('PlazaModelPricingTable', () => {
     expect(wrapper.text()).toContain('modelPlaza.table.reasoningMultiplierBadge')
   })
 
-  it('shows the preserved max default for an unconfigured Fable model', () => {
+  it('omits an implicit max surcharge for an unconfigured Fable model', () => {
     const wrapper = mountTable([tokenModel({ name: 'claude-fable-5-1' })], 1)
-    expect(wrapper.find('[data-reasoning-effort="max"]').exists()).toBe(true)
-    expect(wrapper.find('[data-reasoning-effort="max"]').text()).toContain('max ×3')
+    expect(wrapper.find('[data-reasoning-effort="max"]').exists()).toBe(false)
   })
 
   it('uses an explicit max override instead of the Fable default', () => {

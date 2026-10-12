@@ -20,6 +20,33 @@ release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 
 
+class ReleaseWorkflowGoVersionTest(unittest.TestCase):
+    def test_selected_source_toolchain_is_accepted_and_version_drift_rejected(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
+        verify = next(step for step in workflow['jobs']['build-binaries']['steps']
+                      if step.get('name') == 'Verify Go version')
+        for selected, installed, succeeds in [('1.27.0', '1.27.0', True),
+                                               ('1.27.2', '1.27.2', True),
+                                               ('1.27.0', '1.27.2', False),
+                                               ('1.27.2', '1.27.0', False)]:
+            with self.subTest(selected=selected, installed=installed):
+                with tempfile.TemporaryDirectory() as directory:
+                    go = Path(directory) / 'go'
+                    go.write_text('#!/bin/sh\n'
+                                  'case "$*" in\n'
+                                  '  "env GOVERSION") printf "go%s\\n" "$FAKE_INSTALLED_GO" ;;\n'
+                                  '  version) printf "go version go%s linux/amd64\\n" "$FAKE_INSTALLED_GO" ;;\n'
+                                  '  *) exit 2 ;;\n'
+                                  'esac\n')
+                    go.chmod(0o755)
+                    env = dict(os.environ, PATH=directory + os.pathsep + os.environ['PATH'],
+                               EXPECTED_GO_VERSION=selected, FAKE_INSTALLED_GO=installed)
+                    result = subprocess.run(['bash', '-e', '-c', verify['run']], env=env,
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, succeeds,
+                                     result.stdout + result.stderr)
+
+
 class ReleaseMatrixTest(unittest.TestCase):
     def setUp(self):
         self.previous = Path.cwd()

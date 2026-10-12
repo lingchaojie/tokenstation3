@@ -551,6 +551,7 @@ func TestOpenAIGatewayCalculateUsageCost_HistoricalMediaTierWithoutPriceFailsClo
 		UsageTokens{},
 		"",
 		nil,
+		false,
 		time.Time{},
 	)
 

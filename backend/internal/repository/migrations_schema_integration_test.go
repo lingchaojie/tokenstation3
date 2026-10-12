@@ -202,19 +202,25 @@ WHERE ns.nspname = 'public'
 	// user_subscriptions: deleted_at for soft delete support (migration 012)
 	requireColumn(t, tx, "user_subscriptions", "deleted_at", "timestamp with time zone", 0, true)
 
-	requireConstraintDefinitionContains(
-		t,
-		tx,
-		"user_platform_quotas",
-		"user_platform_quotas_platform_check",
-		"platform",
-		"'anthropic'",
-		"'openai'",
-		"'gemini'",
-		"'antigravity'",
-		"'grok'",
-		"'kiro'",
-	)
+	// Migration 248 delegates platform membership to the application catalog.
+	// The quota table and its active-row uniqueness still exist after reapplying
+	// migrations; monitor provider constraints describe probe capabilities and remain.
+	requireColumn(t, tx, "user_platform_quotas", "platform", "character varying", 32, false)
+	requireIndex(t, tx, "user_platform_quotas", "userplatformquota_user_id_platform_uq")
+	var quotaPlatformCheckExists bool
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+SELECT EXISTS (
+    SELECT 1
+    FROM pg_constraint c
+    JOIN pg_class tbl ON tbl.oid = c.conrelid
+    JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+    WHERE ns.nspname = 'public'
+      AND tbl.relname = 'user_platform_quotas'
+      AND c.conname = 'user_platform_quotas_platform_check'
+)`).Scan(&quotaPlatformCheckExists))
+	require.False(t, quotaPlatformCheckExists, "migration 248 must leave quota platform membership managed by the application catalog")
+	requireConstraintDefinitionContains(t, tx, "channel_monitors", "channel_monitors_provider_check", "provider")
+	requireConstraintDefinitionContains(t, tx, "channel_monitor_request_templates", "channel_monitor_request_templates_provider_check", "provider")
 
 	// orphan_allowed_groups_audit table should exist (migration 013)
 	var orphanAuditRegclass sql.NullString
