@@ -1,5 +1,5 @@
 {
-  "production_sha": "896ca30d6b809f72ddb20a455e2410508792183d",
+  "production_sha": "60fb738497b38700e450f33194822c57d4d4917a",
   "checks": [
     {
       "command": [
@@ -8,16 +8,35 @@
         "-tags=embed",
         "-trimpath",
         "-o",
-        "/tmp/tokenstation3-896ca-server",
+        "/tmp/tokenstation3-60fb-server",
         "./cmd/server"
       ],
       "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
-      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
-      "start": "2026-10-12T11:42:58.841278+00:00",
-      "end": "2026-10-12T11:45:20.427417+00:00",
-      "duration": 137.56839679200039,
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:34:10.070396+00:00",
+      "end": "2026-10-12T12:34:46.230684+00:00",
+      "duration": 36.160286283999994,
       "exit_code": 0,
-      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-build-embed.log",
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-build-embed.log",
+      "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "-p",
+        "2",
+        "-tags=embed",
+        "./internal/web"
+      ],
+      "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:34:10.070414+00:00",
+      "end": "2026-10-12T12:34:14.277539+00:00",
+      "duration": 4.207126560000688,
+      "exit_code": 0,
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-embedded-web.log",
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     },
     {
@@ -26,12 +45,12 @@
         "./..."
       ],
       "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
-      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
-      "start": "2026-10-12T11:46:28.817306+00:00",
-      "end": "2026-10-12T11:46:45.980824+00:00",
-      "duration": 16.31524174900005,
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:27:48.492992+00:00",
+      "end": "2026-10-12T12:28:09.931912+00:00",
+      "duration": 21.43893315600053,
       "exit_code": 0,
-      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-govulncheck.log",
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-govulncheck.log",
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     },
     {
@@ -46,12 +65,12 @@
         "./..."
       ],
       "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
-      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
-      "start": "2026-10-12T11:42:58.830672+00:00",
-      "end": "2026-10-12T11:50:19.017482+00:00",
-      "duration": 427.56776795500036,
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:27:48.488346+00:00",
+      "end": "2026-10-12T12:36:15.840831+00:00",
+      "duration": 507.3533948060003,
       "exit_code": 0,
-      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-integration.log",
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-integration.log",
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     },
     {
@@ -64,12 +83,12 @@
         "--max-same-issues=0"
       ],
       "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
-      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
-      "start": "2026-10-12T11:42:58.831358+00:00",
-      "end": "2026-10-12T11:46:36.679749+00:00",
-      "duration": 211.0151121699996,
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:27:48.490138+00:00",
+      "end": "2026-10-12T12:31:42.726361+00:00",
+      "duration": 234.23706655099977,
       "exit_code": 0,
-      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-lint.log",
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-lint.log",
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     },
     {
@@ -87,12 +106,12 @@
         "Test(EnableHTTP2KeepAlive|BuildUpstreamTransport_(HTTP2|LongStreamH2|NonHTTP2|NegotiatesExpectedProtocol)|HTTP2PingPolicy|OpsOutputTPSOverviewFailurePolicy)"
       ],
       "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
-      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
-      "start": "2026-10-12T11:57:06.201292+00:00",
-      "end": "2026-10-12T11:57:14.156174+00:00",
-      "duration": 6.926242203000584,
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:29:52.454685+00:00",
+      "end": "2026-10-12T12:30:59.817902+00:00",
+      "duration": 67.3632351289998,
       "exit_code": 0,
-      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-race-repository.log",
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-race-repository.log",
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     },
     {
@@ -108,17 +127,16 @@
         "./internal/handler",
         "./internal/service",
         "./internal/service/openai_ws_v2",
-        "./internal/repository",
         "-run",
-        "Test(OpenAIResponsesWebSocket_(GroupRateChange|KeyMoved|FailedKeyRefresh)|RefreshOpenAIWSTurnBillingAPIKey|OpenAIWSTurnBillingAPIKeys|HandleCCStreamingFromAnthropic_Ping|Relay_ImageUsage|ApplyAccountStatsCost_SubscriptionExemption|ModelProtocolCatalog)"
+        "Test(OpenAIResponsesWebSocket_(GroupRateChange|KeyMoved|FailedKeyRefresh)|RefreshOpenAIWSTurnBillingAPIKey|OpenAIWSTurnBillingAPIKeys|HandleCCStreamingFromAnthropic_Ping|Relay_ImageUsage|ApplyAccountStatsCost_SubscriptionExemption|ModelProtocolCatalog|ClineUsageProbe)"
       ],
       "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
-      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
-      "start": "2026-10-12T11:46:27.661093+00:00",
-      "end": "2026-10-12T11:55:38.342245+00:00",
-      "duration": 534.4461359790002,
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:29:51.288271+00:00",
+      "end": "2026-10-12T12:33:07.536944+00:00",
+      "duration": 196.24869247199968,
       "exit_code": 0,
-      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-race.log",
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-race.log",
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     },
     {
@@ -133,18 +151,17 @@
         "./..."
       ],
       "cwd": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/backend",
-      "head": "896ca30d6b809f72ddb20a455e2410508792183d",
-      "start": "2026-10-12T11:42:58.828820+00:00",
-      "end": "2026-10-12T11:49:36.477015+00:00",
-      "duration": 385.91519983800026,
+      "head": "60fb738497b38700e450f33194822c57d4d4917a",
+      "start": "2026-10-12T12:27:48.484742+00:00",
+      "end": "2026-10-12T12:34:46.938215+00:00",
+      "duration": 418.4542885910005,
       "exit_code": 0,
-      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/896ca-unit.log",
+      "log": "/home/alvin/tokenstation3/.worktrees/upstream-sub2api-20261012-9591/.superpowers/20261012-sync/60fb-unit.log",
       "isolation": "package concurrency capped; testcontainers allocate local ephemeral containers/ports; no external test DSN"
     }
   ],
-  "race_scope": "handler/service/WS relay selected tests; initial repository invocation compiled only, separate HTTP2/TPS repository race exercises tests",
   "generation": {
-    "production_sha": "896ca30d6b809f72ddb20a455e2410508792183d",
+    "production_sha": "60fb738497b38700e450f33194822c57d4d4917a",
     "command": [
       "make",
       "-C",
@@ -152,7 +169,15 @@
       "check-generate"
     ],
     "exit_code": 0,
-    "log": "/tmp/tokenstation3-20261012-896ca-generate.log",
+    "log": "/tmp/tokenstation3-20261012-review-fix-generate.log",
     "log_sha256": "5957965599a63ebc843abdac53ea1ebf766f83bf6b702f1b41b5fa52f88b0fe9"
+  },
+  "frontend": {
+    "files": 444,
+    "tests": 3544,
+    "critical_tests": 771,
+    "webchat_tests": 75,
+    "source_sha": "60fb738497b38700e450f33194822c57d4d4917a",
+    "evidence": "frontend-review-fix.md"
   }
 }
