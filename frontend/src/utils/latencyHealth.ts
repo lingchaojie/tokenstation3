@@ -72,10 +72,11 @@ export const LATENCY_BAR_TO_CLASSES: Record<LatencySeverity, string> = {
 
 // 与运维 Token 请求统计一致：使用完整耗时，输出可能包含推理 Token。
 export const formatUsageOutputRate = (row: Pick<UsageLog,
-  'output_tokens' | 'duration_ms' | 'image_count' | 'image_output_tokens' | 'billing_mode' | 'request_type'
+  'output_tokens' | 'duration_ms' | 'image_count' | 'image_output_tokens' | 'video_count' | 'billing_mode' | 'request_type'
 >): string => {
   const { output_tokens: outputTokens, duration_ms: durationMs } = row
-  if (row.image_count > 0 || row.image_output_tokens > 0 || row.billing_mode === 'image' || row.billing_mode === 'video'
+  if (row.image_count > 0 || row.image_output_tokens > 0 || (row.video_count ?? 0) > 0
+    || row.billing_mode === 'image' || row.billing_mode === 'video'
     || (row.request_type && !['sync', 'stream', 'ws_v2', 'cyber'].includes(row.request_type))
     || !Number.isFinite(outputTokens) || outputTokens <= 0
     || durationMs == null || !Number.isFinite(durationMs) || durationMs <= 0) {

@@ -8,6 +8,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUsageLogDTOIncludesVideoCountIndependentOfBillingMode(t *testing.T) {
+	for _, mode := range []string{"token", "video", ""} {
+		t.Run(mode, func(t *testing.T) {
+			log := &service.UsageLog{VideoCount: 1, OutputTokens: 200}
+			if mode != "" {
+				log.BillingMode = &mode
+			}
+			for _, result := range []any{UsageLogFromService(log), UsageLogFromServiceAdmin(log)} {
+				raw, err := json.Marshal(result)
+				require.NoError(t, err)
+				var fields map[string]any
+				require.NoError(t, json.Unmarshal(raw, &fields))
+				require.Equal(t, float64(1), fields["video_count"], "both usage endpoints must preserve authoritative media identity")
+			}
+		})
+	}
+	for _, result := range []any{UsageLogFromService(&service.UsageLog{}), UsageLogFromServiceAdmin(&service.UsageLog{})} {
+		raw, err := json.Marshal(result)
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(raw, &fields))
+		require.NotContains(t, fields, "video_count", "ordinary historical rows keep their payload shape")
+	}
+}
+
 func TestUsageLogFromService_IncludesOpenAIWSMode(t *testing.T) {
 	t.Parallel()
 

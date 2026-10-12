@@ -1776,6 +1776,9 @@ export interface UsageLog {
   image_output_tokens: number
   image_output_cost: number
 
+  // 视频数量；历史接口未返回时为空，独立于计费模式。
+  video_count?: number
+
   // User-Agent
   user_agent: string | null
   ip_address?: string | null

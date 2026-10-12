@@ -713,6 +713,8 @@ type UsageLog struct {
 	ImageSizeSource    *string        `json:"image_size_source"`
 	ImageSizeBreakdown map[string]int `json:"image_size_breakdown"`
 	MediaType          *string        `json:"media_type"`
+	// 视频数量独立于计费模式，Token 定价的视频仍是媒体请求。
+	VideoCount int `json:"video_count,omitempty"`
 
 	// User-Agent
 	UserAgent *string `json:"user_agent"`
