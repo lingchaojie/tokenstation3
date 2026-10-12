@@ -1,5 +1,8 @@
 package domain
 
+// EndpointSeedanceTasks is the canonical endpoint persisted for Seedance video tasks.
+const EndpointSeedanceTasks = "/api/v3/contents/generations/tasks"
+
 // Status constants
 const (
 	StatusActive   = "active"

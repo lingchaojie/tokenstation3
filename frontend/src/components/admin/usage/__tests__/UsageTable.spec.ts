@@ -162,6 +162,25 @@ describe('admin UsageTable tooltip', () => {
     expect(wrapper.text()).toContain('Output TPS')
   })
 
+  it('omits Seedance output TPS for token-priced rows while keeping the same text model alias eligible', () => {
+    const row = { ...baseImageRow, model: 'public-video-alias', image_count: 0, image_output_tokens: 0, billing_mode: 'token', output_tokens: 12345, duration_ms: 60000 }
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          { ...row, request_id: 'seedance-historical', inbound_endpoint: '/api/v3/contents/generations/tasks' },
+          { ...row, request_id: 'seedance-upstream', inbound_endpoint: '/v1/responses', upstream_endpoint: '/api/v3/contents/generations/tasks', video_count: 0 },
+          { ...row, request_id: 'ordinary-text', inbound_endpoint: '/v1/responses', upstream_endpoint: '/v1/responses' },
+        ],
+        loading: false,
+        columns: [{ key: 'latency', label: 'Latency' }],
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    expect(wrapper.find('[data-request-id="seedance-historical"] [data-testid="output-tps"]').text()).toBe('—')
+    expect(wrapper.find('[data-request-id="seedance-upstream"] [data-testid="output-tps"]').text()).toBe('—')
+    expect(wrapper.find('[data-request-id="ordinary-text"] [data-testid="output-tps"]').text()).toBe('205.8 tok/s')
+  })
+
   beforeEach(() => {
     locale = 'en'
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({

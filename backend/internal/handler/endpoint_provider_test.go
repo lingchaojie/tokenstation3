@@ -51,6 +51,7 @@ func TestSeedanceTasksUseOpenAIUnifiedGroup(t *testing.T) {
 		for _, suffix := range []string{"", "/task-123"} {
 			path := prefix + "/contents/generations/tasks" + suffix
 			require.Equal(t, service.PlatformOpenAI, InboundProviderFromPath(path), path)
+			require.Equal(t, "/api/v3/contents/generations/tasks", NormalizeInboundEndpoint(path), path)
 		}
 	}
 }

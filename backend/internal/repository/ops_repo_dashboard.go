@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -61,7 +62,9 @@ func (r *opsRepository) GetDashboardOverview(ctx context.Context, filter *servic
 }
 
 func (r *opsRepository) queryOutputTPS(ctx context.Context, filter *service.OpsDashboardFilter) (*service.OpsOutputTPS, error) {
-	join, where, args, _ := buildUsageWhere(filter, filter.StartTime.UTC(), filter.EndTime.UTC(), 1)
+	join, where, args, nextIndex := buildUsageWhere(filter, filter.StartTime.UTC(), filter.EndTime.UTC(), 1)
+	// Seedance completion tokens use token pricing and retain zero video_count.
+	args = append(args, domain.EndpointSeedanceTasks)
 	query := `
 SELECT
  percentile_cont(0.05) WITHIN GROUP (ORDER BY output_tps),
@@ -77,6 +80,7 @@ FROM (
  AND ul.output_tokens > 0 AND ul.duration_ms > 0
  AND ul.image_count = 0 AND ul.image_output_tokens = 0 AND ul.video_count = 0
  AND COALESCE(ul.billing_mode, '') NOT IN ('image', 'video')
+ ` + fmt.Sprintf("AND ul.inbound_endpoint IS DISTINCT FROM $%d AND ul.upstream_endpoint IS DISTINCT FROM $%d", nextIndex, nextIndex) + `
  ` + fmt.Sprintf("AND ul.request_type IN (%d, %d, %d, %d)",
 		service.RequestTypeSync, service.RequestTypeStream, service.RequestTypeWSV2, service.RequestTypeCyberBlocked) + `
 ) rates`
