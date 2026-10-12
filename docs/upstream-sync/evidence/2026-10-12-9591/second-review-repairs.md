@@ -82,3 +82,24 @@ critical 775 / WebChat 75、lint/typecheck/build 对应 031df，1057 文件与 f
 同类问题检查涵盖新 CN/Command Code/Cline 探测恢复路径；旧 OAuth refresh
 路径未因本轮修改，不扩大 API Key 探测修复到该独立行为。
 推送仍等待最终版本的全新独立全量复审与上游范围选择。
+
+## Seedance 文本速率分类的最后修复
+
+冻结 AAB 的基础设施 36 路径为 SAFE；后端 202 / 前端 148 完整复审确认
+唯一剩余 P2：Seedance 成功任务保留 Token 计费与 VideoCount=0，仍进入新
+文本 TPS。独立真实 PG RED 与 formatter RED 均复现，不能将计数改为 1
+来修指标，否则会改变既有计费路线。media_type 数据列已在历史迁移 090
+删除，不重建字段、不改迁移。
+
+最后修复使用既有规范入站/上游端点作为非计费分类：数据库与前端均排除
+任一端点为 /api/v3/contents/generations/tasks 的记录，兼容历史无视频计数
+但有端点的任务记录。普通文本模型别名不能作为媒体分类依据；请求数与
+Token 总量仍保留。后端常量由 domain 共享，handler 引用同值，SQL 参数化。
+详细真实 PG raw/auto/preagg、端点别名、保留 VideoCount=0 与收费、UI 验证
+见 seedance-tps-fix.md。没有新增迁移或重写历史账单。
+
+最终代码 6275f28a728daa43f9e56c4cc48d941f99414490：全部 backend/generate/
+race/embed 与 frontend full3560/critical775/WebChat75/lint/typecheck/build
+都对应同一代码提交。1057 前端文件清单 SHA256：
+`83f5cc04a495c5dfd7908fc6360c42cfd4f63c9c53241844fd092661051963a1`。
+所有此前版本结果仅保留为历史，不代替此版完整验证和全新独立复审。
