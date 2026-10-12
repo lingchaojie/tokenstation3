@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { defaultReasoningEffortMultiplier } from '../pricing'
 
-describe('preserved reasoning effort defaults', () => {
+describe('reasoning effort defaults', () => {
   it.each(['claude-fable-5-1', ' FABLE-5.1 ', 'fable5.1-20260925', 'vendor/fable51:latest'])(
-    'uses 3x only for max on %s', model => {
-      expect(defaultReasoningEffortMultiplier(model, 'max')).toBe(3)
+    'uses 1x for unconfigured max on %s', model => {
+      expect(defaultReasoningEffortMultiplier(model, 'max')).toBe(1)
       expect(defaultReasoningEffortMultiplier(model, 'high')).toBe(1)
     },
   )

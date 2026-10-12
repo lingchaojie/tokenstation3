@@ -317,21 +317,10 @@ func reasoningEffortBillingMultiplier(effort string, multipliers map[string]floa
 	return multiplier
 }
 
-// modelReasoningEffortBillingMultiplier preserves the site's Fable 5.1 max
-// default while allowing any explicitly configured effort multiplier to win.
-// An empty map restores defaults; configuring max=1 disables the default uplift.
-func modelReasoningEffortBillingMultiplier(model, effort string, multipliers map[string]float64) float64 {
-	normalized := strings.ToLower(strings.TrimSpace(effort))
-	if normalized != "none" {
-		normalized = NormalizeMaxReasoningEffort(normalized)
-	}
-	if multiplier, ok := multipliers[normalized]; ok && multiplier > 0 && !math.IsNaN(multiplier) && !math.IsInf(multiplier, 0) {
-		return reasoningEffortBillingMultiplier(normalized, multipliers)
-	}
-	if normalized == "max" && isClaudeFable51Model(model) {
-		return 3
-	}
-	return 1
+// Model spelling does not add an implicit effort surcharge. Only explicit
+// channel effort multipliers alter the default 1x price.
+func modelReasoningEffortBillingMultiplier(_ string, effort string, multipliers map[string]float64) float64 {
+	return reasoningEffortBillingMultiplier(effort, multipliers)
 }
 
 func resolvedChannelTimeMultiplier(resolved *ResolvedPricing, at time.Time) float64 {

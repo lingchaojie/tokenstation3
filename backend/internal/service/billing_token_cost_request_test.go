@@ -219,8 +219,7 @@ func TestCalculateTokenCostForRequest_NoResolverFallsBackToCatalog(t *testing.T)
 
 func TestCalculateTokenCostForRequest_Fable51MaxEffortUsesDefaultMultiplier(t *testing.T) {
 	bs := NewBillingService(&config.Config{}, nil)
-	// Exercise both cache TTLs and cache reads: the site's richer breakdown
-	// must receive the same approved max-effort multiplier as input/output.
+	// Max effort has no implicit uplift for input/output or either cache TTL.
 	tokens := UsageTokens{
 		InputTokens: 1000, OutputTokens: 10,
 		CacheCreationTokens: 300, CacheCreation5mTokens: 100,
@@ -234,14 +233,14 @@ func TestCalculateTokenCostForRequest_Fable51MaxEffortUsesDefaultMultiplier(t *t
 		Model: "claude-fable-5-1", Tokens: tokens, RateMultiplier: 1, ReasoningEffort: "max",
 	})
 	require.NoError(t, err)
-	require.InDelta(t, standard.TotalCost*3, max.TotalCost, 1e-12)
-	require.InDelta(t, standard.ActualCost*3, max.ActualCost, 1e-12)
-	require.InDelta(t, standard.InputCost*3, max.InputCost, 1e-12)
-	require.InDelta(t, standard.OutputCost*3, max.OutputCost, 1e-12)
+	require.InDelta(t, standard.TotalCost, max.TotalCost, 1e-12)
+	require.InDelta(t, standard.ActualCost, max.ActualCost, 1e-12)
+	require.InDelta(t, standard.InputCost, max.InputCost, 1e-12)
+	require.InDelta(t, standard.OutputCost, max.OutputCost, 1e-12)
 	require.InDelta(t, 0.01585, standard.TotalCost, 1e-12)
-	require.InDelta(t, 0.04755, max.TotalCost, 1e-12)
-	require.InDelta(t, 0.01575, max.CacheCreationCost, 1e-12)
-	require.InDelta(t, 0.0003, max.CacheReadCost, 1e-12)
+	require.InDelta(t, 0.01585, max.TotalCost, 1e-12)
+	require.InDelta(t, 0.00525, max.CacheCreationCost, 1e-12)
+	require.InDelta(t, 0.0001, max.CacheReadCost, 1e-12)
 }
 
 func TestCalculateTokenCostForRequest_ChannelConfiguresReasoningEffortMultiplier(t *testing.T) {
