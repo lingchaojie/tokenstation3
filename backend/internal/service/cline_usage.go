@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,15 @@ import (
 const clineAPIBase = "https://" + clineAPIHost
 
 var errClineInvalidResponse = errors.New("invalid cline account response")
+
+// ModelRateLimitCompareAndSetter is the optional atomic write capability used
+// by account probes. expected contains the complete scope JSON observed before
+// the probe; nil means the scope was missing, distinct from JSON null. The
+// replacement is persisted exactly, including the caller's generation times.
+// Request-side restrictions continue to use unconditional SetModelRateLimit.
+type ModelRateLimitCompareAndSetter interface {
+	SetModelRateLimitIfUnchanged(ctx context.Context, id int64, scope string, expected, replacement json.RawMessage) (bool, error)
+}
 
 // clineHTTPError 是账号接口的非 2xx 响应。
 type clineHTTPError struct {
@@ -382,10 +392,38 @@ func clinePassWalletState(subscribed bool, tiers []CNQuotaTier, now, fallback ti
 
 // setClineWalletLimit 写钱包冷却；until 不晚于 now 时即解除。
 func (s *CNProviderQuotaService) setClineWalletLimit(ctx context.Context, account *Account, scope string, until time.Time, reason string, now time.Time) {
-	setAccountModelRateLimitSnapshot(account, scope, until, reason, now)
-	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, scope, until, reason); err != nil {
+	setter, ok := s.accountRepo.(ModelRateLimitCompareAndSetter)
+	if !ok {
+		slog.Warn("cline_wallet_limit_cas_unavailable", "account_id", account.ID, "scope", scope)
+		return
+	}
+	limits, _ := account.Extra[modelRateLimitsKey].(map[string]any)
+	var expected json.RawMessage
+	if observed, present := limits[scope]; present {
+		var err error
+		expected, err = json.Marshal(observed)
+		if err != nil {
+			slog.Warn("cline_wallet_limit_snapshot_invalid", "account_id", account.ID, "scope", scope, "error", err)
+			return
+		}
+	}
+	// Build the replacement separately so failed or stale writes cannot alter
+	// the detached account. Both DB and local state use the same generation.
+	replacementAccount := &Account{}
+	setAccountModelRateLimitSnapshot(replacementAccount, scope, until, reason, now)
+	replacement, err := json.Marshal(replacementAccount.Extra[modelRateLimitsKey].(map[string]any)[scope])
+	if err != nil {
+		slog.Warn("cline_wallet_limit_snapshot_invalid", "account_id", account.ID, "scope", scope, "error", err)
+		return
+	}
+	applied, err := setter.SetModelRateLimitIfUnchanged(ctx, account.ID, scope, expected, replacement)
+	if err != nil {
 		slog.Warn("cline_wallet_limit_set_failed", "account_id", account.ID, "scope", scope, "error", err)
 		return
 	}
+	if !applied {
+		return
+	}
+	setAccountModelRateLimitSnapshot(account, scope, until, reason, now)
 	slog.Info("cline_wallet_limit", "account_id", account.ID, "scope", scope, "until", until.UTC(), "cleared", !until.After(now))
 }

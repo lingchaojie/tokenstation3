@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -289,12 +290,14 @@ func TestHandleUpstreamError_Cline402KeepsAccountWhenCooldownWriteFails(t *testi
 // clineAccountRepo 为余额 / 用量探测与周期检测提供 Cline 账号，并记录写入。
 type clineAccountRepo struct {
 	AccountRepository
-	accounts    []Account
-	mu          sync.Mutex
-	extraWrites map[int64][]map[string]any
-	modelLimits map[int64]map[string]time.Time
-	reasons     map[int64]map[string]string
-	paused      []int64
+	accounts     []Account
+	mu           sync.Mutex
+	extraWrites  map[int64][]map[string]any
+	modelLimits  map[int64]map[string]time.Time
+	reasons      map[int64]map[string]string
+	paused       []int64
+	lastSnapshot *Account
+	casError     error
 }
 
 func (r *clineAccountRepo) ListByPlatform(_ context.Context, platform string) ([]Account, error) {
@@ -305,9 +308,21 @@ func (r *clineAccountRepo) ListByPlatform(_ context.Context, platform string) ([
 }
 
 func (r *clineAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for i := range r.accounts {
 		if r.accounts[i].ID == id {
-			return &r.accounts[i], nil
+			snapshot := r.accounts[i]
+			raw, err := json.Marshal(snapshot.Extra)
+			if err != nil {
+				return nil, err
+			}
+			snapshot.Extra = nil
+			if err := json.Unmarshal(raw, &snapshot.Extra); err != nil {
+				return nil, err
+			}
+			r.lastSnapshot = &snapshot
+			return &snapshot, nil
 		}
 	}
 	return nil, errors.New("not found")
@@ -320,12 +335,26 @@ func (r *clineAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[
 		r.extraWrites = map[int64][]map[string]any{}
 	}
 	r.extraWrites[id] = append(r.extraWrites[id], updates)
+	for i := range r.accounts {
+		if r.accounts[i].ID == id {
+			if r.accounts[i].Extra == nil {
+				r.accounts[i].Extra = map[string]any{}
+			}
+			for key, value := range updates {
+				r.accounts[i].Extra[key] = value
+			}
+		}
+	}
 	return nil
 }
 
 func (r *clineAccountRepo) SetModelRateLimit(_ context.Context, id int64, scope string, resetAt time.Time, reason ...string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.setModelRateLimit(id, scope, resetAt, reason...)
+}
+
+func (r *clineAccountRepo) setModelRateLimit(id int64, scope string, resetAt time.Time, reason ...string) error {
 	if r.modelLimits == nil {
 		r.modelLimits = map[int64]map[string]time.Time{}
 		r.reasons = map[int64]map[string]string{}
@@ -338,7 +367,53 @@ func (r *clineAccountRepo) SetModelRateLimit(_ context.Context, id int64, scope 
 	if len(reason) > 0 {
 		r.reasons[id][scope] = reason[0]
 	}
+	for i := range r.accounts {
+		if r.accounts[i].ID == id {
+			setAccountModelRateLimitSnapshot(&r.accounts[i], scope, resetAt, r.reasons[id][scope], time.Now().UTC())
+		}
+	}
 	return nil
+}
+
+func (r *clineAccountRepo) SetModelRateLimitIfUnchanged(_ context.Context, id int64, scope string, expected, replacement json.RawMessage) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.casError != nil {
+		return false, r.casError
+	}
+	for i := range r.accounts {
+		if r.accounts[i].ID != id {
+			continue
+		}
+		limits, _ := r.accounts[i].Extra["model_rate_limits"].(map[string]any)
+		value, present := limits[scope]
+		var current []byte
+		if present {
+			var err error
+			current, err = json.Marshal(value)
+			if err != nil {
+				return false, err
+			}
+		}
+		if string(current) != string(expected) {
+			return false, nil
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(replacement, &entry); err != nil {
+			return false, err
+		}
+		resetAt, err := time.Parse(time.RFC3339, entry["rate_limit_reset_at"].(string))
+		if err != nil {
+			return false, err
+		}
+		reason, _ := entry["reason"].(string)
+		if err := r.setModelRateLimit(id, scope, resetAt, reason); err != nil {
+			return false, err
+		}
+		r.accounts[i].Extra["model_rate_limits"].(map[string]any)[scope] = entry
+		return true, nil
+	}
+	return false, nil
 }
 
 func (r *clineAccountRepo) SetTempUnschedulable(_ context.Context, id int64, _ time.Time, _ string) error {
