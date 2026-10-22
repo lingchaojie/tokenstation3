@@ -172,6 +172,14 @@
           </div>
         </div>
 
+        <p
+          v-if="model.price_status === 'confirmed' && model.pricing.note"
+          class="mt-3 text-xs leading-5 text-linear-ink-muted"
+          data-testid="model-catalog-pricing-note"
+        >
+          {{ model.pricing.note }}
+        </p>
+
         <router-link
           :to="chatRouteForModel(model)"
           class="btn btn-primary mt-5 w-full justify-center"

@@ -831,6 +831,23 @@ describe('HomeView landing page', () => {
     expect(wrapper.find('[data-testid="homepage-model-catalog-toggle"]').exists()).toBe(false)
   })
 
+  it('shows confirmed-model billing conditions in the homepage catalog', async () => {
+    authState.isAuthenticated = true
+    authState.user = { email: 'user@example.com' }
+    const note = 'Input rates refer to text tokens; output rates refer to image output tokens.'
+    getPublicModelCatalogMock.mockResolvedValue({
+      ...modelCatalogFixture,
+      models: modelCatalogFixture.models.map((model, index) => index === 0
+        ? { ...model, pricing: { ...model.pricing, note } }
+        : model),
+    })
+
+    const wrapper = mountHome()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="homepage-model-catalog-pricing-note"]').text()).toBe(note)
+  })
+
   it('renders URL custom home content in a full-page iframe before the default landing page', async () => {
     appState.cachedPublicSettings = {
       site_name: 'Fuse API',

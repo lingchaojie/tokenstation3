@@ -217,6 +217,23 @@ describe('ModelCatalog', () => {
     expect(text).not.toContain('Source')
   })
 
+  it('shows billing conditions for confirmed prices alongside the numeric rates', async () => {
+    const note = 'Above 100,000 input tokens, higher rates apply to the entire request.'
+    mockedGetPublicModelCatalog.mockResolvedValue({
+      ...catalogFixture,
+      models: catalogFixture.models.map((model, index) => index === 0
+        ? { ...model, pricing: { ...model.pricing, note } }
+        : model),
+    })
+
+    const wrapper = mountCatalog()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="model-catalog-pricing-note"]').text()).toBe(note)
+    expect(wrapper.text()).toContain('$5')
+    expect(wrapper.text()).toContain('$25')
+  })
+
   it('hides public catalog models that are not available from web chat models', async () => {
     mockedGetPublicModelCatalog.mockResolvedValue(catalogFixture)
     mockedListChatModels.mockResolvedValue(chatModelsForCatalog(catalogFixture.models.slice(0, 2)))

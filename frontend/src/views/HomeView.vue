@@ -672,6 +672,14 @@
                 </div>
               </div>
 
+              <p
+                v-if="model.price_status === 'confirmed' && model.pricing.note"
+                class="mt-3 text-xs leading-5 text-linear-ink-muted"
+                data-testid="homepage-model-catalog-pricing-note"
+              >
+                {{ model.pricing.note }}
+              </p>
+
               <router-link
                 :to="chatRouteForModel(model)"
                 class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-primary-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-400"

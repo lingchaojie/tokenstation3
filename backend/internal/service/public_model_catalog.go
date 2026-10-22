@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const PublicModelCatalogUpdatedAt = "2026-09-05"
+const PublicModelCatalogUpdatedAt = "2026-10-22"
 
 type PublicModelCatalogResponse struct {
 	UpdatedAt string                       `json:"updated_at"`
@@ -55,18 +55,25 @@ type PublicModelCatalogPriceLine struct {
 }
 
 const (
-	sourceAnthropic        = "https://docs.anthropic.com/en/docs/about-claude/pricing"
-	sourceAnthropicOpus5   = "https://www.anthropic.com/news/claude-opus-5"
-	sourceAnthropicFable5  = "https://www.anthropic.com/news/claude-fable-5-mythos-5"
-	sourceAnthropicFable51 = "https://platform.claude.com/docs/en/models/fable-5-1/overview"
-	sourceOpenAIGPT6Astra  = "https://developers.openai.com/api/docs/models/gpt-6-astra"
-	sourceOpenAI           = "https://openai.com/api/pricing/"
-	sourceGemini           = "https://ai.google.dev/gemini-api/docs/pricing"
-	sourceQwen             = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
-	sourceGLM              = "https://docs.z.ai/guides/overview/pricing"
-	sourceDeepSeek         = "https://api-docs.deepseek.com/quick_start/pricing"
-	sourceMiniMax          = "https://platform.minimax.io/docs/guides/pricing-paygo"
-	sourceKimi             = "https://platform.kimi.ai/docs/pricing/chat"
+	sourceAnthropicOpus55   = "https://platform.claude.com/docs/en/models/opus-5-5/overview"
+	sourceAnthropicSonnet55 = "https://platform.claude.com/docs/en/models/sonnet-5-5/overview"
+	sourceAnthropicHaiku55  = "https://platform.claude.com/docs/en/models/haiku-5-5/overview"
+	sourceOpenAIGPT61Sol    = "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
+	sourceOpenAIGPT6Sol     = "https://developers.openai.com/api/docs/models/gpt-6-sol"
+	sourceOpenAIGPT6Luna    = "https://developers.openai.com/api/docs/models/gpt-6-luna"
+	sourceOpenAIPricing     = "https://developers.openai.com/api/docs/pricing"
+	sourceAnthropic         = "https://docs.anthropic.com/en/docs/about-claude/pricing"
+	sourceAnthropicOpus5    = "https://www.anthropic.com/news/claude-opus-5"
+	sourceAnthropicFable5   = "https://www.anthropic.com/news/claude-fable-5-mythos-5"
+	sourceAnthropicFable51  = "https://platform.claude.com/docs/en/models/fable-5-1/overview"
+	sourceOpenAIGPT6Astra   = "https://developers.openai.com/api/docs/models/gpt-6-astra"
+	sourceOpenAI            = "https://openai.com/api/pricing/"
+	sourceGemini            = "https://ai.google.dev/gemini-api/docs/pricing"
+	sourceQwen              = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+	sourceGLM               = "https://docs.z.ai/guides/overview/pricing"
+	sourceDeepSeek          = "https://api-docs.deepseek.com/quick_start/pricing"
+	sourceMiniMax           = "https://platform.minimax.io/docs/guides/pricing-paygo"
+	sourceKimi              = "https://platform.kimi.ai/docs/pricing/chat"
 )
 
 const (
@@ -116,6 +123,11 @@ func withPriceLines(pricing PublicModelCatalogPricing, lines ...PublicModelCatal
 	return pricing
 }
 
+func withPricingNote(pricing PublicModelCatalogPricing, note string) PublicModelCatalogPricing {
+	pricing.Note = note
+	return pricing
+}
+
 func priceLine(label string, amount float64, unit string) PublicModelCatalogPriceLine {
 	return PublicModelCatalogPriceLine{Label: label, Amount: amount, Unit: unit}
 }
@@ -128,6 +140,14 @@ type modelReleaseInfo struct {
 }
 
 var publicModelReleaseInfoByModel = map[string]modelReleaseInfo{
+	"claude-opus-5-5":          {ReleasedAt: "2026-09-22", ReleaseStatus: "confirmed"},
+	"claude-sonnet-5-5":        {ReleasedAt: "2026-09-28", ReleaseStatus: "confirmed"},
+	"claude-haiku-5-5":         {ReleasedAt: "2026-10-07", ReleaseStatus: "confirmed"},
+	"gpt-6.1-sol":              {ReleasedAt: "2026-09-29", ReleaseStatus: "confirmed"},
+	"gpt-6-sol":                {ReleasedAt: "2026-09-22", ReleaseStatus: "confirmed"},
+	"gpt-6-luna":               {ReleasedAt: "2026-09-22", ReleaseStatus: "confirmed"},
+	"gpt-image-2.5-flare":      {ReleasedAt: "2026-09-08", ReleaseStatus: "confirmed"},
+	"gpt-image-2.5-sunburst":   {ReleasedAt: "2026-09-08", ReleaseStatus: "confirmed"},
 	"claude-fable-5-1":         {ReleasedAt: "2026-09-01", ReleaseStatus: "confirmed"},
 	"claude-opus-5":            {ReleasedAt: "2026-07-24", ReleaseStatus: "confirmed"},
 	"claude-fable-5":           {ReleasedAt: "2026-06-09", ReleaseStatus: "confirmed"},
@@ -195,6 +215,16 @@ func imageFeatures(extra ...string) []string {
 }
 
 var publicModelCatalogModels = []PublicModelCatalogModel{
+	catalogModel("anthropic", "Anthropic", "claude-opus-5-5", "Claude Opus 5.5", textModalities(), "Claude Opus model for long-running agentic coding and knowledge work, with always-on adaptive reasoning.", 1000000, sourceAnthropicOpus55, textFeatures("vision input", "tool use", "prompt caching"),
+		withPriceLines(usdWithCache(4, 20, 0.2), priceLine("5m cache write", 5, "1M tokens"), priceLine("1h cache write", 8, "1M tokens")), "confirmed", sourceAnthropicOpus55),
+	catalogModel("anthropic", "Anthropic", "claude-sonnet-5-5", "Claude Sonnet 5.5", textModalities(), "Fast Claude Sonnet model for coding, agents, and knowledge work with adaptive reasoning.", 1000000, sourceAnthropicSonnet55, textFeatures("vision input", "tool use", "prompt caching"),
+		withPriceLines(usdWithCache(2, 10, 0.1), priceLine("5m cache write", 2.5, "1M tokens"), priceLine("1h cache write", 4, "1M tokens")), "confirmed", sourceAnthropicSonnet55),
+	catalogModel("anthropic", "Anthropic", "claude-haiku-5-5", "Claude Haiku 5.5", textModalities(), "Fast, low-cost Claude model for high-throughput chat, coding, and agent tasks with adaptive reasoning.", 1000000, sourceAnthropicHaiku55, textFeatures("vision input", "tool use", "prompt caching"),
+		withPricingNote(withPriceLines(usdWithCache(0.1, 0.5, 0.01),
+			priceLine("5m cache write", 0.125, "1M tokens"), priceLine("1h cache write", 0.2, "1M tokens"),
+			priceLine(">100K input", 0.5, "1M tokens"), priceLine(">100K output", 2.5, "1M tokens"), priceLine(">100K cache read", 0.05, "1M tokens"),
+			priceLine(">100K 5m cache write", 0.625, "1M tokens"), priceLine(">100K 1h cache write", 1, "1M tokens")),
+			"Base rates apply up to 100,000 input tokens. Above that threshold, higher rates apply to the entire request, including cached input and output."), "confirmed", sourceAnthropicHaiku55),
 	catalogModel("anthropic", "Anthropic", "claude-fable-5-1", "Claude Fable 5.1", textModalities(), "Most capable generally available Claude model for demanding reasoning, long-running agentic coding, knowledge work, and research.", 1000000, contextSourceAnthropicFable51, textFeatures("vision input", "tool use", "prompt caching"), withPriceLines(usdWithCache(10, 50, 0.25), priceLine("5m cache write", 12.5, "1M tokens"), priceLine("1h cache write", 20, "1M tokens")), "confirmed", sourceAnthropicFable51),
 	catalogModel("anthropic", "Anthropic", "claude-opus-5", "Claude Opus 5", textModalities(), "Newest Opus model for long-running agents, coding, and professional work.", 1000000, contextSourceAnthropicOpus5, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(5, 25, 0.5), "confirmed", sourceAnthropicOpus5),
 	catalogModel("anthropic", "Anthropic", "claude-fable-5", "Claude Fable 5", textModalities(), "Higher-tier Claude model for complex knowledge work, coding, and sustained autonomous tasks.", 1000000, contextSourceAnthropicFable5, textFeatures("vision input", "tool use", "prompt caching"), withPriceLines(usdWithCache(10, 50, 1), priceLine("5m cache write", 12.5, "1M tokens"), priceLine("1h cache write", 20, "1M tokens")), "confirmed", sourceAnthropicFable5),
@@ -206,6 +236,30 @@ var publicModelCatalogModels = []PublicModelCatalogModel{
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", textModalities(), "Balanced Claude Sonnet model with strong coding and agent performance.", 200000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-5", "Claude Sonnet 5", textModalities(), "Best combination of speed and intelligence in the Claude model family, with a 1M-token context window.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(2, 10, 0.2), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", textModalities(), "Balanced Claude Sonnet model for production coding and agent workflows.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
+	catalogModel("openai", "OpenAI", "gpt-6.1-sol", "GPT-6.1 Sol", textModalities(), "OpenAI reasoning model for coding, tool use, and long-context agent workflows.", 1050000, sourceOpenAIGPT61Sol, textFeatures("vision input", "tool use", "prompt caching"),
+		withPricingNote(withPriceLines(usdWithCache(2, 10, 0.1),
+			priceLine("30m cache write", 2.5, "1M tokens"), priceLine("12h cache write", 5, "1M tokens"),
+			priceLine(">272K input", 4, "1M tokens"), priceLine(">272K output", 15.0, "1M tokens"), priceLine(">272K cache read", 0.2, "1M tokens"),
+			priceLine(">272K 30m cache write", 5.0, "1M tokens"), priceLine(">272K 12h cache write", 10, "1M tokens")),
+			"Standard rates apply up to 272,000 input tokens. Above that threshold, input and cache rates double and output rates increase by 50% for the entire request."), "confirmed", sourceOpenAIPricing),
+	catalogModel("openai", "OpenAI", "gpt-6-sol", "GPT-6 Sol", textModalities(), "OpenAI reasoning model for coding, tool use, and long-context agent workflows.", 1050000, sourceOpenAIGPT6Sol, textFeatures("vision input", "tool use", "prompt caching"),
+		withPricingNote(withPriceLines(usdWithCache(2, 10, 0.2),
+			priceLine("30m cache write", 2.5, "1M tokens"), priceLine("12h cache write", 5, "1M tokens"),
+			priceLine(">272K input", 4, "1M tokens"), priceLine(">272K output", 15.0, "1M tokens"), priceLine(">272K cache read", 0.4, "1M tokens"),
+			priceLine(">272K 30m cache write", 5.0, "1M tokens"), priceLine(">272K 12h cache write", 10, "1M tokens")),
+			"Standard rates apply up to 272,000 input tokens. Above that threshold, input and cache rates double and output rates increase by 50% for the entire request."), "confirmed", sourceOpenAIPricing),
+	catalogModel("openai", "OpenAI", "gpt-6-luna", "GPT-6 Luna", textModalities(), "Fast, low-cost OpenAI reasoning model for coding and high-throughput agent workflows.", 1050000, sourceOpenAIGPT6Luna, textFeatures("vision input", "tool use", "prompt caching"),
+		withPricingNote(withPriceLines(usdWithCache(0.1, 0.5, 0.01),
+			priceLine("30m cache write", 0.125, "1M tokens"), priceLine("12h cache write", 0.25, "1M tokens"),
+			priceLine(">272K input", 0.2, "1M tokens"), priceLine(">272K output", 0.75, "1M tokens"), priceLine(">272K cache read", 0.02, "1M tokens"),
+			priceLine(">272K 30m cache write", 0.25, "1M tokens"), priceLine(">272K 12h cache write", 0.5, "1M tokens")),
+			"Standard rates apply up to 272,000 input tokens. Above that threshold, input and cache rates double and output rates increase by 50% for the entire request."), "confirmed", sourceOpenAIPricing),
+	catalogModel("openai", "OpenAI", "gpt-image-2.5-flare", "GPT-Image-2.5 Flare", imageModalities(), "Fast image generation and editing for everyday visual workflows.", 0, "", imageFeatures("image editing", "multi-resolution"),
+		withPricingNote(withPriceLines(usdWithCache(5, 30, 1.25), priceLine("image input", 8, "1M tokens"), priceLine("cached image input", 2, "1M tokens")),
+			"Input and cache read rates refer to text tokens; output refers to image output tokens. Image input has separate rates. Caching is available through the Responses API. Per-image cost varies by size and quality."), "confirmed", sourceOpenAIPricing),
+	catalogModel("openai", "OpenAI", "gpt-image-2.5-sunburst", "GPT-Image-2.5 Sunburst", imageModalities(), "Image generation and precise editing for demanding visual workflows.", 0, "", imageFeatures("image editing", "multi-resolution"),
+		withPricingNote(withPriceLines(usdWithCache(5, 30, 1.25), priceLine("image input", 8, "1M tokens"), priceLine("cached image input", 2, "1M tokens")),
+			"Input and cache read rates refer to text tokens; output refers to image output tokens. Image input has separate rates. Caching is available through the Responses API. Per-image cost varies by size and quality."), "confirmed", sourceOpenAIPricing),
 	catalogModel("openai", "OpenAI", "gpt-6-astra", "GPT-6 Astra", textModalities(), "OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.", 1050000, sourceOpenAIGPT6Astra, textFeatures("vision input", "tool use", "prompt caching"), withPriceLines(usdWithCache(10, 50, 1), priceLine("cache write", 12.5, "1M tokens")), "confirmed", sourceOpenAIGPT6Astra),
 	catalogModel("openai", "OpenAI", "gpt-5.6-sol", "GPT-5.6 Sol", textModalities(), "Highest-capability GPT-5.6 tier for complex reasoning, coding, and long-context agent workflows.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(4, 20, 0.4), "confirmed", sourceOpenAI),
 	catalogModel("openai", "OpenAI", "gpt-5.6-terra", "GPT-5.6 Terra", textModalities(), "Balanced GPT-5.6 tier for production reasoning, coding, and agent workloads.", 1050000, contextSourceOpenAI, textFeatures("vision input", "tool use", "prompt caching"), usdWithCache(2.5, 15, 0.25), "confirmed", sourceOpenAI),

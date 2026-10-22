@@ -28,3 +28,14 @@ The model catalog is the user-facing model marketplace. It should present models
 - The public `/models` page and authenticated `/dashboard/models` page share the same user-facing catalog semantics.
 - Users should not need to understand route-level variants before choosing a model.
 - Web Chat reuses this catalog and applies a narrower provider/platform routing subset. See [Web Chat](web-chat.md) for the authenticated chat surface and billing behavior.
+
+## October 22, 2026 Refresh
+
+The static snapshot now includes Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, GPT-6.1 Sol, GPT-6 Sol, GPT-6 Luna, GPT-Image-2.5 Flare, and GPT-Image-2.5 Sunburst.
+
+- Claude metadata and cache pricing come from the official [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/overview), [Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview), and [Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/overview) pages. Haiku's base rates apply through 100,000 input tokens; larger requests use the higher tier for the entire request.
+- GPT context windows come from the official [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) pages. The [standard pricing table](https://developers.openai.com/api/docs/pricing) supplies token and cache rates. Above 272,000 input tokens, the entire request uses double input/cache rates and 1.5 times output rates.
+- The [Flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare) and [Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst) pages describe generation and editing. Their cards distinguish text input/cache, image input/cache, and image output token prices. No context window or fixed per-image price is assumed.
+- OpenAI release dates are recorded in the official [API changelog](https://developers.openai.com/api/docs/changelog).
+
+`/api/v1/settings/model-catalog` serves this versioned static snapshot; changing account model whitelists does not refresh it. The gateway's `/v1/models` list is separate and depends on the requesting key and available accounts. A catalog card describes a model, not a guarantee that every group can route to it.
