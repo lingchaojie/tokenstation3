@@ -1,0 +1,9 @@
+# Security gate before GPT-6.2 release
+
+The user approved repairing dependency security failures before pushing release on 2026-11-19. This extends the previously approved focused model integration; the earlier exclusion of general dependency updates does not prevent these targeted security repairs.
+
+Fix the three newly reported frontend advisories (Vue I18n, decode-uri-component, follow-redirects) and four reachable backend findings (Brotli, klauspost/compress, x/net and Go net/http). Keep existing audit exceptions unchanged. Vue I18n v9/v10 have no patched release: use supported stable v11.4.22 with its matching compiler. Its Node >=22 requirement requires aligning CI/release builds with the existing Docker Node 24 build. Upgrade Go to 1.27.4 and the three libraries to their reported fixed versions, retaining unrelated dependency versions where resolution permits. Extended source scanning also identified the unused OpenPGP module advisory GO-2026-5932: upgrade x/crypto to the fixed stable v0.59.0 and its required x/sys, x/term, x/text and x/tools versions, rather than carrying that module-only finding forward.
+
+Preserve model prices, request semantics, translations, locale switching and CSP-compatible message handling. Verify actual audit gates plus frontend and backend regressions, obtain independent review, update dev without force, and push release only after the exact dev head passes CI and Security Scan. Preserve release history. Wait for release CI/security and the existing release publication workflow. Do not change production servers or call providers.
+
+Evidence: Security Scan run 44474931397; baseline and feature frontend audits have identical findings. Official advisory GHSA-83rm-6c8r-g728 requires migrating from Vue I18n v9/v10; npm metadata for 11.4.22 declares Node >=22.
