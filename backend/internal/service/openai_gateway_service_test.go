@@ -3306,7 +3306,8 @@ func TestOpenAIBuildUpstreamRequestCompactVersionClampsOldCustomUserAgent(t *tes
 
 	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", false, "", true)
 	require.NoError(t, err)
-	require.Equal(t, openai.SetCodexUserAgentVersion(customUA, codexCLIVersion), req.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs/"+codexCLIVersion+" (Mac OS 15.5.0; arm64) ghostty/1.3.1", req.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", req.Header.Get("originator"))
 	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
 }
 

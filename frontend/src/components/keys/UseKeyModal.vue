@@ -1353,6 +1353,8 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'gpt-5.3-codex-spark': openaiModel('GPT-5.3 Codex Spark', 128000, 32000),
     'gpt-5.2': openaiModel('GPT-5.2', 400000),
     'gpt-6.1-sol': openaiModel('GPT-6.1 Sol', 1050000, 128000, maxReasoningVariants),
+    'gpt-6.2-sol': openaiModel('GPT-6.2 Sol', 1050000, 128000, maxReasoningVariants),
+    'gpt-6.2-astra': openaiModel('GPT-6.2 Astra', 1050000, 128000, maxReasoningVariants),
     'gpt-6-sol': openaiModel('GPT-6 Sol', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
     'gpt-6-luna': openaiModel('GPT-6 Luna', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
     'codex-mini-latest': {

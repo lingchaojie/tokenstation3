@@ -3,9 +3,12 @@ package service
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"net/url"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 var codexToolCapabilityFields = []string{
@@ -52,6 +55,29 @@ func applyCodexToolCapabilities(dst, src map[string]json.RawMessage, overwrite b
 	return changed
 }
 
+// Pro 200 includes Sol Ultrafast; Pro 500 includes both 6.2 models.
+// Workspace and other subscription grants come from account discovery.
+func gpt62PlanIncludesUltrafast(account *Account, base string) bool {
+	if !account.IsOpenAIOAuthLike() || base == "" {
+		return false
+	}
+	plan := strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '-', '_':
+			return -1
+		}
+		return r
+	}, strings.ToLower(strings.TrimSpace(account.GetCredential("plan_type"))))
+	switch plan {
+	case "pro", "chatgptpro":
+		return base == "gpt-6.2-sol"
+	case "promax":
+		return base == "gpt-6.2-sol" || base == "gpt-6.2-astra"
+	default:
+		return false
+	}
+}
+
 func accountCodexToolCapabilities(account *Account, modelID string) map[string]json.RawMessage {
 	capabilities := make(map[string]json.RawMessage)
 	if account == nil {
@@ -72,8 +98,8 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 	}
 	parsed, err := url.Parse(baseURL)
 	official := err == nil && (strings.EqualFold(parsed.Hostname(), "api.openai.com") ||
-		(account.IsOpenAIOAuth() && strings.EqualFold(parsed.Hostname(), "chatgpt.com")))
-	if account.IsOpenAI() && (isOpenAIGPT6AstraModel(modelID) || openai.IsGPT61SolModelSpelling(modelID)) && official {
+		((account.IsOpenAIOAuth() || (account.IsOpenAIOAuthLike() && openai.GPT62ModelID(modelID) != "")) && strings.EqualFold(parsed.Hostname(), "chatgpt.com")))
+	if account.IsOpenAI() && (openai.GPT62ModelID(modelID) != "" || isOpenAIGPT6AstraModel(modelID) || openai.IsGPT61SolModelSpelling(modelID)) && official {
 		defaults := map[string]json.RawMessage{
 			"supports_search_tool":  json.RawMessage("true"),
 			"apply_patch_tool_type": json.RawMessage(`"freeform"`),
@@ -81,7 +107,7 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 			"tool_mode":             json.RawMessage("null"),
 			"use_responses_lite":    json.RawMessage("false"),
 		}
-		if account.IsOpenAIOAuth() {
+		if account.IsOpenAIOAuth() || (account.IsOpenAIOAuthLike() && openai.GPT62ModelID(modelID) != "") {
 			defaults["tool_mode"] = json.RawMessage(`"code_mode_only"`)
 			defaults["use_responses_lite"] = json.RawMessage("true")
 		}
@@ -97,16 +123,24 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 			capabilities["use_responses_lite"] = json.RawMessage("false")
 		}
 	}
-	// API Astra publicly supports Ultrafast. OAuth must advertise it in its
-	// account manifest; a subscription label alone does not grant the capability.
-	if account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && isOpenAIGPT6AstraModel(modelID) {
-		tiers := configuredCodexServiceTiersForModel(modelID)
-		tiers = append(tiers, configuredCodexServiceTier{ID: OpenAIFastTierUltrafast, Name: "Ultrafast", Description: "Lowest latency; 6x Standard token pricing."})
-		encoded, err := json.Marshal(tiers)
+	// API tiers fill missing metadata. Known personal subscription SKUs can
+	// add a newly granted tier to an older snapshot, preserving provider fields.
+	base := openai.GPT62ModelID(modelID)
+	planUltra := official && gpt62PlanIncludesUltrafast(account, base)
+	apiUltra := account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && (base != "" || isOpenAIGPT6AstraModel(modelID))
+	tiers := capabilities["service_tiers"]
+	if (apiUltra && len(tiers) == 0) || (planUltra && !gjson.GetBytes(tiers, `#(id=="ultrafast")`).Exists()) {
+		if len(tiers) == 0 {
+			tiers, err = json.Marshal(configuredCodexServiceTiersForModel(modelID))
+			if err != nil {
+				panic(err)
+			}
+		}
+		tiers, err = sjson.SetBytes(tiers, "-1", configuredCodexServiceTier{ID: OpenAIFastTierUltrafast, Name: "Ultrafast", Description: "Lowest latency; 6x Standard token pricing."})
 		if err != nil {
 			panic(err)
 		}
-		applyCodexToolCapabilities(capabilities, map[string]json.RawMessage{"service_tiers": encoded}, false)
+		capabilities["service_tiers"] = tiers
 	}
 	return capabilities
 }

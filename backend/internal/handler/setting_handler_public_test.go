@@ -331,8 +331,8 @@ func TestSettingHandler_GetPublicModelCatalog_ReturnsCompleteCatalog(t *testing.
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, "2026-10-22", resp.Data.UpdatedAt)
-	require.Len(t, resp.Data.Models, 47)
+	require.Equal(t, "2026-11-19", resp.Data.UpdatedAt)
+	require.Len(t, resp.Data.Models, 49)
 	require.Len(t, resp.Data.Providers, 8)
 	require.Equal(t, "anthropic", resp.Data.Providers[0].Key)
 	require.Equal(t, "Anthropic", resp.Data.Providers[0].Name)
