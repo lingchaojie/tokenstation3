@@ -95,6 +95,23 @@ var (
 		Mode:                                "chat",
 		SupportsPromptCaching:               true,
 	}
+	openAIGPT62AstraFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:                   8e-6,
+		InputCostPerTokenPriority:           16e-6,
+		OutputCostPerToken:                  40e-6,
+		OutputCostPerTokenPriority:          80e-6,
+		CacheCreationInputTokenCost:         10e-6,
+		CacheCreationInputTokenCostPriority: 20e-6,
+		CacheReadInputTokenCost:             0.4e-6,
+		CacheReadInputTokenCostPriority:     0.8e-6,
+		LongContextInputTokenThreshold:      272_000,
+		LongContextInputCostMultiplier:      2,
+		LongContextOutputCostMultiplier:     1.5,
+		SupportsServiceTier:                 true,
+		LiteLLMProvider:                     "openai",
+		Mode:                                "chat",
+		SupportsPromptCaching:               true,
+	}
 	openAIGPT61SolFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   2e-6,
 		InputCostPerTokenPriority:           4e-6,
@@ -1594,6 +1611,9 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 	if pricing := s.lookupIdentifiedModelPricingLocked(lookupCandidates); pricing != nil {
 		return pricing
 	}
+	if isUnknownGPT62PricingModel(lookupCandidates[0]) {
+		return nil
+	}
 
 	// 4. 基于模型系列匹配（Claude）
 	if pricing := s.matchByModelFamily(lookupCandidates[0]); pricing != nil {
@@ -1626,6 +1646,11 @@ func (s *PricingService) lookupIdentifiedModelPricingLocked(lookupCandidates []s
 			return pricing
 		}
 	}
+	// Only an explicit catalog entry may price an unpublished 6.2 name.
+	// In particular, dated/lookalike suffixes must not enter fuzzy matching.
+	if isUnknownGPT62PricingModel(lookupCandidates[0]) {
+		return nil
+	}
 
 	// 2. 处理常见的模型名称变体
 	// claude-opus-4-5-20251101 -> claude-opus-4.5-20251101
@@ -1647,6 +1672,11 @@ func (s *PricingService) lookupIdentifiedModelPricingLocked(lookupCandidates []s
 	}
 
 	return nil
+}
+
+func isUnknownGPT62PricingModel(model string) bool {
+	canonical := openai.CanonicalizeOpenAIModelAliasSpelling(model)
+	return (canonical == "gpt-6.2" || strings.HasPrefix(canonical, "gpt-6.2-")) && openai.GPT62ModelID(canonical) == ""
 }
 
 // GetIdentifiedModelPricing 在价格表中确定性地识别模型，识别不到时返回 nil。
@@ -1924,6 +1954,16 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 				Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-5.1-codex"))
 			return pricing
 		}
+	}
+
+	if base := openai.GPT62ModelID(model); base != "" {
+		if pricing, ok := s.pricingData[base]; ok {
+			return pricing
+		}
+		if base == "gpt-6.2-sol" {
+			return openAIGPT61SolFallbackPricing
+		}
+		return openAIGPT62AstraFallbackPricing
 	}
 
 	if openai.IsGPT61SolModelSpelling(model) {

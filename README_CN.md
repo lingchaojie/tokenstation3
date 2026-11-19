@@ -633,8 +633,8 @@ cd sub2api/deploy
 
 #### 前置条件
 
-- Go 1.21+
-- Node.js 18+
+- Go 1.27.4+
+- Node.js 22+
 - PostgreSQL 15+
 - Redis 7+
 

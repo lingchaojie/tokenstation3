@@ -1553,7 +1553,7 @@ func TestGPT6ReasoningModeUsesMappedUpstream(t *testing.T) {
 }
 
 func TestGPT6MappedCompatibilityBridgesKeepReasoningAndTools(t *testing.T) {
-	for _, model := range []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} {
 		for _, messages := range []bool{false, true} {
 			body := []byte(`{"model":"public","reasoning_effort":"max","temperature":0.7,"top_p":0.9,"prompt_cache_options":{"ttl":"30m"},"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"hello"}]}`)
 			if messages {

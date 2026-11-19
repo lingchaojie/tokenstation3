@@ -334,7 +334,7 @@ func TestGetOpenAICodexCanonicalUserAgentBuildsFromVersion(t *testing.T) {
 	}}, nil)
 
 	require.Equal(t,
-		"codex-tui/0.200.1"+codexCLIUserAgentSuffix,
+		"codex_cli_rs/0.200.1"+codexCLIUserAgentSuffix,
 		svc.GetOpenAICodexCanonicalUserAgent(context.Background()),
 	)
 }
@@ -518,7 +518,7 @@ func TestGetOpenAICodexCanonicalUserAgentOutboundIdentity(t *testing.T) {
 					SettingKeyOpenAICodexClientVersionSynced: version.synced,
 				}}, nil)
 				wantUA := buildCodexCLIUserAgent(version.want)
-				wantOriginator := "codex-tui"
+				wantOriginator := "codex_cli_rs"
 				if ua.client != "" {
 					wantUA = ua.client + "/" + version.want + ua.suffix
 					wantOriginator = ua.client
@@ -527,6 +527,10 @@ func TestGetOpenAICodexCanonicalUserAgentOutboundIdentity(t *testing.T) {
 					return svc.GetOpenAICodexCanonicalUserAgent(context.Background())
 				})
 				require.Equal(t, wantUA, svc.GetOpenAICodexCanonicalUserAgent(context.Background()))
+				if ua.name == "recognized_trailer" {
+					wantUA = "codex_cli_rs/" + version.want + " (Linux)"
+					wantOriginator = "codex_cli_rs"
+				}
 				identity := resolveCodexOutboundIdentity("")
 				require.Equal(t, wantUA, identity.userAgent)
 				require.Equal(t, wantOriginator, identity.originator)

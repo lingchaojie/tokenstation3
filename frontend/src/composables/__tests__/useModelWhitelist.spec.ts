@@ -16,6 +16,16 @@ import { getKiroDefaultModelMapping } from '@/api/admin/accounts'
 import { BUILTIN_PLATFORM_CATALOG, resetPlatformCatalog, setPlatformCatalog } from '@/constants/platformCatalog'
 
 describe('useModelWhitelist', () => {
+  it('提供两个独立的 GPT-6.2 模型与原名映射预设', () => {
+    const models = getModelsByPlatform('openai')
+    expect(models).toContain('gpt-6.2-sol')
+    expect(models).toContain('gpt-6.2-astra')
+    expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'GPT-6.2 Sol', from: 'gpt-6.2-sol', to: 'gpt-6.2-sol' }),
+      expect.objectContaining({ label: 'GPT-6.2 Astra', from: 'gpt-6.2-astra', to: 'gpt-6.2-astra' })
+    ]))
+  })
+
   it('平台清单中没有内置模型列表的多协议供应商不预填白名单', () => {
     setPlatformCatalog({
       ...BUILTIN_PLATFORM_CATALOG,

@@ -568,6 +568,20 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		// the bundled official snapshot. Explicit upstream metadata still wins.
 		descriptor.ContextWindow = 500_000
 	}
+	var metadata json.RawMessage
+	switch openai.GPT62ModelID(modelID) {
+	case "gpt-6.2-sol":
+		metadata = openai.CodexGPT62SolMetadata
+	case "gpt-6.2-astra":
+		metadata = openai.CodexGPT62AstraMetadata
+	}
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &descriptor); err != nil {
+			panic(err)
+		}
+		descriptor.Slug = modelID
+		descriptor.officialMetadata = metadata
+	}
 	return descriptor
 }
 
@@ -667,7 +681,7 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 			Description: "Maximum reasoning depth for complex tasks",
 		})
 	}
-	if isOpenAIGPT6AstraModel(modelID) || openai.IsGPT61SolModelSpelling(modelID) || normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" {
+	if openai.GPT62ModelID(modelID) != "" || isOpenAIGPT6AstraModel(modelID) || openai.IsGPT61SolModelSpelling(modelID) || normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" {
 		levels = append(levels, configuredCodexReasoningLevel{
 			Effort:      "ultra",
 			Description: "Maximum reasoning with automatic task delegation",
@@ -1937,6 +1951,8 @@ func CodexModelsManifestETag(body []byte) string {
 }
 
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
+	"gpt-6.2-sol":   {},
+	"gpt-6.2-astra": {},
 	"gpt-6.1-sol":   {},
 	"gpt-6-astra":   {},
 	"gpt-5.6-sol":   {},
@@ -1972,7 +1988,9 @@ func adjustAPIKeyCodexModelsManifest(body []byte, account *Account) ([]byte, err
 		if account != nil {
 			target = account.GetMappedModel(slug)
 		}
-		if isOpenAIGPT6AstraModel(target) {
+		if base := openai.GPT62ModelID(target); base != "" {
+			target = base
+		} else if isOpenAIGPT6AstraModel(target) {
 			target = "gpt-6-astra"
 		}
 		if _, targeted := apiKeyCodexModelsWithoutResponsesLite[target]; !targeted {

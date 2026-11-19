@@ -39,3 +39,11 @@ The static snapshot now includes Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, GPT-6.1
 - OpenAI release dates are recorded in the official [API changelog](https://developers.openai.com/api/docs/changelog).
 
 `/api/v1/settings/model-catalog` serves this versioned static snapshot; changing account model whitelists does not refresh it. The gateway's `/v1/models` list is separate and depends on the requesting key and available accounts. A catalog card describes a model, not a guarantee that every group can route to it.
+
+### November 19, 2026 refresh
+
+Added separate GPT-6.2 Sol and GPT-6.2 Astra cards and account mapping presets. Official API context is 1,050,000 tokens for both. Standard input/output/cache-read rates per million are $2/$10/$0.10 for Sol and $8/$40/$0.40 for Astra; generic cache writes are $2.50 and $10. TokenStation applies Fast at 2x and Ultra Fast at 6x on all dates, as approved for this rollout, rather than the upstream promotion. Existing models keep their prices.
+
+API-key requests above 272,000 input tokens use 2x input/cache and 1.5x output rates. Actual ChatGPT credentials using these upstream models retain the subscription exemption. Existing administrator prices and the funding pipeline keep their precedence. No 30m/12h cache accounting was imported.
+
+Sources: [Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol), [Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra), [pricing](https://developers.openai.com/api/docs/pricing). The November 17 release timestamp comes from the pinned upstream model list and remains marked unverified until independently confirmed.

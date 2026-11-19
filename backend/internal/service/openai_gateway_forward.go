@@ -27,6 +27,24 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
 	}
+	if account.IsOpenAI() {
+		requestedModel := gjson.GetBytes(body, "model").String()
+		compact := isOpenAIResponsesCompactPath(c)
+		billingModel, upstreamModel := resolveOpenAIForwardMappedModels(account, requestedModel, compact)
+		// The raw CC fallback returns before compact overrides in Forward.
+		if compact && !shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
+			if fallback := s.resolveOpenAICompactFallbackModel(account, requestedModel); fallback != "" {
+				upstreamModel = fallback
+			}
+		}
+		normalized, _, err := normalizeGPT62RequestReasoning(body, upstreamModel, "reasoning.effort", billingModel, requestedModel)
+		if err != nil {
+			setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": err.Error(), "param": "reasoning.effort"}})
+			return nil, err
+		}
+		body = normalized
+	}
 	filteredBody, filterErr := filterOpenAIResponsesNoneReasoningEffortForAccount(account, body)
 	if filterErr != nil {
 		return nil, filterErr

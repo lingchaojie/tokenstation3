@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -128,7 +129,7 @@ func TestPublicModelCatalog_IncludesClaude5ModelsInReleaseOrder(t *testing.T) {
 		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
 		require.Equal(t, want.releasedAt, model.ReleasedAt)
 		require.Equal(t, "confirmed", model.ReleaseStatus)
-		require.Equal(t, "2026-10-22", model.UpdatedAt)
+		require.Equal(t, "2026-11-19", model.UpdatedAt)
 		require.Equal(t, 1_000_000, model.ContextWindow)
 		require.Equal(t, want.sourceURL, model.SourceURL)
 		require.Equal(t, want.contextSourceURL, model.ContextSourceURL)
@@ -191,7 +192,7 @@ func TestPublicModelCatalog_IncludesGPT56VariantsInReleaseOrder(t *testing.T) {
 		require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, model.Features)
 		require.Equal(t, "2026-07-09", model.ReleasedAt)
 		require.Equal(t, "confirmed", model.ReleaseStatus)
-		require.Equal(t, "2026-10-22", model.UpdatedAt)
+		require.Equal(t, "2026-11-19", model.UpdatedAt)
 		require.Equal(t, 1_050_000, model.ContextWindow)
 		require.Equal(t, sourceOpenAI, model.SourceURL)
 		require.Equal(t, contextSourceOpenAI, model.ContextSourceURL)
@@ -229,7 +230,7 @@ func TestPublicModelCatalog_IncludesGPT6AstraWithOfficialPricing(t *testing.T) {
 	require.ElementsMatch(t, []string{"chat", "reasoning", "vision input", "tool use", "prompt caching"}, astra.Features)
 	require.Equal(t, "2026-09-05", astra.ReleasedAt)
 	require.Equal(t, "confirmed", astra.ReleaseStatus)
-	require.Equal(t, "2026-10-22", astra.UpdatedAt)
+	require.Equal(t, "2026-11-19", astra.UpdatedAt)
 	require.Equal(t, 1_050_000, astra.ContextWindow)
 	require.Equal(t, "https://developers.openai.com/api/docs/models/gpt-6-astra", astra.SourceURL)
 	require.Equal(t, astra.SourceURL, astra.ContextSourceURL)
@@ -242,7 +243,7 @@ func TestPublicModelCatalog_IncludesGPT6AstraWithOfficialPricing(t *testing.T) {
 	require.Equal(t, 50.0, *astra.Pricing.OutputPerMillion)
 	require.Equal(t, []PublicModelCatalogPriceLine{{Label: "cache write", Amount: 12.5, Unit: "1M tokens"}}, astra.Pricing.PriceLines)
 	require.NotEmpty(t, openAIModelNames)
-	require.Equal(t, "gpt-6.1-sol", openAIModelNames[0])
+	require.ElementsMatch(t, []string{"gpt-6.2-sol", "gpt-6.2-astra"}, openAIModelNames[:2])
 }
 
 // These are public API model IDs, not upstream-specific aliases or reasoning variants.
@@ -270,7 +271,7 @@ func TestPublicModelCatalog_Fall2026ModelMetadata(t *testing.T) {
 			model, ok := models[tt.name]
 			require.True(t, ok, "missing base model %s", tt.name)
 			require.Equal(t, tt.releasedAt, model.ReleasedAt)
-			require.Equal(t, "2026-10-22", model.UpdatedAt)
+			require.Equal(t, "2026-11-19", model.UpdatedAt)
 			require.Equal(t, "confirmed", model.ReleaseStatus)
 			require.Equal(t, "confirmed", model.PriceStatus)
 			require.Equal(t, tt.context, model.ContextWindow)
@@ -306,5 +307,37 @@ func TestPublicModelCatalog_Fall2026ModelMetadata(t *testing.T) {
 		require.Contains(t, pricing.PriceLines, priceLine(">272K input", 2**pricing.InputPerMillion, "1M tokens"))
 		require.Contains(t, pricing.PriceLines, priceLine(">272K output", 1.5**pricing.OutputPerMillion, "1M tokens"))
 		require.Contains(t, pricing.PriceLines, priceLine(">272K cache read", 2**pricing.CacheReadPerMillion, "1M tokens"))
+	}
+}
+
+func TestPublicModelCatalog_GPT62(t *testing.T) {
+	models := PublicModelCatalogModelsForWebChat()
+	for _, tc := range []struct {
+		id                          string
+		input, output, cache, write float64
+	}{{"gpt-6.2-sol", 2, 10, .1, 2.5}, {"gpt-6.2-astra", 8, 40, .4, 10}} {
+		count := 0
+		for _, model := range models {
+			if model.ModelName != tc.id {
+				continue
+			}
+			count++
+			require.Equal(t, 1050000, model.ContextWindow)
+			require.Equal(t, "https://developers.openai.com/api/docs/models/"+tc.id, model.ContextSourceURL)
+			require.Equal(t, "https://developers.openai.com/api/docs/pricing", model.SourceURL)
+			require.Equal(t, tc.input, *model.Pricing.InputPerMillion)
+			require.Equal(t, tc.output, *model.Pricing.OutputPerMillion)
+			require.Equal(t, tc.cache, *model.Pricing.CacheReadPerMillion)
+			require.Contains(t, model.Pricing.PriceLines, priceLine("cache write", tc.write, "1M tokens"))
+			require.Contains(t, model.Pricing.Note, "Fast 2x")
+			require.Contains(t, model.Pricing.Note, "Ultra Fast 6x")
+			require.Equal(t, "2026-11-19", model.UpdatedAt)
+		}
+		require.Equal(t, 1, count, tc.id)
+	}
+	for _, model := range models {
+		if strings.HasPrefix(model.ModelName, "gpt-6.2-") {
+			require.Contains(t, []string{"gpt-6.2-sol", "gpt-6.2-astra"}, model.ModelName)
+		}
 	}
 }

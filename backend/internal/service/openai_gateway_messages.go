@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -90,10 +91,24 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// 2. Model mapping
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
+	if openai.GPT62ModelID(originalModel) != "" {
+		if mapped, matched := account.ResolveMappedModel(originalModel); matched {
+			billingModel = mapped
+		}
+	}
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
+	}
+	if effort, err := gpt62RequestReasoningEffort(body, upstreamModel, billingModel, originalModel); err != nil {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	} else if effort != "" {
+		if anthropicReq.OutputConfig == nil {
+			anthropicReq.OutputConfig = &apicompat.AnthropicOutputConfig{}
+		}
+		anthropicReq.OutputConfig.Effort = effort
 	}
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	apiKeyID := getAPIKeyIDFromContext(c)

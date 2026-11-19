@@ -1464,3 +1464,23 @@ func TestForwardAsRawChatCompletions_RestoresMappedResponseModel(t *testing.T) {
 		}
 	}
 }
+
+func TestGPT62RawChatSampling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		body := []byte(`{"model":"public","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"max","temperature":0.7,"top_p":0.8,"logprobs":true,"top_logprobs":2}`)
+		upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_62","model":"` + model + `","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))}}
+		svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+		account := rawChatCompletionsTestAccount()
+		account.Credentials["model_mapping"] = map[string]any{"public": model}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
+		require.NoError(t, err)
+		require.Equal(t, model, gjson.GetBytes(upstream.lastBody, "model").String())
+		require.Equal(t, "max", gjson.GetBytes(upstream.lastBody, "reasoning_effort").String())
+		for _, key := range []string{"temperature", "top_p", "logprobs", "top_logprobs"} {
+			require.False(t, gjson.GetBytes(upstream.lastBody, key).Exists(), key)
+		}
+	}
+}

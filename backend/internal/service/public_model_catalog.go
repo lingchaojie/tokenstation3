@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const PublicModelCatalogUpdatedAt = "2026-10-22"
+const PublicModelCatalogUpdatedAt = "2026-11-19"
 
 type PublicModelCatalogResponse struct {
 	UpdatedAt string                       `json:"updated_at"`
@@ -58,6 +58,8 @@ const (
 	sourceAnthropicOpus55   = "https://platform.claude.com/docs/en/models/opus-5-5/overview"
 	sourceAnthropicSonnet55 = "https://platform.claude.com/docs/en/models/sonnet-5-5/overview"
 	sourceAnthropicHaiku55  = "https://platform.claude.com/docs/en/models/haiku-5-5/overview"
+	sourceOpenAIGPT62Sol    = "https://developers.openai.com/api/docs/models/gpt-6.2-sol"
+	sourceOpenAIGPT62Astra  = "https://developers.openai.com/api/docs/models/gpt-6.2-astra"
 	sourceOpenAIGPT61Sol    = "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
 	sourceOpenAIGPT6Sol     = "https://developers.openai.com/api/docs/models/gpt-6-sol"
 	sourceOpenAIGPT6Luna    = "https://developers.openai.com/api/docs/models/gpt-6-luna"
@@ -143,6 +145,8 @@ var publicModelReleaseInfoByModel = map[string]modelReleaseInfo{
 	"claude-opus-5-5":          {ReleasedAt: "2026-09-22", ReleaseStatus: "confirmed"},
 	"claude-sonnet-5-5":        {ReleasedAt: "2026-09-28", ReleaseStatus: "confirmed"},
 	"claude-haiku-5-5":         {ReleasedAt: "2026-10-07", ReleaseStatus: "confirmed"},
+	"gpt-6.2-sol":              {ReleasedAt: "2026-11-17", ReleaseStatus: "unverified"},
+	"gpt-6.2-astra":            {ReleasedAt: "2026-11-17", ReleaseStatus: "unverified"},
 	"gpt-6.1-sol":              {ReleasedAt: "2026-09-29", ReleaseStatus: "confirmed"},
 	"gpt-6-sol":                {ReleasedAt: "2026-09-22", ReleaseStatus: "confirmed"},
 	"gpt-6-luna":               {ReleasedAt: "2026-09-22", ReleaseStatus: "confirmed"},
@@ -236,6 +240,14 @@ var publicModelCatalogModels = []PublicModelCatalogModel{
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", textModalities(), "Balanced Claude Sonnet model with strong coding and agent performance.", 200000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-5", "Claude Sonnet 5", textModalities(), "Best combination of speed and intelligence in the Claude model family, with a 1M-token context window.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(2, 10, 0.2), "confirmed", sourceAnthropic),
 	catalogModel("anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", textModalities(), "Balanced Claude Sonnet model for production coding and agent workflows.", 1000000, contextSourceAnthropic, textFeatures("tool use", "prompt caching"), usdWithCache(3, 15, 0.3), "confirmed", sourceAnthropic),
+	catalogModel("openai", "OpenAI", "gpt-6.2-sol", "GPT-6.2 Sol", textModalities(), "OpenAI reasoning model for coding, tool use, and long-context agent workflows.", 1050000, sourceOpenAIGPT62Sol, textFeatures("vision input", "tool use", "prompt caching"),
+		withPricingNote(withPriceLines(usdWithCache(2, 10, 0.1), priceLine("cache write", 2.5, "1M tokens"),
+			priceLine(">272K input", 4, "1M tokens"), priceLine(">272K output", 15, "1M tokens"), priceLine(">272K cache read", 0.2, "1M tokens"), priceLine(">272K cache write", 5, "1M tokens")),
+			"Fast 2x; Ultra Fast 6x. Standard rates apply up to 272,000 input tokens. Above that threshold, input and cache rates double and output rates increase by 50% for the entire request. Eligible ChatGPT subscription routes are exempt from this model long-context surcharge."), "confirmed", sourceOpenAIPricing),
+	catalogModel("openai", "OpenAI", "gpt-6.2-astra", "GPT-6.2 Astra", textModalities(), "OpenAI reasoning model for complex coding, tool use, and demanding agent workflows.", 1050000, sourceOpenAIGPT62Astra, textFeatures("vision input", "tool use", "prompt caching"),
+		withPricingNote(withPriceLines(usdWithCache(8, 40, 0.4), priceLine("cache write", 10, "1M tokens"),
+			priceLine(">272K input", 16, "1M tokens"), priceLine(">272K output", 60, "1M tokens"), priceLine(">272K cache read", 0.8, "1M tokens"), priceLine(">272K cache write", 20, "1M tokens")),
+			"Fast 2x; Ultra Fast 6x. Standard rates apply up to 272,000 input tokens. Above that threshold, input and cache rates double and output rates increase by 50% for the entire request. Eligible ChatGPT subscription routes are exempt from this model long-context surcharge."), "confirmed", sourceOpenAIPricing),
 	catalogModel("openai", "OpenAI", "gpt-6.1-sol", "GPT-6.1 Sol", textModalities(), "OpenAI reasoning model for coding, tool use, and long-context agent workflows.", 1050000, sourceOpenAIGPT61Sol, textFeatures("vision input", "tool use", "prompt caching"),
 		withPricingNote(withPriceLines(usdWithCache(2, 10, 0.1),
 			priceLine("30m cache write", 2.5, "1M tokens"), priceLine("12h cache write", 5, "1M tokens"),
