@@ -17,6 +17,7 @@ Design: [approved spec](../superpowers/specs/2026-11-19-gpt62-models-design.md).
 - November 17 creation timestamps originate from the pinned upstream model list, so release dates remain marked unverified. They affect hidden default sorting only.
 - Added OpenCode exports after finding their independent model map; the missing-model regression failed before the fix.
 - Added new-model sampling cleanup to the raw Chat Completions path after a mapped-request test demonstrated unsupported temperature passthrough. Other models retain their previous behavior.
-- Backend unit/integration suites, lint and embedded build passed; frontend 444 files / 3,563 tests, lint, typecheck and build passed. Independent review is pending; production has not been deployed.
+- Backend unit/integration suites, lint and embedded build passed after the independent review fix pass; frontend 444 files / 3,563 tests, lint, typecheck and build passed. Four Important review findings were reproduced and fixed, including the related Messages/usage alias cases; no Critical or Minor findings. Production has not been deployed.
 
 Detailed commands and build evidence: [validation](./evidence/2026-11-19-gpt62/validation.md).
+Review triggers, corrections and limits: [review](./evidence/2026-11-19-gpt62/review.md).

@@ -1988,7 +1988,9 @@ func adjustAPIKeyCodexModelsManifest(body []byte, account *Account) ([]byte, err
 		if account != nil {
 			target = account.GetMappedModel(slug)
 		}
-		if isOpenAIGPT6AstraModel(target) {
+		if base := openai.GPT62ModelID(target); base != "" {
+			target = base
+		} else if isOpenAIGPT6AstraModel(target) {
 			target = "gpt-6-astra"
 		}
 		if _, targeted := apiKeyCodexModelsWithoutResponsesLite[target]; !targeted {

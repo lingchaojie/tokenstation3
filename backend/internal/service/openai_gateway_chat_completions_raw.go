@@ -112,6 +112,12 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if upstreamModel != originalModel {
 		upstreamBody = ReplaceModelInBody(body, upstreamModel)
 	}
+	if normalized, _, err := normalizeGPT62RequestReasoning(upstreamBody, upstreamModel, "reasoning_effort", billingModel, originalModel); err != nil {
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	} else {
+		upstreamBody = normalized
+	}
 	if openai.GPT62ModelID(upstreamModel) != "" {
 		normalizedBody, _, err := normalizeGPT6ResponsesSampling(upstreamBody, upstreamModel)
 		if err != nil {

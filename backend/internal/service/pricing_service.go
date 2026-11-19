@@ -1611,6 +1611,9 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 	if pricing := s.lookupIdentifiedModelPricingLocked(lookupCandidates); pricing != nil {
 		return pricing
 	}
+	if isUnknownGPT62PricingModel(lookupCandidates[0]) {
+		return nil
+	}
 
 	// 4. 基于模型系列匹配（Claude）
 	if pricing := s.matchByModelFamily(lookupCandidates[0]); pricing != nil {
@@ -1643,6 +1646,11 @@ func (s *PricingService) lookupIdentifiedModelPricingLocked(lookupCandidates []s
 			return pricing
 		}
 	}
+	// Only an explicit catalog entry may price an unpublished 6.2 name.
+	// In particular, dated/lookalike suffixes must not enter fuzzy matching.
+	if isUnknownGPT62PricingModel(lookupCandidates[0]) {
+		return nil
+	}
 
 	// 2. 处理常见的模型名称变体
 	// claude-opus-4-5-20251101 -> claude-opus-4.5-20251101
@@ -1664,6 +1672,11 @@ func (s *PricingService) lookupIdentifiedModelPricingLocked(lookupCandidates []s
 	}
 
 	return nil
+}
+
+func isUnknownGPT62PricingModel(model string) bool {
+	canonical := openai.CanonicalizeOpenAIModelAliasSpelling(model)
+	return (canonical == "gpt-6.2" || strings.HasPrefix(canonical, "gpt-6.2-")) && openai.GPT62ModelID(canonical) == ""
 }
 
 // GetIdentifiedModelPricing 在价格表中确定性地识别模型，识别不到时返回 nil。

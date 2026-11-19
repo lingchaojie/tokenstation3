@@ -115,7 +115,9 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 	}
 	if account.IsOpenAIApiKey() {
 		target := modelID
-		if isOpenAIGPT6AstraModel(target) {
+		if base := openai.GPT62ModelID(target); base != "" {
+			target = base
+		} else if isOpenAIGPT6AstraModel(target) {
 			target = "gpt-6-astra"
 		}
 		_, disabled := apiKeyCodexModelsWithoutResponsesLite[target]

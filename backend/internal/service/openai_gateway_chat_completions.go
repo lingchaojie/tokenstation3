@@ -186,6 +186,19 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
+	if effort, err := gpt62RequestReasoningEffort(body, upstreamModel, billingModel, originalModel); err != nil {
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	} else if effort != "" {
+		chatReq.ReasoningEffort = effort
+		// Responses-shaped requests bypass the typed CC conversion below.
+		if isResponsesShape {
+			body, err = sjson.SetBytes(body, "reasoning.effort", effort)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	compatPromptCacheInjected := false

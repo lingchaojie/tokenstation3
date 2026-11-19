@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"net/http"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -1725,6 +1725,13 @@ func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string
 		}
 		return &normalized
 	}
+	if openai.GPT62ModelID(firstNonEmpty(modelCandidates...)) != "" {
+		value, err := gpt62RequestReasoningEffort(body, firstNonEmpty(modelCandidates...), modelCandidates...)
+		if err != nil || value == "" {
+			return nil
+		}
+		return &value
+	}
 
 	value := deriveOpenAIReasoningEffortFromModelCandidates(modelCandidates)
 	if value == "" {
@@ -2190,6 +2197,15 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	if frameType != "response.create" {
 		return frame, nil, nil
 	}
+	// All WS turns arrive here after model mapping/session inheritance. Validate
+	// before forwarding and retain a recognized alias's selected effort.
+	if account != nil && account.IsOpenAI() {
+		normalized, _, err := normalizeGPT62RequestReasoning(frame, model, "reasoning.effort", gjson.GetBytes(frame, "model").String())
+		if err != nil {
+			return frame, nil, err
+		}
+		frame = normalized
+	}
 	if openAIGroupForcesFast(ctx, account) {
 		updated, err := sjson.SetBytes(frame, "service_tier", OpenAIFastTierPriority)
 		if err != nil {
@@ -2600,7 +2616,11 @@ func supportsOpenAIReasoningEffortMax(model string) bool {
 // validateGPT61SolCompatRequest runs after model mapping, before conversion can
 // discard unsupported explicit effort selections or disabled thinking.
 func validateGPT61SolCompatRequest(body []byte, model string) error {
-	if !openai.IsGPT61SolModelSpelling(model) && openai.GPT62ModelID(model) == "" {
+	if openai.GPT62ModelID(model) != "" {
+		_, err := gpt62RequestReasoningEffort(body, model, gjson.GetBytes(body, "model").String())
+		return err
+	}
+	if !openai.IsGPT61SolModelSpelling(model) {
 		return nil
 	}
 	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
