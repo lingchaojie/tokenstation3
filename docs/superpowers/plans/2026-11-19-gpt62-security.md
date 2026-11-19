@@ -31,7 +31,7 @@ Check runtime message compilation and interpolation under CSP, locale fallback/s
 
 **Interfaces:** Task 1 validated tree becomes dev, then a release merge must preserve that tree and existing release ancestry.
 
-- [ ] Fresh independent review of the full dependency repair diff; fix Important/Critical findings with regression evidence and rerun affected checks.
+- [x] Fresh independent review of the full dependency repair diff; fix Important/Critical findings with regression evidence and rerun affected checks.
 - [ ] Push updated dev without force and wait for exact-head CI/Security Scan success. Expected: every required job passes.
 - [ ] Merge into the prepared release branch, verify tree equality with validated dev and release ancestry, push without force. Expected: release CI/Security Scan and publication complete successfully.
 - [ ] Record final branch SHAs, release tag and workflow URLs. Task completion command: `git status --short` with clean worktree and verified remote heads.
