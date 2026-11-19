@@ -72,6 +72,12 @@
       </div>
     </template>
 
+    <div v-else-if="awaitingConfirmation" class="linx-panel p-6 text-center" role="status">
+      <p class="text-lg font-bold text-gray-900 dark:text-white">{{ t('payment.qr.confirmationPending') }}</p>
+      <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('payment.qr.confirmationPendingDesc') }}</p>
+      <RouterLink to="/orders" class="btn btn-secondary mt-4">{{ t('payment.result.viewOrders') }}</RouterLink>
+    </div>
+
     <!-- ═══ Active States: QR or Popup waiting ═══ -->
 
     <!-- QR Code Mode -->
@@ -129,12 +135,14 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { usePaymentStore } from '@/stores/payment'
+import { RouterLink } from 'vue-router'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractI18nErrorMessage } from '@/utils/apiError'
+import { captureStoredUserIdentity } from '@/api/tokenRefresh'
+import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import { currencySymbol, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
+import { isPaymentRecoveryUnavailable } from '@/components/payment/paymentFlow'
 import type { PaymentOrder } from '@/types/payment'
 import Icon from '@/components/icons/Icon.vue'
 import QRCode from 'qrcode'
@@ -147,6 +155,8 @@ const props = defineProps<{
   qrCode: string
   expiresAt: string
   paymentType: string
+  providerKey?: string
+  confirmationPending?: boolean
   payUrl?: string
   orderType?: string
   currency?: string
@@ -154,17 +164,26 @@ const props = defineProps<{
 
 type PaymentOutcome = 'success' | 'cancelled' | 'expired'
 
-const emit = defineEmits<{ done: []; success: []; settled: [outcome: PaymentOutcome] }>()
+const emit = defineEmits<{
+  done: []
+  success: []
+  settled: [outcome: PaymentOutcome]
+  'confirmation-pending': []
+  unavailable: []
+}>()
 
 const i18n = useI18n()
 const { t } = i18n
-const paymentStore = usePaymentStore()
 const appStore = useAppStore()
 
 const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const qrUrl = ref('')
 const remainingSeconds = ref(0)
 const cancelling = ref(false)
+const awaitingConfirmation = ref(props.confirmationPending === true)
+let confirmationRecorded = props.confirmationPending === true
+const isPaymentUser = captureStoredUserIdentity()
+let disposed = false
 const paidOrder = ref<PaymentOrder | null>(null)
 const paymentCurrency = computed(() => normalizePaymentCurrency(props.currency))
 const creditedAmountSymbol = currencySymbol('USD')
@@ -236,6 +255,7 @@ function isSuccessStatus(status: string | null | undefined): boolean {
 }
 
 function supportsActiveOrderVerification(order: PaymentOrder): boolean {
+  if (order.provider_key === 'easypay' || props.providerKey === 'easypay') return true
   const typeText = `${props.paymentType} ${order.payment_type || ''}`.toLowerCase()
   return typeText.includes('alipay')
     || typeText.includes('wxpay')
@@ -290,17 +310,25 @@ async function tryRecoverPendingOrder(order: PaymentOrder): Promise<PaymentOrder
 
 let pollInFlight = false
 async function pollStatus() {
-  if (!props.orderId || outcome.value) return
+  if (!props.orderId || outcome.value || disposed) return
+  if (!isPaymentUser()) {
+    cleanup()
+    emit('unavailable')
+    return
+  }
   // 防重入：接口（含 verifyOrder 二次确认）响应慢于 3 秒轮询间隔时避免并发重叠请求。
   if (pollInFlight) return
   pollInFlight = true
   try {
-    let order = await paymentStore.pollOrderStatus(props.orderId)
-    if (!order) return
+    const { data } = await paymentAPI.getOrder(props.orderId)
+    let order = data
+    if (!order || order.id !== props.orderId || disposed || !isPaymentUser()) return
     // 已进入终态则不再处理迟到的响应。
     if (outcome.value) return
+    if (order.confirmation_pending) waitForConfirmation(true)
     order = await tryRecoverPendingOrder(order)
-    if (outcome.value) return
+    if (order.id !== props.orderId || outcome.value || disposed || !isPaymentUser()) return
+    if (order.confirmation_pending) waitForConfirmation(true)
     if (isSuccessStatus(order.status)) {
       cleanup()
       paidOrder.value = order
@@ -313,6 +341,11 @@ async function pollStatus() {
       cleanup()
       setOutcome('expired')
     }
+  } catch (error) {
+    if (!disposed && isPaymentUser() && isPaymentRecoveryUnavailable(error)) {
+      cleanup()
+      emit('unavailable')
+    }
   } finally {
     pollInFlight = false
   }
@@ -321,32 +354,78 @@ async function pollStatus() {
 function startCountdown(seconds: number) {
   remainingSeconds.value = Math.max(0, seconds)
   const deadline = Date.now() + remainingSeconds.value * 1000
-  if (remainingSeconds.value <= 0) { setOutcome('expired'); return }
+  if (remainingSeconds.value <= 0) {
+    handlePaymentDeadline()
+    return
+  }
   countdownTimer = setInterval(() => {
     remainingSeconds.value = Math.max(0, Math.floor((deadline - Date.now()) / 1000))
-    if (remainingSeconds.value <= 0) { setOutcome('expired'); cleanup() }
+    if (remainingSeconds.value <= 0) handlePaymentDeadline()
   }, 1000)
 }
 
+function handlePaymentDeadline() {
+  stopCountdown()
+  if (props.providerKey === 'easypay') {
+    waitForConfirmation()
+  } else if (!cancelling.value) {
+    setOutcome('expired')
+    cleanup()
+  }
+}
+
+function waitForConfirmation(persist = false) {
+  awaitingConfirmation.value = true
+  stopCountdown()
+  if (persist && !confirmationRecorded) {
+    confirmationRecorded = true
+    emit('confirmation-pending')
+  }
+}
+
 async function handleCancel() {
-  if (!props.orderId || cancelling.value) return
+  if (!props.orderId || cancelling.value || disposed || !isPaymentUser()) return
   cancelling.value = true
   try {
-    await paymentAPI.cancelOrder(props.orderId)
+    const result = await paymentAPI.cancelOrder(props.orderId)
+    if (outcome.value || disposed || !isPaymentUser()) return
+    if (result?.data?.message === 'already_paid') {
+      void pollStatus()
+      return
+    }
     cleanup()
     setOutcome('cancelled')
   } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    if (outcome.value || disposed || !isPaymentUser()) return
+    const code = extractApiErrorCode(err)
+    if (code === 'PAYMENT_CONFIRMATION_PENDING') {
+      waitForConfirmation(true)
+    } else if (code === 'ORDER_ALREADY_PAID') {
+      waitForConfirmation()
+      void pollStatus()
+    } else if (isPaymentRecoveryUnavailable(err)) {
+      cleanup()
+      emit('unavailable')
+    } else {
+      appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    }
   } finally {
     cancelling.value = false
+    if (!disposed && isPaymentUser() && !outcome.value && !awaitingConfirmation.value && remainingSeconds.value <= 0) {
+      handlePaymentDeadline()
+    }
   }
 }
 
 function handleDone() { cleanup(); emit('done') }
 
+function stopCountdown() {
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+}
+
 function cleanup() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+  stopCountdown()
 }
 
 // Initialize on mount
@@ -357,10 +436,13 @@ let seconds = 30 * 60
 if (props.expiresAt) {
   seconds = Math.floor((new Date(props.expiresAt).getTime() - Date.now()) / 1000)
 }
-startCountdown(seconds)
-pollTimer = setInterval(pollStatus, 3000)
+if (!awaitingConfirmation.value) startCountdown(seconds)
+if (!outcome.value) pollTimer = setInterval(pollStatus, 3000)
 renderQR()
 
 watch(() => qrUrl.value, () => renderQR())
-onUnmounted(() => cleanup())
+onUnmounted(() => {
+  disposed = true
+  cleanup()
+})
 </script>

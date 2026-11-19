@@ -16,12 +16,21 @@ var _ service.ModelRateLimitCompareAndSetter = (*accountRepository)(nil)
 // Other wallets and extra fields can change independently without invalidating
 // this comparison, and are preserved by the partial JSON update.
 func (r *accountRepository) SetModelRateLimitIfUnchanged(ctx context.Context, id int64, scope string, expected, replacement json.RawMessage) (bool, error) {
-	if scope == "" {
+	if scope == "" || (expected == nil && replacement == nil) {
 		return false, nil
+	}
+	if replacement == nil {
+		if scoped := r.accountTransactionScope(ctx); scoped != r {
+			return scoped.SetModelRateLimitIfUnchanged(ctx, id, scope, expected, nil)
+		}
 	}
 	var expectedJSON any
 	if expected != nil {
 		expectedJSON = []byte(expected)
+	}
+	var replacementJSON any
+	if replacement != nil {
+		replacementJSON = []byte(replacement)
 	}
 	client := clientFromContext(ctx, r.client)
 	result, err := client.ExecContext(ctx, `
@@ -29,15 +38,15 @@ func (r *accountRepository) SetModelRateLimitIfUnchanged(ctx context.Context, id
 		SET extra = jsonb_set(
 			COALESCE(extra, '{}'::jsonb),
 			'{model_rate_limits}'::text[],
-			jsonb_set(
+			CASE WHEN $2::jsonb IS NULL THEN (extra->'model_rate_limits') - $1::text ELSE jsonb_set(
 				CASE WHEN jsonb_typeof(extra->'model_rate_limits') = 'object'
 					THEN extra->'model_rate_limits' ELSE '{}'::jsonb END,
 				ARRAY[$1]::text[], $2::jsonb, true
-			), true
+			) END, true
 		), updated_at = NOW()
 		WHERE id = $3 AND deleted_at IS NULL
 			AND (extra #> ARRAY['model_rate_limits', $1]::text[]) IS NOT DISTINCT FROM $4::jsonb`,
-		scope, []byte(replacement), id, expectedJSON)
+		scope, replacementJSON, id, expectedJSON)
 	if err != nil {
 		return false, err
 	}

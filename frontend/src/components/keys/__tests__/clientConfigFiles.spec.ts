@@ -12,8 +12,9 @@ const CLAUDE_SETTINGS = `{
 }`
 
 const CODEX_CONFIG = `model_provider = "linx2ai"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
+model = "gpt-6.1-sol"
+review_model = "gpt-6.1-sol"
+web_search = "live"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
@@ -24,8 +25,10 @@ name = "linx2ai"
 base_url = "https://gateway.example.com"
 wire_api = "responses"
 requires_openai_auth = false
+http_headers = { "x-openai-actor-authorization" = "local-image-extension" }
 
 [features]
+image_generation = true
 goals = true`
 
 function input(overrides: Partial<ClientConfigInput> = {}): ClientConfigInput {
@@ -171,6 +174,8 @@ set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
     expect(file?.hintKey).toBe('keys.useKeyModal.opencode.hint')
     const parsed = JSON.parse(file?.content ?? '')
     expect(parsed.$schema).toBe('https://opencode.ai/config.json')
+    expect(parsed.model).toBe('openai/gpt-6.1-sol')
+    expect(parsed.provider.openai.models).toEqual({ 'gpt-6.1-sol': { name: 'GPT-6.1 Sol' } })
     expect(parsed.provider.openai.options).toEqual({
       baseURL: 'https://gateway.example.com',
       apiKey: 'sk-test'
@@ -189,10 +194,19 @@ set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
       baseURL: 'https://gateway.example.com',
       apiKey: 'sk-test'
     })
-    expect(JSON.parse(files[1]?.content ?? '').provider.openai.options).toEqual({
+    const openAI = JSON.parse(files[1]?.content ?? '')
+    expect(openAI.model).toBe('openai/gpt-6.1-sol')
+    expect(openAI.provider.openai.options).toEqual({
       baseURL: 'https://gateway.example.com',
       apiKey: 'sk-test'
     })
+  })
+
+  it('keeps the legacy OpenCode model for another gateway platform', () => {
+    const [file] = buildClientConfigFiles(input({ client: 'opencode', platform: 'deepseek' }))
+    const parsed = JSON.parse(file?.content ?? '')
+    expect(parsed.model).toBe('openai/gpt-5.5')
+    expect(parsed.provider.openai.models).toEqual({ 'gpt-5.5': { name: 'GPT-5.5' } })
   })
 
   it('builds copyable CC Switch fields for a unified key', () => {
@@ -213,7 +227,7 @@ Preset: Custom
 Name: TokenStation
 Endpoint: https://gateway.example.com
 API Key: sk-test
-Model: gpt-5.5
+Model: gpt-6.1-sol
 Wire API: responses`,
         hintKey: 'keys.useKeyModal.ccSwitch.hint'
       }
@@ -236,9 +250,11 @@ Wire API: responses`,
       platform: 'anthropic'
     })).map((file) => file.path)).toEqual(['CC Switch → Claude Code → Custom'])
 
-    expect(buildClientConfigFiles(input({
+    const codexFiles = buildClientConfigFiles(input({
       client: 'cc_switch',
       platform: 'openai'
-    })).map((file) => file.path)).toEqual(['CC Switch → Codex → Custom'])
+    }))
+    expect(codexFiles.map((file) => file.path)).toEqual(['CC Switch → Codex → Custom'])
+    expect(codexFiles[0]?.content).toContain('Model: gpt-6.1-sol')
   })
 })

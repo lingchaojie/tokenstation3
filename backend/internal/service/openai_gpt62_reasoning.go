@@ -19,7 +19,7 @@ func gpt62RequestReasoningEffort(body []byte, upstreamModel string, modelCandida
 	effort := ""
 	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
 		value := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, path).String()))
-		if err := openai.ValidateGPTReasoningEffort(base, value); err != nil {
+		if err := openai.ValidateGPT61ReasoningEffort(base, value); err != nil {
 			return "", err
 		}
 		if effort == "" {
@@ -27,7 +27,7 @@ func gpt62RequestReasoningEffort(body []byte, upstreamModel string, modelCandida
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()), "disabled") {
-		return "", openai.ValidateGPTReasoningEffort(base, "none")
+		return "", openai.ValidateGPT61ReasoningEffort(base, "none")
 	}
 	if effort != "" {
 		return effort, nil
@@ -39,7 +39,7 @@ func gpt62RequestReasoningEffort(body []byte, upstreamModel string, modelCandida
 		suffix := strings.TrimPrefix(openai.CanonicalizeOpenAIModelAliasSpelling(model), base+"-")
 		switch suffix {
 		case "none", "minimal", "low", "medium", "high", "xhigh", "max":
-			if err := openai.ValidateGPTReasoningEffort(base, suffix); err != nil {
+			if err := openai.ValidateGPT61ReasoningEffort(base, suffix); err != nil {
 				return "", err
 			}
 			return suffix, nil

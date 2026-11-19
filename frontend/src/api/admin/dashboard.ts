@@ -183,6 +183,7 @@ export async function getGroupStats(params?: GroupStatsParams): Promise<GroupSta
 export interface UserBreakdownParams {
   start_date?: string
   end_date?: string
+  timezone?: string
   exclude_user_ids?: number[]
   group_id?: number
   model?: string

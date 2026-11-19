@@ -52,11 +52,11 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
-		if maxErr, ok := extractMaxBytesError(err); ok {
-			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
+		if handleRequestBodyReadError(c, reqLog, err) {
 			return
 		}
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		status, message := requestBodyReadFailure(reqLog, c.Request, err)
+		h.errorResponse(c, status, "invalid_request_error", message)
 		return
 	}
 	if len(body) == 0 {
@@ -284,6 +284,7 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 	inboundEndpoint := GetInboundEndpoint(c)
 	upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 	quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+	pricingAt := service.OpenAIPricingAtFromContext(c.Request.Context())
 
 	usageInput := &service.OpenAIRecordUsageInput{
 		Result:             result,
@@ -300,7 +301,7 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 		QuotaPlatform:      quotaPlatform,
 		SessionID:          sessionID,
 		ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
-		PricingAt:          service.OpenAIPricingAtFromContext(c.Request.Context()),
+		PricingAt:          pricingAt,
 	}
 	if !h.validateOpenAIUsagePricing(c, usageInput) {
 		return

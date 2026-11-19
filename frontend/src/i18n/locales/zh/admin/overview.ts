@@ -1046,6 +1046,12 @@ export default {
         privacySetOnlyEnabled: '已启用 — Privacy 未设置的账号将被排除',
         disabled: '未启用'
       },
+      i18nField: {
+        default: '默认',
+        add: '新增 {language} 版',
+        edit: '编辑 {language} 版',
+        placeholder: '{language} 版，留空则显示默认内容'
+      },
       enterGroupName: '请输入分组名称',
       optionalDescription: '可选描述',
       platformHint: '选择此分组关联的平台',
@@ -1108,6 +1114,7 @@ export default {
         description: '配置图片生成能力和图片基础单价，留空则使用默认价格',
         allowImageGeneration: '允许当前分组生图',
         allowBatchImageGeneration: '允许当前分组批量生图',
+        perImageBilling: '按张计费',
         independentMultiplier: '生图倍率独立',
         imageMultiplier: '生图独立倍率',
         batchDiscountMultiplier: '批量生图折扣倍率',
@@ -1224,6 +1231,8 @@ export default {
         title: 'OpenAI Fast 模式',
         force: '强制使用 Fast（priority）',
         hint: '开启后，此分组的 OpenAI 请求会强制写入 service_tier=priority；全局 Fast/Flex 策略仍可过滤或拦截。保存后新请求立即生效，已建立的 WebSocket 会话需重连。',
+        forceUltrafast: '强制使用 Ultra Fast（ultrafast）',
+        ultrafastHint: '对支持的模型设置 service_tier=ultrafast。GPT-6.2 Sol 和 Astra 默认按标准价 6 倍计费，GPT-6 Astra 为 6 倍，GPT-6.1 Sol 为 2 倍。渠道显式配置的倍率优先。Pro 200 支持 Sol，Pro 500 支持 Sol 和 Astra，其他订阅账号以目录提供的档位为准。Ultra Fast 不可用时，分组开启强制 Fast 则用 Fast，否则跟随客户端。免费 Fast 不包含 Ultra Fast。',
         free: '免费 Fast',
         freeHint: '该分组的 Fast 请求仍使用 priority 档位，但客户实际费用按同一请求的 Standard 价格计算。'
       },

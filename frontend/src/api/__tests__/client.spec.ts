@@ -123,6 +123,23 @@ describe('API Client', () => {
       expect(config.withCredentials).toBe(true)
     })
 
+    it('preserves an explicitly selected report timezone on GET requests', async () => {
+      const adapter = vi.fn().mockResolvedValue({
+        status: 200,
+        data: { code: 0, data: {} },
+        headers: {},
+        config: {},
+        statusText: 'OK',
+      })
+      apiClient.defaults.adapter = adapter
+
+      await apiClient.get('/admin/dashboard/user-breakdown', { params: { timezone: 'America/New_York' } })
+      await apiClient.get('/admin/dashboard/user-breakdown')
+
+      expect(adapter.mock.calls[0][0].params.timezone).toBe('America/New_York')
+      expect(adapter.mock.calls[1][0].params.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)
+    })
+
     it('Admin API 在进入管理页面前也带 Admin UI 标记', async () => {
       const adapter = vi.fn().mockResolvedValue({
         status: 200,
@@ -258,6 +275,25 @@ describe('API Client', () => {
           message: '参数错误',
         })
       )
+    })
+
+    it.each([
+      ['17', 17],
+      ['Wed, 21 Oct 2026 07:28:00 GMT', undefined],
+      [undefined, undefined],
+    ])('429 结构化错误携带 Retry-After 秒数（%s）', async (retryAfter, expected) => {
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce({
+        response: {
+          status: 429,
+          data: { code: 'RATE_LIMITED', message: 'Too many requests' },
+          headers: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+        },
+        config: { url: '/usage', headers: {} },
+      })
+
+      const error = await apiClient.get('/usage').catch((err) => err)
+      expect(error).toMatchObject({ status: 429, code: 'RATE_LIMITED', message: 'Too many requests' })
+      expect(error.retry_after_seconds).toBe(expected)
     })
 
     it('部署与运营合规未确认时广播事件且保留登录态', async () => {

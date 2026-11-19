@@ -73,7 +73,17 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	body []byte,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
-	startTime := time.Now()
+	return s.forwardAsRawChatCompletionsWithStartTime(ctx, c, account, body, defaultMappedModel, time.Now())
+}
+
+func (s *OpenAIGatewayService) forwardAsRawChatCompletionsWithStartTime(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	defaultMappedModel string,
+	startTime time.Time,
+) (*OpenAIForwardResult, error) {
 
 	// 1. Parse minimal fields needed for routing/billing
 	originalModel := gjson.GetBytes(body, "model").String()
@@ -86,7 +96,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	// 2. Resolve model mapping (same as ForwardAsChatCompletions)
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
-	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
+	if err := validateGPT61CompatRequest(body, upstreamModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -98,7 +108,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		grokCacheIdentity = resolveGrokCacheIdentity(c, body, "", upstreamModel)
 	}
 	if openai.RequiresResponsesForToolCalls(upstreamModel) && (len(gjson.GetBytes(body, "tools").Array()) > 0 || len(gjson.GetBytes(body, "functions").Array()) > 0) {
-		err := fmt.Errorf("%s requires Responses for tool calls; this account only supports Chat Completions", upstreamModel)
+		err := fmt.Errorf("%s requires Responses for tool calls; this account only supports Chat Completions", normalizeKnownOpenAICodexModel(upstreamModel))
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -347,13 +357,13 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	requestID := captureProviderRequestID(resp.Header)
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 	readActivity := newProviderBodyReadActivity(resp.Body)
-	scanner := s.newUpstreamSSEScanner(readActivity)
 
 	var usage OpenAIUsage
 	var firstTokenMs *int
 	clientDisconnected := false
 	providerDoneObserved := false
 	clientOutputStarted := false
+	flushPending := false
 	semanticOutput := false
 	var staged stagedConvertedStream
 	var stagedErr error
@@ -366,7 +376,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			return
 		}
 		commit := refusalDetector.ShouldReleaseClientOutput()
-		if err := staged.write(c, writeStreamHeaders, line+"\n", commit); err != nil {
+		if err := staged.writeWithFlush(c, writeStreamHeaders, line+"\n", commit, false); err != nil {
 			var clientWriteErr *stagedConvertedClientWriteError
 			if !errors.As(err, &clientWriteErr) {
 				stagedErr = err
@@ -379,8 +389,15 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		}
 		if staged.committed {
 			clientOutputStarted = true
+			flushPending = true
 			captureWebChatStreamString(ctx, line+"\n")
 		}
+	}
+	flushToClient := func() {
+		if flushPending && !clientDisconnected {
+			c.Writer.Flush()
+		}
+		flushPending = false
 	}
 	result := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
@@ -403,24 +420,35 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		}
 	}
 	type rawChatScanEvent struct {
-		line string
-		err  error
+		line  string
+		flush bool
+		err   error
 	}
 	events := make(chan rawChatScanEvent, openAIDefaultStreamQueueSize)
+	queueBudget := newSSEQueueBudget(s.cfg)
 	stopScanner := make(chan struct{})
 	scannerDone := make(chan struct{})
 	var stopScannerOnce sync.Once
 	sendScanEvent := func(event rawChatScanEvent) bool {
+		if !queueBudget.acquire(len(event.line), stopScanner) {
+			return false
+		}
 		select {
 		case events <- event:
 			return true
 		case <-stopScanner:
+			queueBudget.release(len(event.line))
 			return false
 		}
 	}
 	go func() {
 		defer close(scannerDone)
 		defer close(events)
+		// Keep downstream writes on the handler goroutine. This event follows
+		// all complete lines from the previous upstream read in the same queue.
+		scanner := s.newUpstreamSSEScanner(&flushBeforeUpstreamRead{r: readActivity, flush: func() {
+			_ = sendScanEvent(rawChatScanEvent{flush: true})
+		}})
 		for scanner.Scan() {
 			if !sendScanEvent(rawChatScanEvent{line: scanner.Text()}) {
 				return
@@ -467,6 +495,11 @@ scanLoop:
 			if !ok {
 				break scanLoop
 			}
+			queueBudget.release(len(event.line))
+			if event.flush {
+				flushToClient()
+				continue
+			}
 			if event.err != nil {
 				scanErr = event.err
 				break scanLoop
@@ -479,6 +512,7 @@ scanLoop:
 				resetIdleTimerAfter(remaining)
 				continue
 			}
+			flushToClient()
 			if staged.committed || clientDisconnected || semanticOutput {
 				return result(), errors.New("OpenAI chat_completions stream data interval timeout")
 			}
@@ -519,16 +553,8 @@ scanLoop:
 			}
 			return result(), stagedErr
 		}
-		if line == "" {
-			if !clientDisconnected && clientOutputStarted {
-				c.Writer.Flush()
-			}
-			continue
-		}
-		if !clientDisconnected && clientOutputStarted {
-			c.Writer.Flush()
-		}
 	}
+	flushToClient()
 
 	if scanErr != nil {
 		if !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {

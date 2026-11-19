@@ -13,11 +13,10 @@ import (
 const expiryCheckTimeout = 30 * time.Second
 
 const (
-	// paymentOrderExpiryLeaderLockKey gates the periodic reconcile + expiry sweep so
+	// paymentOrderExpiryLeaderLockKey gates the periodic payment sweeps so
 	// that only one instance issues the upstream payment-provider calls per cycle.
 	paymentOrderExpiryLeaderLockKey = "payment:order:expiry:leader"
-	// paymentOrderExpiryLeaderLockTTL must exceed the combined reconcile + expiry
-	// timeouts (2 * expiryCheckTimeout) so the lock never expires mid-run.
+	// paymentOrderExpiryLeaderLockTTL covers all three sweeps at expiryCheckTimeout.
 	paymentOrderExpiryLeaderLockTTL = 3 * time.Minute
 )
 
@@ -64,11 +63,11 @@ func (s *PaymentOrderExpiryService) Start() {
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
 
-		s.runOnce()
+		holdCursor := s.runOnce(easyPayHoldCursor{})
 		for {
 			select {
 			case <-ticker.C:
-				s.runOnce()
+				holdCursor = s.runOnce(holdCursor)
 			case <-s.stopCh:
 				return
 			}
@@ -86,14 +85,14 @@ func (s *PaymentOrderExpiryService) Stop() {
 	s.wg.Wait()
 }
 
-func (s *PaymentOrderExpiryService) runOnce() {
+func (s *PaymentOrderExpiryService) runOnce(holdCursor easyPayHoldCursor) easyPayHoldCursor {
 	// Multi-instance guard: only the leader reconciles/expires orders per cycle,
 	// avoiding N× upstream payment-provider API calls and update races.
 	lockCtx, lockCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	release, ok := tryAcquireSingletonLeaderLock(lockCtx, s.lockCache, s.db, paymentOrderExpiryLeaderLockKey, s.instanceID, paymentOrderExpiryLeaderLockTTL)
 	lockCancel()
 	if !ok {
-		return
+		return holdCursor
 	}
 	defer release()
 
@@ -107,13 +106,19 @@ func (s *PaymentOrderExpiryService) runOnce() {
 	}
 
 	expireCtx, cancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
-	defer cancel()
 	expired, err := s.paymentSvc.ExpireTimedOutOrders(expireCtx)
+	cancel()
 	if err != nil {
 		slog.Error("[PaymentOrderExpiry] failed to expire orders", "error", err)
-		return
-	}
-	if expired > 0 {
+	} else if expired > 0 {
 		slog.Info("[PaymentOrderExpiry] expired timed-out orders", "count", expired)
 	}
+
+	holdCtx, cancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
+	defer cancel()
+	next, err := s.paymentSvc.reconcileExpiredEasyPayHolds(holdCtx, holdCursor)
+	if err != nil {
+		slog.Warn("[PaymentOrderExpiry] failed to reconcile EasyPay confirmation holds", "error", err)
+	}
+	return next
 }

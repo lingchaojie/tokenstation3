@@ -164,6 +164,12 @@ func StopOpenAICompactSSEKeepaliveCommitted(c *gin.Context) bool {
 	return committed
 }
 
+// RecordOpenAIStreamKeepaliveBytes excludes caller-written heartbeats from the
+// OpenAI gateway's semantic output and failover checks.
+func RecordOpenAIStreamKeepaliveBytes(c *gin.Context, written int) {
+	recordOpenAIStreamKeepaliveBytes(c, written)
+}
+
 // OpenAICompactKeepaliveAdjustedWrittenSize 返回排除 compact 心跳注释字节后
 // 的响应已写字节数；无心跳的请求等价于 c.Writer.Size()。心跳字节不构成语义
 // 响应——handler 以"Forward 前后 Size 是否变化"判定是否已向客户端写出响应

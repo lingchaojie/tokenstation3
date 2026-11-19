@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
@@ -157,11 +156,8 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		captureResponseComplete = streamRes.terminalObserved
 	} else {
 		// 非流式响应：直接透传
-		var cfg *config.Config
-		if s != nil && s.settingService != nil {
-			cfg = s.settingService.cfg
-		}
-		respBody, err := ReadUpstreamResponseBody(resp.Body, cfg, c, nil)
+		// Let the handler switch accounts before committing any error body.
+		respBody, err := ReadUpstreamResponseBody(resp.Body, s.antigravitySSEConfig(), c, nil)
 		if err != nil {
 			return nil, newInvalidProviderResponseFailover(resp, fmt.Sprintf("read antigravity upstream response: %v", err))
 		}
@@ -192,12 +188,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		ClientDisconnect:              clientDisconnect,
 		CaptureResponseComplete:       captureResponseComplete,
 		UpstreamHeaders:               resp.Header,
-		Usage: ClaudeUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CacheReadInputTokens:     usage.CacheReadInputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-		},
+		Usage:                         *usage,
 	}), nil
 }
 
@@ -216,6 +207,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
 	}
 	scanner.Buffer(make([]byte, 64*1024), maxLineSize)
+	scanner.Split(newBoundedSSESplit(s.settingService.cfg, maxLineSize, nil))
 
 	type scanEvent struct {
 		line string
@@ -224,11 +216,16 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
 	done := make(chan struct{})
 	scanDone := make(chan struct{})
+	queueBudget := newSSEQueueBudget(s.settingService.cfg)
 	sendEvent := func(ev scanEvent) bool {
+		if !queueBudget.acquire(len(ev.line), done) {
+			return false
+		}
 		select {
 		case events <- ev:
 			return true
 		case <-done:
+			queueBudget.release(len(ev.line))
 			return false
 		}
 	}
@@ -247,7 +244,7 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 	providerScanFinished := false
 	defer func() {
 		if !providerScanFinished {
-			drainCaptureScannerOnParserFailure(ginRequestContext(c), resp, events, scanDone, &readActivity.lastRead, 0, nil, func() {
+			drainCaptureScannerOnParserFailure(ginRequestContext(c), resp, events, scanDone, &readActivity.lastRead, 0, func(ev scanEvent) { queueBudget.release(len(ev.line)) }, func() {
 				close(done)
 			})
 			return
@@ -309,6 +306,9 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 	for {
 		select {
 		case ev, ok := <-events:
+			if ok {
+				queueBudget.release(len(ev.line))
+			}
 			if !ok {
 				providerScanFinished = true
 				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected(), semanticOutput: semanticOutput, terminalObserved: terminalObserved}, nil
@@ -432,11 +432,7 @@ func (s *AntigravityGatewayService) extractSSEUsage(line string, usage *ClaudeUs
 	if value := int(u.Get("cache_read_input_tokens").Int()); value > 0 {
 		usage.CacheReadInputTokens = value
 	}
-	if value := int(u.Get("cache_creation_input_tokens").Int()); value > 0 {
-		usage.CacheCreationInputTokens = value
-	}
-	usage.CacheCreation5mTokens = int(u.Get("cache_creation.ephemeral_5m_input_tokens").Int())
-	usage.CacheCreation1hTokens = int(u.Get("cache_creation.ephemeral_1h_input_tokens").Int())
+	mergeAntigravityCacheCreationUsage(u, usage)
 }
 
 // extractClaudeUsage 从非流式 Claude 响应提取 usage
@@ -453,8 +449,19 @@ func (s *AntigravityGatewayService) extractClaudeUsage(body []byte) *ClaudeUsage
 	usage.InputTokens = int(u.Get("input_tokens").Int())
 	usage.OutputTokens = int(u.Get("output_tokens").Int())
 	usage.CacheReadInputTokens = int(u.Get("cache_read_input_tokens").Int())
-	usage.CacheCreationInputTokens = int(u.Get("cache_creation_input_tokens").Int())
-	usage.CacheCreation5mTokens = int(u.Get("cache_creation.ephemeral_5m_input_tokens").Int())
-	usage.CacheCreation1hTokens = int(u.Get("cache_creation.ephemeral_1h_input_tokens").Int())
+	mergeAntigravityCacheCreationUsage(u, usage)
 	return usage
+}
+
+func mergeAntigravityCacheCreationUsage(node gjson.Result, usage *ClaudeUsage) {
+	if tokens := node.Get("cache_creation_input_tokens"); nonNegativeIntegerGJSON(tokens) && (tokens.Int() > 0 || usage.CacheCreationInputTokens <= 0) {
+		usage.CacheCreationInputTokens = int(tokens.Int())
+		usage.cacheCreationInputTokensPresent = true
+	}
+	if tokens := node.Get("cache_creation.ephemeral_5m_input_tokens"); nonNegativeIntegerGJSON(tokens) {
+		usage.CacheCreation5mTokens = int(tokens.Int())
+	}
+	if tokens := node.Get("cache_creation.ephemeral_1h_input_tokens"); nonNegativeIntegerGJSON(tokens) {
+		usage.CacheCreation1hTokens = int(tokens.Int())
+	}
 }

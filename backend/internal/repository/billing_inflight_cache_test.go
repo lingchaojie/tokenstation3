@@ -106,7 +106,7 @@ func TestInflightReservation_FirstRequestAlwaysAdmitted(t *testing.T) {
 }
 
 func TestInflightReservation_TTLExpiryFreesLeakedReservation(t *testing.T) {
-	_, cache, svc := newInflightTestEnv(t, true, 1)
+	mr, cache, svc := newInflightTestEnv(t, true, 1)
 	ctx := context.Background()
 	user := &service.User{ID: 9}
 	require.NoError(t, cache.SetUserBalance(ctx, user.ID, 1.0))
@@ -116,10 +116,22 @@ func TestInflightReservation_TTLExpiryFreesLeakedReservation(t *testing.T) {
 	_, err = svc.ReserveInflightBalance(ctx, user, nil, nil, 0.8)
 	require.ErrorIs(t, err, service.ErrInsufficientBalance)
 
-	time.Sleep(1100 * time.Millisecond)
+	zkey, hkey := billingInflightKeys(user.ID)
+	require.Equal(t, time.Second, mr.TTL(zkey))
+	require.Equal(t, time.Second, mr.TTL(hkey))
+	members, err := cache.rdb.ZRange(ctx, zkey, 0, -1).Result()
+	require.NoError(t, err)
+	require.Len(t, members, 1)
+	// Expire the member while keeping the keys so the next reservation must
+	// lazily remove the leaked entry from both data structures.
+	expired := members[0]
+	require.NoError(t, cache.rdb.ZAdd(ctx, zkey, redis.Z{Score: 1, Member: expired}).Err())
 	release, err := svc.ReserveInflightBalance(ctx, user, nil, nil, 0.8)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), inflightCount(t, cache, user.ID))
+	exists, err := cache.rdb.HExists(ctx, hkey, expired).Result()
+	require.NoError(t, err)
+	require.False(t, exists)
 	release()
 }
 

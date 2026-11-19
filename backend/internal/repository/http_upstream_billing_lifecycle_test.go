@@ -146,3 +146,75 @@ func TestHTTPUpstreamForwardDrainsUsageAfterClientDisconnect(t *testing.T) {
 		entry.client.CloseIdleConnections()
 	}
 }
+
+func TestHTTPUpstreamForwardDisconnectBudgetStopsActiveProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	providerDone := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(providerDone)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n")
+		_ = http.NewResponseController(w).Flush()
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				_, _ = io.WriteString(w, ": ping\n\n")
+				_ = http.NewResponseController(w).Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+	defer srv.CloseClientConnections()
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.StreamDataIntervalTimeout = 30
+	upstream, ok := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	require.True(t, ok)
+	require.Zero(t, upstream.upstreamDrainTimeout(), "a configured SSE idle interval must not enable a total drain cap")
+	cfg.Gateway.UpstreamDrainTimeoutSeconds = 1
+	svc := service.NewOpenAIGatewayService(
+		nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+		service.NewBillingService(cfg, nil), nil, nil, upstream,
+		&service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	account := &service.Account{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"base_url": srv.URL, "api_key": "test-key"},
+	}
+	body := []byte(`{"model":"gpt-5.1","stream":true,"input":"hello"}`)
+	clientCtx, disconnect := context.WithCancel(t.Context())
+	defer disconnect()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))).WithContext(clientCtx)
+	c.Writer = &lifecycleDisconnectedWriter{ResponseWriter: c.Writer, disconnect: disconnect}
+	forwardDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Forward(clientCtx, c, account, body)
+		forwardDone <- err
+	}()
+	select {
+	case <-clientCtx.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("downstream did not receive the first event")
+	}
+	select {
+	case <-providerDone:
+		t.Fatal("provider was canceled before the drain interval")
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case <-providerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("continuous provider heartbeats outlived the disconnect budget")
+	}
+	select {
+	case err := <-forwardDone:
+		require.Error(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("forward did not release the canceled attempt")
+	}
+	requireNoUpstreamInFlight(t, upstream)
+}

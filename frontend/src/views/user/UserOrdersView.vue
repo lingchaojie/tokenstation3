@@ -18,11 +18,14 @@
       <OrderTable :orders="orders" :loading="loading">
         <template #actions="{ row }">
           <div class="flex items-center gap-2">
-            <button v-if="canContinuePayment(row)" @click="handleContinuePayment(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
+            <button v-if="isAwaitingConfirmation(row)" @click="resumeOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
+              {{ t('payment.qr.confirmationPending') }}
+            </button>
+            <button v-else-if="canContinuePayment(row)" @click="resumeOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
               <Icon name="creditCard" size="sm" />
               <span>{{ t('payment.orders.continuePayment') }}</span>
             </button>
-            <button v-if="row.status === 'PENDING'" @click="handleCancel(row.id)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
+            <button v-if="row.status === 'PENDING' && !isAwaitingConfirmation(row)" @click="handleCancel(row.id)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
               <Icon name="x" size="sm" />
               <span>{{ t('payment.orders.cancel') }}</span>
             </button>
@@ -55,18 +58,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractI18nErrorMessage } from '@/utils/apiError'
+import { captureStoredUserIdentity } from '@/api/tokenRefresh'
+import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import type { PaymentOrder } from '@/types/payment'
-import {
-  PAYMENT_RECOVERY_STORAGE_KEY,
-  createPaymentRecoverySnapshot,
-  writePaymentRecoverySnapshot,
-} from '@/components/payment/paymentFlow'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -77,6 +76,8 @@ import OrderTable from '@/components/payment/OrderTable.vue'
 const { t } = useI18n()
 const router = useRouter()
 const appStore = useAppStore()
+const isOrdersUser = captureStoredUserIdentity()
+let disposed = false
 
 const loading = ref(false)
 const actionLoading = ref(false)
@@ -94,6 +95,7 @@ const statusFilters = computed(() => [
 ])
 
 async function fetchOrders() {
+  if (!isOrdersUser()) return
   loading.value = true
   try {
     const res = await paymentAPI.getMyOrders({
@@ -101,10 +103,11 @@ async function fetchOrders() {
       page_size: pagination.page_size,
       status: currentFilter.value || undefined,
     })
+    if (disposed || !isOrdersUser()) return
     orders.value = res.data.items || []
     pagination.total = res.data.total || 0
   } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    if (!disposed && isOrdersUser()) appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
     loading.value = false
   }
@@ -120,48 +123,44 @@ function hasPayableResumePayload(order: PaymentOrder): boolean {
 }
 
 function canContinuePayment(order: PaymentOrder): boolean {
-  if (order.status !== 'PENDING') return false
+  if (order.status !== 'PENDING' || isAwaitingConfirmation(order)) return false
   const expiresAt = Date.parse(order.expires_at)
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return false
   return hasPayableResumePayload(order)
 }
 
-function handleContinuePayment(order: PaymentOrder) {
-  if (!canContinuePayment(order) || typeof window === 'undefined') {
+function isAwaitingConfirmation(order: PaymentOrder): boolean {
+  return order.status === 'PENDING' && order.confirmation_pending === true
+}
+
+function resumeOrder(order: PaymentOrder) {
+  if (disposed || !isOrdersUser()) return
+  const confirmationPending = isAwaitingConfirmation(order)
+  if (!confirmationPending && !canContinuePayment(order)) {
     appStore.showError(t('payment.errors.resumeUnavailable'))
     return
   }
-  const snapshot = createPaymentRecoverySnapshot({
-    orderId: order.id,
-    amount: order.amount,
-    qrCode: order.qr_code || '',
-    expiresAt: order.expires_at,
-    paymentType: order.payment_type,
-    payUrl: order.pay_url || '',
-    outTradeNo: order.out_trade_no || '',
-    clientSecret: '',
-    intentId: '',
-    currency: order.currency || '',
-    countryCode: '',
-    paymentEnv: '',
-    payAmount: order.pay_amount,
-    orderType: order.order_type,
-    paymentMode: (order.payment_mode || '').trim() || (order.qr_code ? 'qrcode' : ''),
-    resumeToken: '',
-  })
-  writePaymentRecoverySnapshot(window.localStorage, snapshot, PAYMENT_RECOVERY_STORAGE_KEY)
-  router.push('/purchase')
+  router.push({ path: '/purchase', query: { order_id: String(order.id) } })
 }
 
 async function confirmCancel() {
-  if (!cancelTargetId.value) return
+  if (!cancelTargetId.value || disposed || !isOrdersUser()) return
+  const orderId = cancelTargetId.value
   actionLoading.value = true
   try {
-    await paymentAPI.cancelOrder(cancelTargetId.value)
+    await paymentAPI.cancelOrder(orderId)
+    if (disposed || !isOrdersUser()) return
     appStore.showSuccess(t('common.success'))
     cancelTargetId.value = null
     await fetchOrders()
   } catch (err: unknown) {
+    if (disposed || !isOrdersUser()) return
+    if (extractApiErrorCode(err) === 'PAYMENT_CONFIRMATION_PENDING') {
+      const order = orders.value.find(item => item.id === orderId)
+      if (order) order.confirmation_pending = true
+      cancelTargetId.value = null
+      return
+    }
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
     actionLoading.value = false
@@ -169,4 +168,5 @@ async function confirmCancel() {
 }
 
 onMounted(() => { fetchOrders() })
+onUnmounted(() => { disposed = true })
 </script>

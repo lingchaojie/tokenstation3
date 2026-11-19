@@ -11,6 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, reasoningEfforts ...string) *float64 {
+	return tryModelFilePricingWithPolicy(billingService, model, tokens, serviceTier, pricingAt, false, 0, reasoningEfforts...)
+}
+
 func resolveAccountStatsCost(
 	ctx context.Context,
 	channelService *ChannelService,

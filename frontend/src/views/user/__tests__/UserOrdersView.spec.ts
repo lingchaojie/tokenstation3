@@ -111,7 +111,44 @@ describe('UserOrdersView', () => {
     showSuccess.mockReset()
   })
 
-  it('restores a pending order payment snapshot before returning to purchase', async () => {
+  it('opens an expired confirmation hold in status-only mode without a local snapshot', async () => {
+    const order = {
+      ...orderFixture({ expires_at: '2025-01-01T00:00:00.000Z' }),
+      provider_key: 'easypay',
+      confirmation_pending: true,
+    }
+    getMyOrders.mockResolvedValue({ data: { items: [order], total: 1 } })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(findButtonByText(wrapper, 'payment.orders.continuePayment')).toBeUndefined()
+    expect(findButtonByText(wrapper, 'payment.orders.cancel')).toBeUndefined()
+    await findButtonByText(wrapper, 'payment.qr.confirmationPending')!.trigger('click')
+    expect(localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    expect(routerPush).toHaveBeenCalledWith({ path: '/purchase', query: { order_id: '1001' } })
+    wrapper.unmount()
+  })
+
+  it.each([undefined, 2002, 3003])('opens the selected pending order without overwriting browser recovery (%s)', async (previousOrderId) => {
+    if (previousOrderId) {
+      localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+        orderId: previousOrderId,
+        amount: 88,
+        qrCode: '',
+        expiresAt: '2099-01-01T00:10:00.000Z',
+        paymentType: 'alipay',
+        providerKey: 'easypay',
+        confirmationPending: true,
+        payUrl: 'https://pay.example.com/session/2002',
+        outTradeNo: 'sub2_order_1001',
+        clientSecret: '',
+        payAmount: 88,
+        orderType: 'balance',
+        paymentMode: 'redirect',
+        resumeToken: '',
+        createdAt: Date.now(),
+      }))
+    }
     getMyOrders.mockResolvedValue({
       data: {
         items: [
@@ -133,23 +170,11 @@ describe('UserOrdersView', () => {
 
     const button = findButtonByText(wrapper, 'payment.orders.continuePayment')
     expect(button).toBeTruthy()
+    const before = localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)
     await button!.trigger('click')
 
-    const raw = localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)
-    expect(raw).toBeTruthy()
-    const snapshot = JSON.parse(raw || '{}')
-    expect(snapshot).toMatchObject({
-      orderId: 2002,
-      amount: 88,
-      payAmount: 88,
-      qrCode: 'https://pay.example.com/qrcode/2002',
-      payUrl: 'https://pay.example.com/cashier/2002',
-      paymentType: 'alipay',
-      outTradeNo: 'sub2_order_1001',
-      orderType: 'balance',
-      paymentMode: 'qrcode',
-    })
-    expect(routerPush).toHaveBeenCalledWith('/purchase')
+    expect(localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBe(before)
+    expect(routerPush).toHaveBeenCalledWith({ path: '/purchase', query: { order_id: '2002' } })
   })
 
   it('does not expose user self-service refund actions', async () => {

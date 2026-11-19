@@ -128,5 +128,6 @@ func geminiPartIsInlineImage(part gjson.Result) bool {
 	}
 
 	// 只认真的带上了 base64 数据的 part，空壳 part 不计费。
-	return strings.TrimSpace(inline.Get("data").String()) != ""
+	data := inline.Get("data")
+	return data.Type == gjson.String && strings.TrimSpace(data.String()) != ""
 }

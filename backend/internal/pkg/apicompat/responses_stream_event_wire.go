@@ -236,11 +236,14 @@ func messageContentWire(parts []ResponsesContentPart) []map[string]any {
 		if typ == "" {
 			typ = "output_text"
 		}
-		if typ == "refusal" {
+		switch typ {
+		case "output_text":
+			out = append(out, outputTextPartWire(&p))
+		case "refusal":
 			out = append(out, map[string]any{"type": typ, "refusal": p.Refusal})
-			continue
+		default:
+			out = append(out, map[string]any{"type": typ, "text": p.Text})
 		}
-		out = append(out, map[string]any{"type": typ, "text": p.Text})
 	}
 	return out
 }

@@ -64,6 +64,8 @@ const usageLogsEffectiveRequestedModelIndex = "idx_usage_logs_effective_requeste
 const usageLogsEffectiveUpstreamModelIndex = "idx_usage_logs_effective_upstream_model_created"
 const usageLogsUpstreamRequestIDIndexMigration = "238_add_usage_log_upstream_request_id_index_notx.sql"
 const usageLogsUpstreamRequestIDIndex = "idx_usage_logs_upstream_request_id"
+const usageLogsAPIKeyCostIndexMigration = "251_add_usage_logs_api_key_cost_index_notx.sql"
+const usageLogsAPIKeyCostIndex = "idx_usage_logs_api_key_created_cost"
 
 type migrationChecksumCompatibilityRule struct {
 	fileChecksum       string
@@ -229,24 +231,8 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		}
 
 		if nonTx {
-			if err := prepareNonTransactionalMigration(ctx, lockConn, name); err != nil {
-				return fmt.Errorf("prepare migration %s: %w", name, err)
-			}
-
-			// *_notx.sql：用于 CREATE/DROP INDEX CONCURRENTLY 场景，必须非事务执行。
-			// 逐条语句执行，避免将多条 CONCURRENTLY 语句放入同一个隐式事务块。
-			statements := splitSQLStatements(content)
-			for i, stmt := range statements {
-				trimmed := strings.TrimSpace(stmt)
-				if trimmed == "" {
-					continue
-				}
-				if stripSQLLineComment(trimmed) == "" {
-					continue
-				}
-				if _, err := lockConn.ExecContext(ctx, trimmed); err != nil {
-					return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
-				}
+			if err := applyNonTransactionalMigration(ctx, lockConn, name, content); err != nil {
+				return err
 			}
 			if _, err := lockConn.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
 				return fmt.Errorf("record migration %s (non-tx): %w", name, err)
@@ -289,6 +275,31 @@ type migrationConnection interface {
 	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 }
 
+func applyNonTransactionalMigration(ctx context.Context, db migrationConnection, name, content string) error {
+	if name == usageLogsAPIKeyCostIndexMigration {
+		partitioned, err := applyPartitionedUsageLogsAPIKeyCostIndex(ctx, db)
+		if err != nil {
+			return fmt.Errorf("apply migration %s (partitioned usage_logs): %w", name, err)
+		}
+		if partitioned {
+			return nil
+		}
+	}
+	if err := prepareNonTransactionalMigration(ctx, db, name); err != nil {
+		return fmt.Errorf("prepare migration %s: %w", name, err)
+	}
+	// Run each CONCURRENTLY statement outside an implicit transaction block.
+	for i, stmt := range splitSQLStatements(content) {
+		if stripSQLLineComment(stmt) == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, strings.TrimSpace(stmt)); err != nil {
+			return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
+		}
+	}
+	return nil
+}
+
 func prepareNonTransactionalMigration(ctx context.Context, db migrationConnection, name string) error {
 	switch name {
 	case paymentOrdersOutTradeNoUniqueMigration:
@@ -308,6 +319,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationConnectio
 		return nil
 	case usageLogsUpstreamRequestIDIndexMigration:
 		return dropInvalidIndexIfPresent(ctx, db, usageLogsUpstreamRequestIDIndex)
+	case usageLogsAPIKeyCostIndexMigration:
+		return dropInvalidUsageLogsAPIKeyCostIndex(ctx, db)
 	default:
 		return nil
 	}

@@ -30,6 +30,7 @@ export interface PricingFormEntry {
   cache_read_price: number | string | null
   fast_multiplier?: number | string | null
   flex_multiplier?: number | string | null
+  ultrafast_multiplier?: number | string | null
   reasoning_effort_multipliers?: Record<string, number | string> | null
   image_input_price: number | string | null
   image_output_price: number | string | null
@@ -232,6 +233,7 @@ export function apiChannelPricingToForm(pricing: ChannelModelPricing): PricingFo
     cache_read_price: perTokenToMTok(pricing.cache_read_price),
     fast_multiplier: pricing.fast_multiplier,
     flex_multiplier: pricing.flex_multiplier,
+    ultrafast_multiplier: pricing.ultrafast_multiplier,
     reasoning_effort_multipliers: pricing.reasoning_effort_multipliers ? { ...pricing.reasoning_effort_multipliers } : null,
     image_input_price: perTokenToMTok(pricing.image_input_price),
     image_output_price: perTokenToMTok(pricing.image_output_price),

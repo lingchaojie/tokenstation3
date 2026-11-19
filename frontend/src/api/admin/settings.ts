@@ -1342,6 +1342,35 @@ export async function updateRateLimit429CooldownSettings(
   return data;
 }
 
+/** Exact registration email blacklist (matched by inbox identity). */
+export interface RegistrationEmailBlacklist {
+  emails: string[];
+  max: number;
+}
+
+export interface UpdateRegistrationEmailBlacklistResponse extends RegistrationEmailBlacklist {
+  /** Entries not present in the previously saved list. */
+  added: string[];
+}
+
+export async function getRegistrationEmailBlacklist(): Promise<RegistrationEmailBlacklist> {
+  const { data } = await apiClient.get<RegistrationEmailBlacklist>(
+    "/admin/settings/registration-email-blacklist",
+  );
+  return data;
+}
+
+/** Replace the whole exact email blacklist; an empty array clears it. */
+export async function updateRegistrationEmailBlacklist(
+  emails: string[],
+): Promise<UpdateRegistrationEmailBlacklistResponse> {
+  const { data } = await apiClient.put<UpdateRegistrationEmailBlacklistResponse>(
+    "/admin/settings/registration-email-blacklist",
+    { emails },
+  );
+  return data;
+}
+
 // ==================== Stream Timeout Settings ====================
 
 /**
@@ -1569,6 +1598,8 @@ export const settingsAPI = {
   updateOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getRegistrationEmailBlacklist,
+  updateRegistrationEmailBlacklist,
   getStreamTimeoutSettings,
   updateStreamTimeoutSettings,
   getRectifierSettings,

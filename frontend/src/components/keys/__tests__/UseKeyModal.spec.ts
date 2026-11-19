@@ -94,13 +94,16 @@ function expectCodexFileContract(wrapper: VueWrapper, expectedBaseUrl: string) {
   const authJson = generatedFileContent(wrapper, 'auth.json')
 
   expect(configToml).toContain('model_provider = "linx2ai"')
-  expect(configToml).toContain('model = "gpt-5.5"')
-  expect(configToml).toContain('review_model = "gpt-5.5"')
+  expect(configToml).toContain('model = "gpt-6.1-sol"')
+  expect(configToml).toContain('review_model = "gpt-6.1-sol"')
+  expect(configToml).toContain('web_search = "live"')
+  expect(wrapper.get('[data-testid="codex-auth-mode-api-key"]').attributes('aria-checked')).toBe('true')
   expect(configToml).toContain(`[model_providers.linx2ai]\nname = "linx2ai"\nbase_url = "${expectedBaseUrl}"`)
   expect(configToml).toContain('wire_api = "responses"')
   expect(configToml).toContain('requires_openai_auth = false')
   const features = configToml.split('[features]\n')[1]?.split('\n[')[0]
   expect(features).toContain('goals = true')
+  expect(features).toContain('image_generation = true')
   expect(configToml).not.toContain('sk-test')
   expect(configToml).not.toContain('env_key')
   expect(configToml).not.toMatch(/^\s*(?:api_)?key\s*=/m)
@@ -406,7 +409,7 @@ describe('UseKeyModal', () => {
   })
 
 
-  it('keeps legacy OpenAI Codex config as the default', () => {
+  it('uses API Key Mode as the OpenAI Codex default', () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -420,16 +423,16 @@ describe('UseKeyModal', () => {
     const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
     const configToml = codeBlocks.find((content) => content.includes('model_provider = "linx2ai"'))
 
-    expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe(
+    expect(wrapper.get('[data-testid="codex-auth-mode-api-key"]').attributes('aria-checked')).toBe(
       'true'
     )
     expect(configToml).toBeDefined()
     expect(configToml).toContain('requires_openai_auth = false')
-    expect(configToml).not.toContain('x-openai-actor-authorization')
+    expect(configToml).toContain('x-openai-actor-authorization')
     expect(configToml).not.toContain('env_key')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
-    expect(wrapper.find('[data-testid="codex-api-key-restart-notice"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-api-key-restart-notice"]').exists()).toBe(true)
   })
 
   it('preserves the shared gateway-root configuration for Codex and Claude', async () => {
@@ -496,7 +499,7 @@ describe('UseKeyModal', () => {
     expect(configToml).toContain('model_catalog_json = "~/.codex/codex-models.json"')
     expect(configToml).not.toContain('model_catalog_url')
     expect(configToml).not.toContain('env_key')
-    expect(configToml).not.toContain('image_generation')
+    expect(configToml).toContain('image_generation = true')
     expect(configToml).not.toContain('experimental_bearer_token')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
@@ -526,27 +529,27 @@ describe('UseKeyModal', () => {
       global: { stubs: modalStubs }
     })
 
-    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await wrapper.get('[data-testid="codex-auth-mode-legacy"]').trigger('click')
     await wrapper.setProps({ show: false })
     await wrapper.setProps({ show: true })
     await nextTick()
 
-    expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe(
+    expect(wrapper.get('[data-testid="codex-auth-mode-api-key"]').attributes('aria-checked')).toBe(
       'true'
     )
     expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).toContain(
       'requires_openai_auth = false'
     )
 
-    await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await wrapper.get('[data-testid="codex-auth-mode-legacy"]').trigger('click')
     await wrapper.setProps({ platform: 'gemini' })
     await wrapper.setProps({ platform: 'openai' })
     await nextTick()
 
-    expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe(
+    expect(wrapper.get('[data-testid="codex-auth-mode-api-key"]').attributes('aria-checked')).toBe(
       'true'
     )
-    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).not.toContain(
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).toContain(
       'x-openai-actor-authorization'
     )
   })
@@ -696,7 +699,7 @@ describe('UseKeyModal', () => {
     expect(wrapper.text()).toContain('keys.useKeyModal.workBuddy.note')
 
     const parsed = JSON.parse(codeBlock.text())
-    expect(parsed.availableModels).toEqual(['gpt-5.5', 'claude-sonnet-5', 'claude-opus-4-8'])
+    expect(parsed.availableModels).toEqual(['gpt-6.1-sol', 'claude-sonnet-5', 'claude-opus-4-8'])
     expect(parsed.models.map((model: any) => model.id)).toEqual(parsed.availableModels)
     expect(parsed.models.map((model: any) => model.name)).toEqual(parsed.availableModels)
     expect(parsed.models.every((model: any) => model.url === 'https://example.com/chat/completions')).toBe(true)
@@ -851,7 +854,7 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('api_key="sk-test"')
     expect(codeBlock.text()).toContain('base_url="https://example.com"')
     expect(codeBlock.text()).toContain('stream = client.responses.create(')
-    expect(codeBlock.text()).toContain('model="gpt-5.5"')
+    expect(codeBlock.text()).toContain('model="gpt-6.1-sol"')
     expect(codeBlock.text()).toContain('stream=True')
     expect(codeBlock.text()).toContain('print(event.delta, end="", flush=True)')
   })
@@ -1029,7 +1032,7 @@ describe('UseKeyModal', () => {
 
     const parsed = JSON.parse(codeBlock.text())
     expect(parsed.$schema).toBe('https://opencode.ai/config.json')
-    expect(parsed.model).toBe('openai/gpt-5.5')
+    expect(parsed.model).toBe('openai/gpt-6.1-sol')
     expect(parsed.small_model).toBe('openai/gpt-5.3-codex-spark')
     expect(parsed.provider.openai.options).toEqual({
       baseURL: 'https://example.com',
@@ -1048,6 +1051,7 @@ describe('UseKeyModal', () => {
       'gpt-5.3-codex-spark',
       'gpt-5.2',
       'gpt-6.1-sol',
+      'gpt-6.1-terra',
       'gpt-6.2-sol',
       'gpt-6.2-astra',
       'gpt-6-sol',
@@ -1100,6 +1104,8 @@ describe('UseKeyModal', () => {
     expect(Object.keys(parsed.provider.anthropic.models)).toEqual([
       'claude-opus-5-5',
       'claude-sonnet-5-5',
+      'claude-fable-5-2',
+      'claude-mythos-5-2',
       'claude-fable-5-1',
       'claude-fable-5',
       'claude-mythos-5',
@@ -1350,7 +1356,7 @@ describe('UseKeyModal', () => {
       const remoteConfig = generatedFileContent(wrapper, 'config.toml')
       expect(remoteConfig).toContain('model_catalog_url = "https://example.com/v1/models"')
       expect(remoteConfig).not.toContain('model_catalog_json')
-      expect(remoteConfig).toContain('[features]\napi_key_model_discovery = true\ngoals = true')
+      expect(remoteConfig).toContain('[features]\napi_key_model_discovery = true\nimage_generation = true\ngoals = true')
       expect(remoteConfig.indexOf('model_catalog_url')).toBeGreaterThan(remoteConfig.indexOf('[model_providers.linx2ai]'))
       expectCodexFileContract(wrapper, 'https://example.com')
       await mode.setValue('file')

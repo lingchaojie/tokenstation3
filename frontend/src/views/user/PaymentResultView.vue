@@ -101,17 +101,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   clearPaymentRecoverySnapshot,
+  clearStripePaymentRecoverySnapshot,
   readPaymentRecoverySnapshot,
+  readStripePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
-import { usePaymentStore } from '@/stores/payment'
 import { useAuthStore } from '@/stores/auth'
+import { getCurrentUser } from '@/api/auth'
+import { captureStoredUserIdentity, getStoredUserID } from '@/api/tokenRefresh'
 import { paymentAPI } from '@/api/payment'
 import type { PublicOrderVerifyResult } from '@/api/payment'
 import type { OrderStatus, PaymentOrder } from '@/types/payment'
@@ -122,10 +125,12 @@ const i18n = useI18n()
 const { t } = i18n
 const route = useRoute()
 const router = useRouter()
-const paymentStore = usePaymentStore()
 const authStore = useAuthStore()
+const ownerId = getStoredUserID()
+const isOriginalUser = captureStoredUserIdentity()
 
 type ResolvedOrder = PaymentOrder | PublicOrderVerifyResult
+type OrderLookup = { data: ResolvedOrder; authenticated: boolean; signed?: true }
 
 const order = ref<ResolvedOrder | null>(null)
 const loading = ref(true)
@@ -146,6 +151,9 @@ const STATUS_REFRESH_MAX_ATTEMPTS = 15
 
 let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let userBalanceRefreshStarted = false
+let disposed = false
+let ownerChanged = false
+let hasPrivateOrder = false
 const refreshAttempts = ref(0)
 
 /** 充值金额 = pay_amount / (1 + fee_rate/100)，fee_rate=0 时等于 pay_amount */
@@ -199,16 +207,48 @@ function formatGatewayAmount(value: number): string {
   return formatPaymentAmount(value, currency.value, localeCode.value)
 }
 
-function setResolvedOrder(nextOrder: ResolvedOrder | null): void {
-  order.value = nextOrder
-  if (nextOrder && 'currency' in nextOrder && nextOrder.currency) {
-    currency.value = normalizePaymentCurrency(nextOrder.currency)
+function checkOwner(): void {
+  if (ownerChanged || isOriginalUser()) return
+  ownerChanged = true
+  restoredRecoveryRaw = null
+  if (hasPrivateOrder) {
+    order.value = null
+    hasPrivateOrder = false
+    clearStatusRefreshTimer()
   }
-  refreshUserBalanceForSuccessfulOrder(nextOrder)
+  const publicCurrency = order.value && 'currency' in order.value ? order.value.currency : undefined
+  currency.value = normalizePaymentCurrency(publicCurrency)
 }
 
-function refreshUserBalanceForSuccessfulOrder(nextOrder: ResolvedOrder | null): void {
-  if (!nextOrder || userBalanceRefreshStarted || normalizeOrderStatus(nextOrder.status) !== 'COMPLETED') {
+function canUsePrivateState(): boolean {
+  checkOwner()
+  return !disposed && !ownerChanged && ownerId !== null
+}
+
+function setResolvedOrder(result: OrderLookup): void {
+  checkOwner()
+  if (disposed || (result.authenticated && !canUsePrivateState())) return
+  order.value = result.data
+  hasPrivateOrder = result.authenticated
+  restoredRecoveryRaw = null
+  let recoveredCurrency: string | undefined
+  if (recovery && canUsePrivateState() && hasOrderId(result.data)) {
+    const { snapshot, raw } = recovery
+    const sameOrder = result.data.id === snapshot.orderId &&
+      (!snapshot.outTradeNo || result.data.out_trade_no === snapshot.outTradeNo)
+    const sameOwner = result.authenticated || (result.signed && snapshot.ownerId === ownerId)
+    if (sameOrder && sameOwner) {
+      restoredRecoveryRaw = raw
+      recoveredCurrency = snapshot.currency
+    }
+  }
+  const orderCurrency = 'currency' in result.data ? result.data.currency : undefined
+  currency.value = normalizePaymentCurrency(orderCurrency || recoveredCurrency)
+  void refreshUserBalanceForSuccessfulOrder(result.data)
+}
+
+async function refreshUserBalanceForSuccessfulOrder(nextOrder: ResolvedOrder): Promise<void> {
+  if (!canUsePrivateState() || userBalanceRefreshStarted || normalizeOrderStatus(nextOrder.status) !== 'COMPLETED') {
     return
   }
   if ('order_type' in nextOrder && nextOrder.order_type !== 'balance') {
@@ -216,9 +256,19 @@ function refreshUserBalanceForSuccessfulOrder(nextOrder: ResolvedOrder | null): 
   }
 
   userBalanceRefreshStarted = true
-  void authStore.refreshUser().catch(() => {
-    // The order result remains authoritative even if refreshing profile data fails.
-  })
+  try {
+    // This page only needs the balance. Check ownership again before updating
+    // the reactive and persisted profiles, since the request can outlive login.
+    const { data } = await getCurrentUser()
+    if (!canUsePrivateState() || data.id !== ownerId || authStore.user?.id !== ownerId) return
+    const rawUser = localStorage.getItem('auth_user')
+    if (!rawUser) return
+    const persistedUser = JSON.parse(rawUser)
+    localStorage.setItem('auth_user', JSON.stringify({ ...persistedUser, balance: data.balance }))
+    authStore.user.balance = data.balance
+  } catch {
+    // The order result remains authoritative when the balance request fails.
+  }
 }
 
 function hasOrderId(nextOrder: ResolvedOrder | null): nextOrder is PaymentOrder {
@@ -263,6 +313,9 @@ function readRouteQueryString(key: string): string {
   return typeof value === 'string' ? value : ''
 }
 
+let restoredRecoveryRaw: string | null = null
+let recovery: ReturnType<typeof restoreRecoverySnapshot> = null
+
 function restoreRecoverySnapshot(context: {
   resumeToken: string
   routeOrderId: number
@@ -277,52 +330,68 @@ function restoreRecoverySnapshot(context: {
     return null
   }
 
-  if (context.resumeToken) {
-    return readPaymentRecoverySnapshot(rawSnapshot, {
-      resumeToken: context.resumeToken,
-    })
-  }
-
-  if (!context.routeOrderId && !context.routeOutTradeNo) {
+  if (!context.resumeToken && !context.routeOrderId && !context.routeOutTradeNo) {
     return null
   }
 
-  const restored = readPaymentRecoverySnapshot(rawSnapshot)
+  const restored = readPaymentRecoverySnapshot(rawSnapshot, {
+    ownerId: ownerId ?? undefined,
+    resumeToken: context.resumeToken || undefined,
+    allowExpiredConfirmation: true,
+  })
   if (!restored) {
     return null
   }
 
-  if (context.routeOrderId > 0 && restored.orderId !== context.routeOrderId) {
+  if (!context.resumeToken && context.routeOrderId > 0 && restored.orderId !== context.routeOrderId) {
     return null
   }
 
-  if (context.routeOutTradeNo && restored.outTradeNo !== context.routeOutTradeNo) {
+  if (!context.resumeToken && context.routeOutTradeNo && restored.outTradeNo !== context.routeOutTradeNo) {
     return null
   }
 
-  return restored
+  return { raw: rawSnapshot, snapshot: restored }
 }
 
-async function resolveOrderFromResumeToken(resumeToken: string): Promise<ResolvedOrder | null> {
+async function resolveOrderFromResumeToken(resumeToken: string): Promise<OrderLookup | null> {
+  if (disposed) return null
   try {
     const result = await paymentAPI.resolveOrderPublicByResumeToken(resumeToken)
-    return result.data
-  } catch (_err: unknown) {
+    return !disposed && result.data ? { data: result.data, authenticated: false, signed: true } : null
+  } catch {
     return null
   }
 }
 
-async function resolveOrderFromOutTradeNo(outTradeNo: string): Promise<ResolvedOrder | null> {
+async function resolvePrivateOrder(orderId: number): Promise<OrderLookup | null> {
+  if (!canUsePrivateState()) return null
   try {
-    const result = await paymentAPI.verifyOrder(outTradeNo)
-    return result.data
-  } catch (_err: unknown) {
-    try {
-      const result = await paymentAPI.verifyOrderPublic(outTradeNo)
-      return result.data
-    } catch (_innerErr: unknown) {
-      return null
+    const { data } = await paymentAPI.getOrder(orderId)
+    if (canUsePrivateState() && data?.id === orderId && data.user_id === ownerId) {
+      return { data, authenticated: true }
     }
+  } catch {
+    // The result may still be available through a public callback.
+  }
+  return null
+}
+
+async function resolveOrderFromOutTradeNo(outTradeNo: string): Promise<OrderLookup | null> {
+  if (canUsePrivateState()) {
+    try {
+      const { data } = await paymentAPI.verifyOrder(outTradeNo)
+      if (canUsePrivateState() && data?.user_id === ownerId) return { data, authenticated: true }
+    } catch {
+      // Fall back to public verification for an eligible return flow.
+    }
+  }
+  if (disposed) return null
+  try {
+    const { data } = await paymentAPI.verifyOrderPublic(outTradeNo)
+    return !disposed && data ? { data, authenticated: false } : null
+  } catch {
+    return null
   }
 }
 
@@ -334,29 +403,42 @@ function clearStatusRefreshTimer(): void {
 }
 
 function clearRecoverySnapshot(): void {
-  if (typeof window === 'undefined') return
+  if (!canUsePrivateState() || !restoredRecoveryRaw || window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY) !== restoredRecoveryRaw) return
   clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+  restoredRecoveryRaw = null
 }
 
 function clearRecoverySnapshotForTerminalStatus(status: string | null | undefined): void {
-  if (!status) return
+  if (!status || !canUsePrivateState()) return
   if (!isPendingStatus(status)) {
+    if (hasOrderId(order.value)) {
+      const storage = window.localStorage
+      const snapshot = readStripePaymentRecoverySnapshot(storage, order.value.id, undefined, ownerId ?? undefined)
+      if (hasPrivateOrder || snapshot?.ownerId === ownerId) {
+        clearStripePaymentRecoverySnapshot(storage, order.value.id)
+      }
+    }
     clearRecoverySnapshot()
   }
 }
 
-function scheduleStatusRefresh(refreshOrder: (() => Promise<ResolvedOrder | null>) | null): void {
+function scheduleStatusRefresh(refreshOrder: () => Promise<OrderLookup | null>): void {
   clearStatusRefreshTimer()
-  if (!refreshOrder || !isPending.value || refreshAttempts.value >= STATUS_REFRESH_MAX_ATTEMPTS) {
+  if (disposed || !isPending.value || refreshAttempts.value >= STATUS_REFRESH_MAX_ATTEMPTS) {
     return
   }
 
   statusRefreshTimer = setTimeout(async () => {
+    statusRefreshTimer = null
+    checkOwner()
+    if (disposed || !isPending.value) return
     refreshAttempts.value += 1
     const refreshedOrder = await refreshOrder()
+    checkOwner()
+    if (disposed) return
     if (refreshedOrder) {
       setResolvedOrder(refreshedOrder)
-      clearRecoverySnapshotForTerminalStatus(refreshedOrder.status)
+      clearRecoverySnapshotForTerminalStatus(order.value?.status)
     }
 
     if (isPendingStatus(order.value?.status)) {
@@ -366,61 +448,45 @@ function scheduleStatusRefresh(refreshOrder: (() => Promise<ResolvedOrder | null
 }
 
 onMounted(async () => {
+  window.addEventListener('storage', checkOwner)
   const resumeToken = readRouteQueryString('resume_token')
   const routeOrderId = Number(readRouteQueryString('order_id')) || 0
-  let outTradeNo = readRouteQueryString('out_trade_no')
-  let orderId = 0
-  let resumeTokenLookupFailed = false
+  const outTradeNo = readRouteQueryString('out_trade_no')
+  let orderId = routeOrderId
 
-  const restored = restoreRecoverySnapshot({
+  recovery = restoreRecoverySnapshot({
     resumeToken,
     routeOrderId,
     routeOutTradeNo: outTradeNo,
   })
-  if (restored?.orderId) {
-    orderId = restored.orderId
-  }
-  if (restored?.currency) {
-    currency.value = normalizePaymentCurrency(restored.currency)
-  }
-  if (!outTradeNo && restored?.outTradeNo) {
-    outTradeNo = restored.outTradeNo
-  }
 
   if (resumeToken) {
     const resolvedOrder = await resolveOrderFromResumeToken(resumeToken)
+    if (disposed) return
     if (resolvedOrder) {
       setResolvedOrder(resolvedOrder)
-      if (!orderId) {
-        orderId = hasOrderId(resolvedOrder) ? resolvedOrder.id : 0
+      if (hasOrderId(resolvedOrder.data)) {
+        orderId = resolvedOrder.data.id
       }
-    } else if (routeOrderId > 0) {
-      resumeTokenLookupFailed = true
-      orderId = routeOrderId
-    } else {
-      resumeTokenLookupFailed = true
     }
-  } else if (routeOrderId > 0) {
-    orderId = routeOrderId
   }
 
   const hasLegacyFallbackContext = readRouteQueryString('trade_status').trim() !== ''
-  const shouldUsePublicOutTradeNo = outTradeNo !== '' && (hasLegacyFallbackContext || routeOrderId > 0 || orderId > 0)
+  const shouldUsePublicOutTradeNo = outTradeNo !== '' && (hasLegacyFallbackContext || orderId > 0)
 
   if (!order.value && orderId && (!resumeToken || routeOrderId > 0)) {
-    try {
-      setResolvedOrder(await paymentStore.pollOrderStatus(orderId))
-    } catch (_err: unknown) {
-      // Order lookup failed, will try legacy fallback below when possible.
-    }
+    const privateOrder = await resolvePrivateOrder(orderId)
+    if (disposed) return
+    if (privateOrder) setResolvedOrder(privateOrder)
   }
 
-  if (!order.value && shouldUsePublicOutTradeNo && (!resumeToken || resumeTokenLookupFailed)) {
+  if (!order.value && shouldUsePublicOutTradeNo) {
     const legacyOrder = await resolveOrderFromOutTradeNo(outTradeNo)
+    if (disposed) return
     if (legacyOrder) {
       setResolvedOrder(legacyOrder)
       if (!orderId) {
-        orderId = hasOrderId(legacyOrder) ? legacyOrder.id : 0
+        orderId = hasOrderId(legacyOrder.data) ? legacyOrder.data.id : 0
       }
     }
   }
@@ -434,7 +500,7 @@ onMounted(async () => {
     }
   }
 
-  const refreshOrder = async (): Promise<ResolvedOrder | null> => {
+  const refreshOrder = async (): Promise<OrderLookup | null> => {
     if (resumeToken) {
       const resolvedOrder = await resolveOrderFromResumeToken(resumeToken)
       if (resolvedOrder) {
@@ -443,11 +509,8 @@ onMounted(async () => {
     }
 
     if (orderId) {
-      try {
-        return await paymentStore.pollOrderStatus(orderId)
-      } catch (_err: unknown) {
-        // Fall through to legacy public verification when order polling is unavailable.
-      }
+      const resolvedOrder = await resolvePrivateOrder(orderId)
+      if (resolvedOrder) return resolvedOrder
     }
 
     if (shouldUsePublicOutTradeNo) {
@@ -457,17 +520,19 @@ onMounted(async () => {
     return null
   }
 
+  checkOwner()
   if (isPendingStatus(order.value?.status)) {
     scheduleStatusRefresh(refreshOrder)
   } else if (order.value) {
     clearRecoverySnapshotForTerminalStatus(order.value.status)
-  } else if (returnInfo.value) {
-    clearRecoverySnapshot()
   }
   loading.value = false
 })
 
+watch(() => authStore.user?.id, checkOwner)
 onBeforeUnmount(() => {
+  disposed = true
+  window.removeEventListener('storage', checkOwner)
   clearStatusRefreshTimer()
 })
 </script>

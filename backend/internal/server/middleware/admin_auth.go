@@ -5,9 +5,12 @@ import (
 	"crypto/subtle"
 	"errors"
 	"strings"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -49,6 +52,10 @@ func adminAuth(
 		// 检查 x-api-key header（Admin API Key 认证）
 		apiKey := c.GetHeader("x-api-key")
 		if apiKey != "" {
+			if strings.HasPrefix(apiKey, "adm_sc_") {
+				authenticateScopedAdminRequest(c, apiKey, settingService, userService, auditService)
+				return
+			}
 			if !validateAdminAPIKey(c, apiKey, settingService, userService) {
 				return
 			}
@@ -217,4 +224,58 @@ func validateJWTForAdmin(
 	c.Set("auth_method", "jwt")
 
 	return true
+}
+
+// 每次请求查库，未登记的管理动作默认拒绝。
+func authenticateScopedAdminRequest(c *gin.Context, key string, settings *service.SettingService, users *service.UserService, audit *service.AuditLogService) {
+	if settings == nil || users == nil {
+		AbortWithError(c, 401, "INVALID_ADMIN_KEY", "Invalid admin API key")
+		return
+	}
+	item, err := settings.AuthenticateScopedAdminKey(c.Request.Context(), key, ip.GetTrustedClientIP(c))
+	if err != nil {
+		AbortWithError(c, 401, "INVALID_ADMIN_KEY", "Invalid admin API key")
+		recordScopedAdminKeyDenial(c, audit, item, "invalid_key")
+		return
+	}
+	user, err := users.GetByID(c.Request.Context(), item.CreatedBy)
+	if err != nil || user == nil || !user.IsActive() || !user.IsAdmin() {
+		AbortWithError(c, 401, "INVALID_ADMIN_KEY", "Invalid admin API key")
+		recordScopedAdminKeyDenial(c, audit, item, "invalid_key")
+		return
+	}
+	principal := &adminaccess.Principal{KeyID: item.ID, KeyName: item.Name, CreatorID: item.CreatedBy, Policy: item.Policy}
+	c.Request = c.Request.WithContext(adminaccess.WithPrincipal(c.Request.Context(), principal))
+	c.Set(string(ContextKeyUser), AuthSubject{UserID: user.ID, Concurrency: user.Concurrency})
+	c.Set(string(ContextKeyUserRole), user.Role)
+	c.Set(ContextKeyAuthEmail, user.Email)
+	c.Set("auth_method", service.AuditAuthMethodAdminAPIKey)
+	if !adminaccess.RouteAllowed(item.Policy, c.Request.Method, c.FullPath()) {
+		AbortWithError(c, 403, "FORBIDDEN", "管理密钥未获此操作权限")
+		recordScopedAdminKeyDenial(c, audit, item, "permission_denied")
+		return
+	}
+	c.Next()
+}
+
+func recordScopedAdminKeyDenial(c *gin.Context, audit *service.AuditLogService, item *service.ScopedAdminKey, reason string) {
+	if audit == nil || item == nil {
+		return
+	}
+	entry := &service.AuditLog{
+		CreatedAt: time.Now().UTC(), AuthMethod: service.AuditAuthMethodAdminAPIKey,
+		Action: "admin.api_key.request", Method: c.Request.Method, Path: c.FullPath(),
+		StatusCode: c.Writer.Status(), ClientIP: ip.GetTrustedClientIP(c), UserAgent: c.Request.UserAgent(),
+		Extra: map[string]any{"denial_reason": reason},
+	}
+	if entry.Path == "" {
+		entry.Path = c.Request.URL.Path
+	}
+	entry.RequestID, _ = c.Request.Context().Value(ctxkey.RequestID).(string)
+	entry.Extra["admin_key_id"] = item.ID
+	entry.Extra["admin_key_name"] = item.Name
+	entry.ActorUserID = &item.CreatedBy
+	entry.ActorEmail = c.GetString(ContextKeyAuthEmail)
+	entry.ActorRole, _ = GetUserRoleFromContext(c)
+	audit.Record(entry)
 }

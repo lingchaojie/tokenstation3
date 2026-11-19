@@ -157,9 +157,9 @@ func (s *antigravityCompatStreamSession) hasMeaningfulData() bool {
 }
 
 func (s *antigravityCompatStreamSession) writePreContentKeepalive(now time.Time) {
-	// Intentional tradeoff: this commits HTTP 200 after 15s, so later upstream
+	// Intentional tradeoff: this commits HTTP 200 after the keepalive interval, so later upstream
 	// failures cannot fail over; report them as SSE errors to the client instead.
-	if s.hasMeaningfulData() || s.writer.Disconnected() || now.Sub(s.startTime) < s.preContentKeepaliveInterval {
+	if s.hasMeaningfulData() || s.writer.Disconnected() || (!s.preContentKeepaliveSent && now.Sub(s.startTime) < s.preContentKeepaliveInterval) {
 		return
 	}
 	if s.writer.Write([]byte(": ping\n\n")) {
@@ -174,7 +174,7 @@ func (s *antigravityCompatStreamSession) finish() (*antigravityStreamResult, err
 	if !s.hasMeaningfulData() && !s.writer.Disconnected() {
 		if s.preContentKeepaliveSent {
 			s.adapter.WriteError(s.writer, "empty_stream")
-			return s.result(false), errors.New("empty Antigravity compatibility stream after keepalive")
+			return s.result(false), newAntigravityCompatCommittedNoContentError("empty Antigravity compatibility stream after keepalive")
 		}
 		return nil, antigravityCompatEmptyStreamError(s.response)
 	}
@@ -287,11 +287,51 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 	adapter antigravityCompatStreamAdapter,
 	prefix string,
 ) (*antigravityStreamResult, error) {
-	return s.handleAntigravityCompatStreamWithKeepaliveInterval(c, resp, startTime, originalModel, adapter, prefix, antigravityCompatPreContentKeepaliveInterval, antigravityCompatPreContentMaxWait)
+	return s.handleAntigravityCompatStreamWithKeepaliveInterval(
+		c,
+		resp,
+		startTime,
+		originalModel,
+		adapter,
+		prefix,
+		antigravityCompatPreContentKeepaliveInterval,
+		s.antigravityCompatPreContentMaxWait(),
+	)
+}
+
+// handleAntigravityCompatStreamAfterHeaders starts reading an upstream HTTP 200 SSE
+// stream while keeping startTime for TTFT measurement and anchoring the pre-content
+// deadline at response-header arrival rather than request start.
+func (s *AntigravityGatewayService) handleAntigravityCompatStreamAfterHeaders(
+	c *gin.Context,
+	resp *http.Response,
+	startTime time.Time,
+	originalModel string,
+	adapter antigravityCompatStreamAdapter,
+	prefix string,
+) (*antigravityStreamResult, error) {
+	return s.handleAntigravityCompatStreamWithTiming(
+		c,
+		resp,
+		startTime,
+		time.Now(),
+		originalModel,
+		adapter,
+		prefix,
+		s.antigravityCompatPreContentKeepaliveInterval(),
+		s.antigravityCompatPreContentMaxWait(),
+	)
 }
 
 func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveInterval(
 	c *gin.Context, resp *http.Response, startTime time.Time, originalModel string,
+	adapter antigravityCompatStreamAdapter, prefix string, interval, maxPreContentWait time.Duration,
+) (*antigravityStreamResult, error) {
+	return s.handleAntigravityCompatStreamWithTiming(c, resp, startTime, startTime, originalModel, adapter, prefix, interval, maxPreContentWait)
+}
+
+func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithTiming(
+	c *gin.Context, resp *http.Response, startTime, streamStart time.Time, originalModel string,
 	adapter antigravityCompatStreamAdapter, prefix string, interval, maxPreContentWait time.Duration,
 ) (*antigravityStreamResult, error) {
 	flusher, ok := c.Writer.(http.Flusher)
@@ -311,13 +351,13 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 	session.response = resp
 	session.preContentKeepaliveInterval = interval
 	readActivity := newProviderBodyReadActivity(resp.Body)
-	events, stopScanner, scanDone, maxLineSize := s.startAntigravityCompatScanner(readActivity)
+	events, stopScanner, scanDone, maxLineSize, queueBudget := s.startAntigravityCompatScanner(readActivity)
 	providerScanFinished := false
 	defer func() {
 		if !providerScanFinished {
 			drainCaptureScannerOnParserFailure(
 				ginRequestContext(c), resp, events, scanDone, &readActivity.lastRead,
-				s.antigravityCompatStreamTimeout(), nil, stopScanner,
+				s.antigravityCompatStreamTimeout(), func(ev antigravityCompatScanEvent) { queueBudget.release(len(ev.line)) }, stopScanner,
 			)
 			return
 		}
@@ -334,13 +374,17 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 	if keepaliveTicker != nil {
 		defer keepaliveTicker.Stop()
 	}
-	preContentDelay := time.Until(startTime.Add(interval))
+	keepaliveStart := startTime
+	if session.preContentKeepaliveSent {
+		keepaliveStart = streamStart
+	}
+	preContentDelay := time.Until(keepaliveStart.Add(interval))
 	if preContentDelay < 0 {
 		preContentDelay = 0
 	}
 	preContentTimer := time.NewTimer(preContentDelay)
 	defer preContentTimer.Stop()
-	preContentDeadline := startTime.Add(maxPreContentWait)
+	preContentDeadline := streamStart.Add(maxPreContentWait)
 	deadlineDelay := time.Until(preContentDeadline)
 	if deadlineDelay < 0 {
 		deadlineDelay = 0
@@ -350,7 +394,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 	preContentTimeout := func() (*antigravityStreamResult, error) {
 		if session.preContentKeepaliveSent {
 			writeAntigravityCompatStreamError(c, adapter, writer, "stream_timeout")
-			return session.collectResult(false), fmt.Errorf("pre-content stream timeout")
+			return session.collectResult(false), newAntigravityCompatCommittedNoContentError("pre-content stream timeout")
 		}
 		return nil, antigravityCompatEmptyStreamError(resp)
 	}
@@ -358,6 +402,9 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 	for {
 		select {
 		case event, open := <-events:
+			if open {
+				queueBudget.release(len(event.line))
+			}
 			if !session.hasMeaningfulData() && !writer.Disconnected() && !time.Now().Before(preContentDeadline) {
 				return preContentTimeout()
 			}
@@ -423,14 +470,14 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStreamWithKeepaliveIn
 func handleAntigravityCompatEmptyStream(c *gin.Context, session *antigravityCompatStreamSession) (*antigravityStreamResult, error) {
 	if session.preContentKeepaliveSent {
 		writeAntigravityCompatStreamError(c, session.adapter, session.writer, "empty_stream")
-		return session.collectResult(false), errors.New("empty Antigravity compatibility stream after keepalive")
+		return session.collectResult(false), newAntigravityCompatCommittedNoContentError("empty Antigravity compatibility stream after keepalive")
 	}
 	return nil, antigravityCompatEmptyStreamError(session.response)
 }
 
 func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 	body io.Reader,
-) (<-chan antigravityCompatScanEvent, func(), <-chan struct{}, int) {
+) (<-chan antigravityCompatScanEvent, func(), <-chan struct{}, int, *sseQueueBudget) {
 	maxLineSize := defaultMaxLineSize
 	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -438,8 +485,10 @@ func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 	scanner := bufio.NewScanner(body)
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
+	scanner.Split(newBoundedSSESplit(s.antigravitySSEConfig(), maxLineSize, nil))
 
 	events := make(chan antigravityCompatScanEvent, openAIDefaultStreamQueueSize)
+	queueBudget := newSSEQueueBudget(s.antigravitySSEConfig())
 	done := make(chan struct{})
 	scanDone := make(chan struct{})
 	go func() {
@@ -447,10 +496,14 @@ func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
 		send := func(event antigravityCompatScanEvent) bool {
+			if !queueBudget.acquire(len(event.line), done) {
+				return false
+			}
 			select {
 			case events <- event:
 				return true
 			case <-done:
+				queueBudget.release(len(event.line))
 				return false
 			}
 		}
@@ -463,7 +516,7 @@ func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 			send(antigravityCompatScanEvent{err: err})
 		}
 	}()
-	return events, func() { close(done) }, scanDone, maxLineSize
+	return events, func() { close(done) }, scanDone, maxLineSize, queueBudget
 }
 
 func (s *AntigravityGatewayService) antigravityCompatStreamTimeout() time.Duration {
@@ -471,6 +524,24 @@ func (s *AntigravityGatewayService) antigravityCompatStreamTimeout() time.Durati
 		return 0
 	}
 	return time.Duration(s.settingService.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+}
+
+func (s *AntigravityGatewayService) antigravityCompatPreContentKeepaliveInterval() time.Duration {
+	interval := antigravityCompatPreContentKeepaliveInterval
+	if s.settingService != nil && s.settingService.cfg != nil {
+		configured := time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+		if configured > 0 && configured < interval {
+			interval = configured
+		}
+	}
+	return interval
+}
+
+func (s *AntigravityGatewayService) antigravityCompatPreContentMaxWait() time.Duration {
+	if timeout := s.antigravityCompatStreamTimeout(); timeout > antigravityCompatPreContentMaxWait {
+		return timeout
+	}
+	return antigravityCompatPreContentMaxWait
 }
 
 func (s *AntigravityGatewayService) newAntigravityCompatKeepaliveTicker() (*time.Ticker, <-chan time.Time) {
@@ -562,7 +633,7 @@ func (s *AntigravityGatewayService) handleChatCompletionsStreamingFromAntigravit
 	originalModel string,
 	includeUsage bool,
 ) (*antigravityStreamResult, error) {
-	return s.handleAntigravityCompatStream(
+	return s.handleAntigravityCompatStreamAfterHeaders(
 		c,
 		resp,
 		startTime,
@@ -578,7 +649,7 @@ func (s *AntigravityGatewayService) handleResponsesStreamingFromAntigravity(
 	startTime time.Time,
 	originalModel string,
 ) (*antigravityStreamResult, error) {
-	return s.handleAntigravityCompatStream(
+	return s.handleAntigravityCompatStreamAfterHeaders(
 		c,
 		resp,
 		startTime,

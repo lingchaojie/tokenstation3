@@ -120,7 +120,8 @@ func TestGPT62CompatibilityPreservesReasoning(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "max", converted.Reasoning.Effort)
 		for _, effort := range []string{"none", "minimal"} {
-			require.Error(t, validateGPT61SolCompatRequest([]byte(`{"reasoning":{"effort":"`+effort+`"}}`), model))
+			_, err := gpt62RequestReasoningEffort([]byte(`{"reasoning":{"effort":"`+effort+`"}}`), model)
+			require.Error(t, err)
 		}
 		body, changed, err := normalizeGPT6ResponsesSampling([]byte(`{"temperature":0.7,"top_p":0.8,"input":"hi"}`), model)
 		require.NoError(t, err)

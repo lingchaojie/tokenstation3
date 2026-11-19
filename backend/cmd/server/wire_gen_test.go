@@ -104,6 +104,8 @@ func provideCleanupWithMinimalDependenciesForTest(t *testing.T, captureSidecarSu
 		emailQueueSvc,
 		billingCacheSvc,
 		&service.UsageRecordWorkerPool{},
+		nil, // balanceNotify
+		nil, // digestSessions
 		nil, // conversationCapturePool
 		captureSidecarSupervisor,
 		&service.SubscriptionService{},

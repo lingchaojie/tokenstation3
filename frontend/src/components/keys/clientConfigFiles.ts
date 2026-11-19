@@ -1,8 +1,10 @@
 import type { GroupPlatform } from '@/types'
+import { DEFAULT_OPENAI_CLIENT_MODEL } from '@/constants/clientModels'
 
 export type SupportedGuideClient = 'claude_code' | 'codex' | 'opencode' | 'cc_switch'
 export type SupportedGuideOS = 'macos' | 'windows' | 'linux'
 export type WindowsGuideShell = 'powershell' | 'cmd'
+export type CodexAuthMode = 'legacy' | 'api-key'
 
 export interface ClientConfigInput {
   client: SupportedGuideClient
@@ -12,7 +14,7 @@ export interface ClientConfigInput {
   baseUrl: string
   allowMessagesDispatch?: boolean
   windowsShell?: WindowsGuideShell
-  codexAuthMode?: 'legacy' | 'api-key'
+  codexAuthMode?: CodexAuthMode
   codexModel?: string
   codexReasoningEffort?: string | null
   codexModelCatalogPath?: string
@@ -24,6 +26,10 @@ export interface ClientConfigFile {
   content: string
   hintKey?: string
   hint?: string
+}
+
+export function getDefaultCodexAuthMode(platform?: ClientConfigInput['platform']): CodexAuthMode {
+  return platform === 'openai' || platform === 'unified' ? 'api-key' : 'legacy'
 }
 
 function gatewayRoot(baseUrl: string): string {
@@ -52,11 +58,14 @@ function buildOpenCodeFile(
   pathSuffix?: string
 ): ClientConfigFile {
   const isAnthropic = provider === 'anthropic'
-  const model = isAnthropic ? 'claude-fable-5' : 'gpt-5.5'
+  const openAIModel = input.platform === 'openai' || input.platform === 'unified'
+    ? { id: DEFAULT_OPENAI_CLIENT_MODEL, name: 'GPT-6.1 Sol' }
+    : { id: 'gpt-5.5', name: 'GPT-5.5' }
+  const model = isAnthropic ? { id: 'claude-fable-5', name: 'Claude Fable 5' } : openAIModel
   const content = JSON.stringify(
     {
       $schema: 'https://opencode.ai/config.json',
-      model: `${provider}/${model}`,
+      model: `${provider}/${model.id}`,
       provider: {
         [provider]: {
           npm: isAnthropic ? '@ai-sdk/anthropic' : '@ai-sdk/openai',
@@ -65,8 +74,8 @@ function buildOpenCodeFile(
             apiKey: input.apiKey
           },
           models: {
-            [model]: {
-              name: isAnthropic ? 'Claude Fable 5' : 'GPT-5.5'
+            [model.id]: {
+              name: model.name
             }
           }
         }
@@ -111,7 +120,7 @@ Preset: Custom
 Name: TokenStation
 Endpoint: ${endpoint}
 API Key: ${apiKey}
-Model: gpt-5.5
+Model: ${DEFAULT_OPENAI_CLIENT_MODEL}
 Wire API: responses`,
     hintKey: 'keys.useKeyModal.ccSwitch.hint'
   }
@@ -194,11 +203,13 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   }
 
   const configDir = input.os === 'windows' ? '%userprofile%\\.codex' : '~/.codex'
-  const providerAuthConfig = input.codexAuthMode === 'api-key'
+  const defaultAuthMode = getDefaultCodexAuthMode(input.platform)
+  const nativeImageEnabled = (input.codexAuthMode ?? defaultAuthMode) === 'api-key'
+  const providerAuthConfig = nativeImageEnabled
     ? `requires_openai_auth = false
 http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
     : 'requires_openai_auth = false'
-  const codexModel = escapeTomlBasicString(input.codexModel || 'gpt-5.5')
+  const codexModel = escapeTomlBasicString(input.codexModel || DEFAULT_OPENAI_CLIENT_MODEL)
   const reasoningEffortLine = input.codexReasoningEffort === null
     ? ''
     : `model_reasoning_effort = "${escapeTomlBasicString(input.codexReasoningEffort || 'xhigh')}"\n`
@@ -211,7 +222,7 @@ http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
   const configContent = `model_provider = "linx2ai"
 model = "${codexModel}"
 review_model = "${codexModel}"
-${reasoningEffortLine}${modelCatalogLine}disable_response_storage = true
+${defaultAuthMode === 'api-key' ? 'web_search = "live"\n' : ''}${reasoningEffortLine}${modelCatalogLine}disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 
@@ -222,7 +233,7 @@ ${remoteCatalogLine}wire_api = "responses"
 ${providerAuthConfig}
 
 [features]
-${input.codexModelCatalogUrl ? 'api_key_model_discovery = true\n' : ''}goals = true`
+${input.codexModelCatalogUrl ? 'api_key_model_discovery = true\n' : ''}${nativeImageEnabled ? 'image_generation = true\n' : ''}goals = true`
   const authContent = `{
   "OPENAI_API_KEY": "${input.apiKey}"
 }`

@@ -247,7 +247,10 @@ describe('EmailVerifyView', () => {
     expect(showErrorMock).not.toHaveBeenCalled()
   })
 
-  it('shows the localized domain quota message when sending a verification code is rejected', async () => {
+  it.each([
+    ['EMAIL_DOMAIN_REGISTRATION_LIMIT', '该邮箱域名无法注册新账户。请使用主流邮箱注册；如需使用企业邮箱，请联系客服添加域名白名单。'],
+    ['EMAIL_BLOCKED', 'auth.errors.EMAIL_BLOCKED'],
+  ])('shows the localized registration error when sending a verification code is rejected (%s)', async (reason, expected) => {
     getPublicSettingsMock.mockResolvedValue({
       turnstile_enabled: false,
       turnstile_site_key: '',
@@ -256,7 +259,7 @@ describe('EmailVerifyView', () => {
       registration_email_domain_quota_enabled: true,
     })
     sendVerifyCodeMock.mockRejectedValueOnce({
-      reason: 'EMAIL_DOMAIN_REGISTRATION_LIMIT',
+      reason,
       message: 'raw backend message',
     })
     sessionStorage.setItem(
@@ -280,12 +283,13 @@ describe('EmailVerifyView', () => {
 
     await flushPromises()
 
-    expect(showErrorMock).toHaveBeenLastCalledWith(
-      '该邮箱域名无法注册新账户。请使用主流邮箱注册；如需使用企业邮箱，请联系客服添加域名白名单。'
-    )
+    expect(showErrorMock).toHaveBeenLastCalledWith(expected)
   })
 
-  it('shows the localized domain quota message when verified registration is rejected', async () => {
+  it.each([
+    ['EMAIL_DOMAIN_REGISTRATION_LIMIT', '该邮箱域名无法注册新账户。请使用主流邮箱注册；如需使用企业邮箱，请联系客服添加域名白名单。'],
+    ['EMAIL_BLOCKED', 'auth.errors.EMAIL_BLOCKED'],
+  ])('shows the localized registration error when verified registration is rejected (%s)', async (reason, expected) => {
     getPublicSettingsMock.mockResolvedValue({
       turnstile_enabled: false,
       turnstile_site_key: '',
@@ -301,7 +305,7 @@ describe('EmailVerifyView', () => {
       })
     )
     registerMock.mockRejectedValueOnce({
-      reason: 'EMAIL_DOMAIN_REGISTRATION_LIMIT',
+      reason,
       message: 'raw backend message',
     })
 
@@ -322,9 +326,7 @@ describe('EmailVerifyView', () => {
     await flushPromises()
 
     expect(registerMock).toHaveBeenCalled()
-    expect(showErrorMock).toHaveBeenLastCalledWith(
-      '该邮箱域名无法注册新账户。请使用主流邮箱注册；如需使用企业邮箱，请联系客服添加域名白名单。'
-    )
+    expect(showErrorMock).toHaveBeenLastCalledWith(expected)
   })
 
   // 域名限量注册开关默认关闭：恢复 PR5423 之前的客户端白名单预检，非白名单域名不发送验证码。

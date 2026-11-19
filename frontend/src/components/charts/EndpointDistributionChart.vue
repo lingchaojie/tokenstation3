@@ -83,7 +83,8 @@
               <th class="pb-2 text-right">{{ t('admin.dashboard.requests') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.tokens') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.actual') }}</th>
-              <th class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
+              <th v-if="showAccountCost" class="pb-2 text-right">{{ t('admin.dashboard.accountCost') }}</th>
+              <th v-if="showStandardCost" class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -109,15 +110,20 @@
                 <td class="py-1.5 text-right text-green-600 dark:text-green-400">
                   ${{ formatCost(item.actual_cost) }}
                 </td>
-                <td class="py-1.5 text-right text-gray-400 dark:text-gray-500">
+                <td v-if="showAccountCost" class="py-1.5 text-right text-orange-500 dark:text-orange-400">
+                  ${{ formatCost(item.account_cost ?? 0) }}
+                </td>
+                <td v-if="showStandardCost" class="py-1.5 text-right text-gray-400 dark:text-gray-500">
                   ${{ formatCost(item.cost) }}
                 </td>
               </tr>
               <tr v-if="expandedKey === item.endpoint">
-                <td colspan="5" class="p-0">
+                <td :colspan="distributionColspan" class="p-0">
                   <UserBreakdownSubTable
                     :items="breakdownItems"
                     :loading="breakdownLoading"
+                    :show-account-cost="showAccountCost"
+                    :show-standard-cost="showStandardCost"
                   />
                 </td>
               </tr>
@@ -133,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 import { Doughnut } from 'vue-chartjs'
@@ -161,6 +167,8 @@ const props = withDefaults(
     showMetricToggle?: boolean
     showSourceToggle?: boolean
     enableBreakdown?: boolean
+    showAccountCost?: boolean
+    showStandardCost?: boolean
     startDate?: string
     endDate?: string
     filters?: Record<string, any>
@@ -174,9 +182,13 @@ const props = withDefaults(
     source: 'inbound',
     showMetricToggle: false,
     showSourceToggle: false,
-    enableBreakdown: true
+    enableBreakdown: true,
+    showAccountCost: true,
+    showStandardCost: true
   }
 )
+
+const distributionColspan = computed(() => 4 + Number(props.showAccountCost) + Number(props.showStandardCost))
 
 const emit = defineEmits<{
   'update:metric': [value: DistributionMetric]
@@ -186,12 +198,27 @@ const emit = defineEmits<{
 const expandedKey = ref<string | null>(null)
 const breakdownItems = ref<UserBreakdownItem[]>([])
 const breakdownLoading = ref(false)
+let breakdownRequest = 0
+
+function resetBreakdown() {
+  breakdownRequest++
+  expandedKey.value = null
+  breakdownItems.value = []
+  breakdownLoading.value = false
+}
+
+watch(
+  () => [props.filters, props.startDate, props.endDate, props.source, props.enableBreakdown],
+  resetBreakdown,
+  { deep: true }
+)
 
 const toggleBreakdown = async (endpoint: string) => {
   if (expandedKey.value === endpoint) {
-    expandedKey.value = null
+    resetBreakdown()
     return
   }
+  const request = ++breakdownRequest
   expandedKey.value = endpoint
   breakdownLoading.value = true
   breakdownItems.value = []
@@ -203,11 +230,11 @@ const toggleBreakdown = async (endpoint: string) => {
       endpoint,
       endpoint_type: props.source,
     })
-    breakdownItems.value = res.users || []
+    if (request === breakdownRequest) breakdownItems.value = res.users || []
   } catch {
-    breakdownItems.value = []
+    if (request === breakdownRequest) breakdownItems.value = []
   } finally {
-    breakdownLoading.value = false
+    if (request === breakdownRequest) breakdownLoading.value = false
   }
 }
 

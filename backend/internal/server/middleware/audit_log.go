@@ -3,10 +3,13 @@ package middleware
 import (
 	"bytes"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -52,6 +55,7 @@ func SkipAudit(c *gin.Context) {
 // scalar, non-secret operation summaries. Request bodies and arbitrary maps
 // are never accepted through this channel.
 var auditExtraAllowedKeys = map[string]struct{}{
+	"admin_key_id": {}, "admin_key_name": {}, "affected": {},
 	"result": {}, "error_code": {}, "enabled": {}, "blocking_enabled": {},
 	"config_version": {}, "endpoint_count": {}, "scanner_count": {},
 	"all_groups": {}, "group_count": {}, "guard_endpoint_id": {},
@@ -109,15 +113,17 @@ func truncateAuditExtraString(value string, limit int) string {
 
 // auditSensitiveReads 需要审计的敏感 GET 读取（method+FullPath → 动作名）。
 var auditSensitiveReads = map[string]string{
-	"GET /api/v1/admin/accounts/data":             "admin.accounts.export",
-	"GET /api/v1/admin/proxies/data":              "admin.proxies.export",
-	"GET /api/v1/admin/redeem-codes/export":       "admin.redeem_codes.export",
-	"GET /api/v1/admin/backups/:id/download-url":  "admin.backups.download",
-	"GET /api/v1/admin/settings/admin-api-key":    "admin.admin_api_key.read",
-	"GET /api/v1/admin/users/:id/api-keys":        "admin.users.api_keys.read",
-	"GET /api/v1/admin/groups/:id/api-keys":       "admin.groups.api_keys.read",
-	"GET /api/v1/admin/backups/s3-config":         "admin.backups.s3_config.read",
-	"GET /api/v1/admin/data-management/s3/config": "admin.data_management.s3_config.read",
+	"GET /api/v1/admin/settings/admin-api-keys":               "admin.admin_api_keys.read",
+	"GET /api/v1/admin/settings/registration-email-blacklist": "admin.registration_email_blacklist.read",
+	"GET /api/v1/admin/accounts/data":                         "admin.accounts.export",
+	"GET /api/v1/admin/proxies/data":                          "admin.proxies.export",
+	"GET /api/v1/admin/redeem-codes/export":                   "admin.redeem_codes.export",
+	"GET /api/v1/admin/backups/:id/download-url":              "admin.backups.download",
+	"GET /api/v1/admin/settings/admin-api-key":                "admin.admin_api_key.read",
+	"GET /api/v1/admin/users/:id/api-keys":                    "admin.users.api_keys.read",
+	"GET /api/v1/admin/groups/:id/api-keys":                   "admin.groups.api_keys.read",
+	"GET /api/v1/admin/backups/s3-config":                     "admin.backups.s3_config.read",
+	"GET /api/v1/admin/data-management/s3/config":             "admin.data_management.s3_config.read",
 }
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。
@@ -142,6 +148,9 @@ var auditActionOverrides = map[string]string{
 // The route-specific marker retains endpoint audit metadata while making the
 // omission reason explicit without storing credentials or user prompts.
 var auditBodyOmittedRoutes = map[string]string{
+	"PUT /api/v1/admin/settings/registration-email-blacklist":   "<email addresses omitted>",
+	"POST /api/v1/admin/users/blacklist-matches":                "<email addresses omitted>",
+	"POST /api/v1/admin/users/batch-disable":                    "<user list omitted>",
 	"POST /api/v1/auth/passkey/login/finish":                    "<credential-bearing body omitted>",
 	"POST /api/v1/user/passkeys/register/finish":                "<credential-bearing body omitted>",
 	"POST /api/v1/admin/accounts/import/codex-session":          "<credential-bearing body omitted>",
@@ -156,8 +165,9 @@ var auditBodyOmittedRoutes = map[string]string{
 func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddleware {
 	return AuditLogMiddleware(func(c *gin.Context) {
 		routeKey := c.Request.Method + " " + c.FullPath()
+		scopedKey := adminaccess.FromContext(c.Request.Context())
 
-		record := false
+		record := scopedKey != nil
 		action := ""
 		switch c.Request.Method {
 		case "POST", "PUT", "PATCH", "DELETE":
@@ -182,7 +192,9 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 		var bodyRedacted string
 		if omission, omit := auditBodyOmittedRoutes[routeKey]; omit {
 			bodyRedacted = omission
-		} else if c.Request.Body != nil && c.Request.Method != "GET" {
+		} else if scopedKey != nil && c.Request.Method != http.MethodGet {
+			bodyRedacted = "<scoped administrator body omitted>"
+		} else if c.Request.Body != nil && c.Request.Method != http.MethodGet {
 			orig := c.Request.Body
 			raw, err := io.ReadAll(io.LimitReader(orig, service.AuditRequestBodyCaptureLimit+1))
 			if err == nil {
@@ -258,7 +270,9 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 		}
 
 		// 请求头凭证掩码（仅保留首尾）。
-		entry.CredentialMasked = MaskedRequestCredential(c)
+		if scopedKey == nil {
+			entry.CredentialMasked = MaskedRequestCredential(c)
+		}
 
 		extra := map[string]any{}
 		if value, ok := c.Get(auditCtxKeyExtra); ok {
@@ -282,6 +296,14 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 			entry.Extra = extra
 		}
 
+		if scopedKey != nil {
+			if entry.Extra == nil {
+				entry.Extra = make(map[string]any, 2)
+			}
+			entry.Extra["admin_key_id"] = scopedKey.KeyID
+			entry.Extra["admin_key_name"] = scopedKey.KeyName
+			entry.ClientIP = ip.GetTrustedClientIP(c)
+		}
 		auditService.Record(entry)
 	})
 }

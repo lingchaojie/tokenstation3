@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"io/fs"
+	"slices"
 	"testing"
 	"testing/fstest"
 
@@ -58,7 +59,7 @@ func TestTask3MigrationsUpgradePersisted230Fixture(t *testing.T) {
 
 	// Establish a real persisted pre-upgrade database by running the same
 	// migration engine over the embedded migration set through local version 230.
-	require.NoError(t, applyMigrationsFS(ctx, db, task3MigrationsThrough230(t)))
+	require.NoError(t, applyMigrationsFS(ctx, db, embeddedMigrationsBefore(t, "231_")))
 	task3RequirePersisted230Boundary(t, db)
 
 	fixture := task3InsertPersisted230Fixture(t, db)
@@ -93,14 +94,14 @@ type task3ColumnMetadata struct {
 	defaultSQL sql.NullString
 }
 
-func task3MigrationsThrough230(t *testing.T) fs.FS {
+func embeddedMigrationsBefore(t *testing.T, firstExcluded string) fs.FS {
 	t.Helper()
 
 	names, err := fs.Glob(dbmigrations.FS, "*.sql")
 	require.NoError(t, err)
 	filtered := fstest.MapFS{}
 	for _, name := range names {
-		if name >= "231_" {
+		if name >= firstExcluded {
 			continue
 		}
 		content, readErr := fs.ReadFile(dbmigrations.FS, name)
@@ -302,9 +303,10 @@ ORDER BY sequence`)
 		appliedOrder = append(appliedOrder, filename)
 	}
 	require.NoError(t, rows.Err())
-	require.Equal(t, task3ApprovedUpgradeMigrations, appliedOrder)
+	expected := append(slices.Clone(task3ApprovedUpgradeMigrations), novemberUpstreamMigrations...)
+	require.Equal(t, expected, appliedOrder)
 
-	for _, filename := range task3ApprovedUpgradeMigrations {
+	for _, filename := range expected {
 		var appliedCount int
 		require.NoError(t, db.QueryRowContext(ctx, `
 SELECT COUNT(*)

@@ -3,11 +3,16 @@
 package service
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -77,6 +82,26 @@ func TestCountGeminiInlineImageOutputs(t *testing.T) {
 			name:    "empty data is not billable",
 			payload: geminiImageResponse(`{"inlineData":{"mimeType":"image/png","data":""}}`),
 			want:    0,
+		},
+		{
+			name:    "camelCase fileData",
+			payload: geminiImageResponse(`{"fileData":{"mimeType":"image/jpeg","fileUri":"https://example.test/image.jpg"}}`),
+			want:    0,
+		},
+		{
+			name:    "snake_case file_data",
+			payload: geminiImageResponse(`{"file_data":{"mime_type":"image/png","file_uri":"gs://bucket/image.png"}}`),
+			want:    0,
+		},
+		{
+			name:    "mixed inline and referenced images",
+			payload: geminiImageResponse(`{"inlineData":{"mimeType":"image/png","data":"` + geminiTestPNG + `"}},{"fileData":{"mimeType":"image/webp","fileUri":"https://example.test/image.webp"}}`),
+			want:    1,
+		},
+		{
+			name:    "a part is counted once",
+			payload: geminiImageResponse(`{"inlineData":{"mimeType":"image/png","data":"` + geminiTestPNG + `"},"fileData":{"mimeType":"image/png","fileUri":"https://example.test/image.png"}}`),
+			want:    1,
 		},
 		{name: "empty payload", payload: "", want: 0},
 		{name: "invalid json", payload: "not-json", want: 0},
@@ -201,4 +226,153 @@ func TestHandleNativeNonStreamingResponse_FeedsImageCounter(t *testing.T) {
 
 	require.Equal(t, 1, observedGeminiImageOutputs(c))
 	require.Equal(t, 1, resolveGeminiImageCount(c, "nana-banana-2", "nana-banana-2"))
+}
+
+func TestGeminiForwardNative_FileReferencesKeepExistingBilling(t *testing.T) {
+	const model = "gemini-nano-banana-2.1"
+	require.False(t, isImageGenerationModel(model))
+	const input = `{"contents":[{"role":"user","parts":[{"text":"generate a photo"}]}]}`
+	const camelURI = "https://example.test/two.png"
+	const snakeURI = "https://example.test/one.jpg"
+	parts := `{"file_data":{"mime_type":"image/jpeg","file_uri":"` + snakeURI + `"}},{"fileData":{"mimeType":"image/png","fileUri":"` + camelURI + `"}}`
+	body := strings.TrimSuffix(geminiImageResponse(parts), "}") + `,"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`
+	const groupID = 128
+	billing := &GatewayService{
+		billingService: NewBillingService(&config.Config{}, nil),
+		resolver:       newOpenAIImageChannelPricingResolverForTest(t, groupID, model, 0.25),
+	}
+	for _, tt := range []struct {
+		name, mappedModel string
+		wantCount         int
+		wantCost          float64
+	}{
+		{name: "unrecognized alias", mappedModel: model, wantCount: 0, wantCost: 0.25},
+		{name: "alias mapped to a known image model", mappedModel: "gemini-2.5-flash-image", wantCount: 1, wantCost: 0.25},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/"+model+":generateContent", nil)
+			upstream := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}}
+			svc := &GeminiMessagesCompatService{httpUpstream: upstream, cfg: &config.Config{}}
+			account := &Account{ID: 1, Platform: PlatformGemini, Type: AccountTypeAPIKey, Credentials: map[string]any{
+				"api_key":       "test-only-placeholder",
+				"model_mapping": map[string]any{model: tt.mappedModel},
+			}}
+			result, err := svc.ForwardNative(context.Background(), c, account, model, "generateContent", false, []byte(input))
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Contains(t, w.Body.String(), camelURI)
+			require.Contains(t, w.Body.String(), snakeURI)
+			require.Equal(t, tt.mappedModel, result.UpstreamModel)
+			require.Equal(t, tt.wantCount, result.ImageCount)
+			require.Equal(t, tt.wantCount > 0, result.ImageEndpoint)
+			cost := billing.calculateRecordUsageCost(context.Background(), result,
+				&APIKey{GroupID: i64p(groupID), Group: &Group{ID: groupID}},
+				model, 1.0, 1.0, time.Time{}, nil)
+			require.NotNil(t, cost)
+			require.Equal(t, string(BillingModeImage), cost.BillingMode)
+			require.InDelta(t, tt.wantCost, cost.TotalCost, 1e-12)
+		})
+	}
+}
+
+func TestGeminiForwardImageReferenceAccountingByProtocol(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const fileURI = "https://example.test/image-one.png"
+	const anotherFileURI = "https://example.test/image-two.png"
+	const references = `{"fileData":{"mimeType":"image/png","fileUri":"` + fileURI + `"}},` +
+		`{"fileData":{"mimeType":"image/png","fileUri":"` + anotherFileURI + `"}}`
+	const inline = `{"inlineData":{"mimeType":"image/png","data":"` + geminiTestPNG + `"}}`
+	for _, tt := range []struct {
+		name, model, parts string
+		compat, native     int
+	}{
+		{name: "file references", model: "custom-gemini-photo", parts: references, compat: 0, native: 0},
+		{name: "mixed inline and references", model: "custom-gemini-photo", parts: inline + "," + references, compat: 1, native: 1},
+		{name: "known model fallback", model: "gemini-2.5-flash-image", parts: references, compat: 1, native: 1},
+		{name: "known model with mixed inline and references", model: "gemini-2.5-flash-image", parts: inline + "," + references, compat: 1, native: 1},
+	} {
+		for _, wire := range []struct {
+			name          string
+			clientStream  bool
+			codeAssistSSE bool
+		}{
+			{name: "buffered"},
+			{name: "streaming", clientStream: true},
+			{name: "aggregated Code Assist stream", codeAssistSSE: true},
+		} {
+			for _, native := range []bool{false, true} {
+				protocol := "messages"
+				if native {
+					protocol = "native"
+				}
+				t.Run(tt.name+"/"+wire.name+"/"+protocol, func(t *testing.T) {
+					usage := `,"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`
+					body := strings.TrimSuffix(geminiImageResponse(`{"text":"done"},`+tt.parts), "}") + usage
+					account := &Account{ID: 1, Platform: PlatformGemini, Type: AccountTypeAPIKey,
+						Credentials: map[string]any{"api_key": "test-only-placeholder"},
+					}
+					contentType := "application/json"
+					if wire.codeAssistSSE {
+						account.Type = AccountTypeOAuth
+						account.Credentials = map[string]any{"access_token": "test-only-placeholder", "project_id": "test-project"}
+						body = `{"response":` + body + `}`
+					}
+					if wire.clientStream || wire.codeAssistSSE {
+						contentType = "text/event-stream"
+						body = "data: " + body + "\n\ndata: [DONE]\n\n"
+					}
+					upstream := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+						StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {contentType}},
+						Body: io.NopCloser(strings.NewReader(body)),
+					}}
+					svc := &GeminiMessagesCompatService{httpUpstream: upstream, tokenProvider: &GeminiTokenProvider{}, cfg: &config.Config{}}
+					w := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(w)
+					if native {
+						action := "generateContent"
+						if wire.clientStream {
+							action = "streamGenerateContent"
+						}
+						c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/"+tt.model+":"+action, nil)
+						result, err := svc.ForwardNative(context.Background(), c, account, tt.model, action, wire.clientStream,
+							[]byte(`{"contents":[{"role":"user","parts":[{"text":"generate a photo"}]}]}`))
+						require.NoError(t, err)
+						require.Equal(t, http.StatusOK, w.Code)
+						require.Contains(t, w.Body.String(), fileURI)
+						require.Contains(t, w.Body.String(), anotherFileURI)
+						require.Equal(t, tt.native, result.ImageCount)
+					} else {
+						c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+						result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"`+tt.model+
+							`","max_tokens":16,"messages":[{"role":"user","content":"generate a photo"}],"stream":`+strconv.FormatBool(wire.clientStream)+`}`))
+						require.NoError(t, err)
+						require.Equal(t, http.StatusOK, w.Code)
+						require.Contains(t, w.Body.String(), "done")
+						require.NotContains(t, w.Body.String(), fileURI)
+						require.NotContains(t, w.Body.String(), anotherFileURI)
+						require.Equal(t, tt.compat, result.ImageCount)
+					}
+					require.Equal(t, 1, upstream.calls)
+				})
+			}
+		}
+	}
+}
+
+func TestGeminiInlineBillingIgnoresMalformedData(t *testing.T) {
+	for _, data := range []string{`123`, `true`, `{"text":"not base64"}`, `["not base64"]`} {
+		t.Run(data, func(t *testing.T) {
+			payload := geminiImageResponse(`{"inlineData":{"mimeType":"image/png","data":` + data + `}}`)
+			c := newGeminiImageTestContext(t)
+			beginGeminiImageOutputObservation(c)
+			observeGeminiImageOutputs(c, []byte(payload))
+			require.Zero(t, resolveGeminiImageCount(c, "custom-alias", "custom-alias"))
+		})
+	}
 }

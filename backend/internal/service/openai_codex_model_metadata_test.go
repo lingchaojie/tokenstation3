@@ -9,6 +9,88 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCodexCatalogGeminiCapabilitiesExcludeNonMixedAntigravityAccounts(t *testing.T) {
+	const groupID int64 = 94
+	reasoning := true
+	native := Account{ID: 1, Platform: PlatformGemini, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"model_mapping": map[string]any{"gemini-custom": "gemini-3.8-flash-high"}},
+	}
+	native.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{
+		Models: map[string]UpstreamModelMetadata{"gemini-3.8-flash-high": {
+			ID: "gemini-3.8-flash-high", Reasoning: &reasoning,
+			SupportedReasoningLevels: []string{"high"}, InputModalities: []string{"text", "image"},
+			ContextWindow: 1_048_576,
+		}},
+	})
+	for _, extra := range []map[string]any{nil, {"mixed_scheduling": false}} {
+		// A peer lacking capabilities would narrow the catalog if included.
+		peer := Account{ID: 2, Platform: PlatformAntigravity, Type: AccountTypeOAuth,
+			Extra: extra, Credentials: native.Credentials}
+		svc := &GatewayService{accountRepo: codexModelsVisibilityAccountRepo{
+			byGroup: map[int64][]Account{groupID: {native, peer}},
+		}}
+		body, err := svc.BuildCodexModelsManifestForGroup(context.Background(),
+			&Group{ID: groupID, Platform: PlatformGemini}, "", []string{"gemini-custom"})
+		require.NoError(t, err)
+		model := decodeCodexManifestModels(t, body)[0]
+		require.Equal(t, float64(1_048_576), model["context_window"])
+		require.Equal(t, []any{"text", "image"}, model["input_modalities"])
+		require.Equal(t, []string{"high"}, effortsFromManifestModel(t, model))
+	}
+}
+
+func TestAstraUltraCatalogPreservesWorkflowMetadata(t *testing.T) {
+	// Ultra is a Codex workflow. Its inference effort must survive catalog sync,
+	// aliases and group generation instead of silently falling back to max.
+	_, metadata, err := extractUpstreamModelCatalog([]byte(`{"models":[{
+		"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"high"},{"effort":"ultra"}],
+		"multi_agent_reasoning_effort":"high","multi_agent_version":"v2"
+	}]}`), false)
+	require.NoError(t, err)
+	account := Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"base_url": "https://relay.example/v1", "model_mapping": map[string]any{"public-astra": "gpt-6-astra"},
+	}}
+	account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{Models: metadata})
+	body, err := buildCodexModelsManifestForAccounts(PlatformOpenAI, []string{"public-astra"}, []Account{account})
+	require.NoError(t, err)
+	model := decodeCodexManifestModels(t, body)[0]
+	require.Equal(t, "high", model["multi_agent_reasoning_effort"])
+	require.Equal(t, "v2", model["multi_agent_version"])
+	require.Equal(t, []string{"high", "ultra"}, effortsFromManifestModel(t, model))
+
+	peer := Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: account.Credentials}
+	body, err = buildCodexModelsManifestForAccounts(PlatformOpenAI, []string{"public-astra"}, []Account{account, peer})
+	require.NoError(t, err)
+	model = decodeCodexManifestModels(t, body)[0]
+	require.Nil(t, model["multi_agent_reasoning_effort"], "do not advertise one account's override for all peers")
+	require.Nil(t, model["multi_agent_version"])
+}
+
+func TestAstraUltraCatalogPreservesExplicitWorkflowOverrides(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"base_url": "https://relay.example/v1"}}
+	for _, fields := range []string{
+		`"multi_agent_reasoning_effort":"high","multi_agent_version":"v1"`,
+		`"multi_agent_reasoning_effort":null,"multi_agent_version":null`,
+	} {
+		for _, source := range []string{
+			`{"models":[{"slug":"gpt-6-astra",` + fields + `}]}`,
+			`{"data":[{"id":"gpt-6-astra",` + fields + `}]}`,
+		} {
+			converted := convertOpenAIModelListToCodexManifestForAccount([]byte(source), account)
+			body, err := completeAPIKeyCodexModelsManifestMetadata(converted, true, account)
+			require.NoError(t, err)
+			model := decodeCodexManifestModels(t, body)[0]
+			var expected map[string]any
+			require.NoError(t, json.Unmarshal([]byte(`{`+fields+`}`), &expected))
+			for key, value := range expected {
+				require.Contains(t, model, key)
+				require.Equal(t, value, model[key])
+			}
+		}
+	}
+}
+
 func TestAstraCodexToolCapabilitiesUseAccountScopeAndSharedDeclarations(t *testing.T) {
 	newAccount := func(baseURL string) Account {
 		return Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
@@ -664,3 +746,36 @@ func TestAstraCodexToolCapabilitiesKeepAPIKeyResponsesLiteGuard(t *testing.T) {
 }
 
 // Scenario: mixed groups prefer capability metadata synced for the routed account.
+
+func TestOfficialAPIKeyCodexUltrafastPricingDescription(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"base_url": "https://api.openai.com/v1",
+	}}
+	for _, model := range []string{"gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra"} {
+		t.Run(model, func(t *testing.T) {
+			var tiers []configuredCodexServiceTier
+			require.NoError(t, json.Unmarshal(accountCodexToolCapabilities(account, model)["service_tiers"], &tiers))
+			for _, tier := range tiers {
+				if tier.ID == OpenAIFastTierUltrafast {
+					require.Contains(t, tier.Description, "6x Standard token pricing")
+					return
+				}
+			}
+			t.Fatal("Ultra Fast missing from the official API key catalog")
+		})
+	}
+}
+
+func TestOfficialAPIKeyCodexSolUltrafastRequiresAccountMetadata(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"base_url": "https://api.openai.com/v1",
+	}}
+	const model = "gpt-6.1-sol"
+	require.Empty(t, accountCodexToolCapabilities(account, model)["service_tiers"])
+
+	const tiers = `[{"id":"ultrafast","name":"Ultrafast","description":"Discovered provider tier"}]`
+	account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{Models: map[string]UpstreamModelMetadata{
+		model: {CodexToolCapabilities: map[string]json.RawMessage{"service_tiers": json.RawMessage(tiers)}},
+	}})
+	require.JSONEq(t, tiers, string(accountCodexToolCapabilities(account, model)["service_tiers"]))
+}

@@ -86,7 +86,7 @@ func (r *bulkActionSubscriptionRepo) ExistsActiveByUserIDAndGroupID(_ context.Co
 	return false, nil
 }
 
-func (r *bulkActionSubscriptionRepo) Restore(_ context.Context, id int64, status string) (*UserSubscription, error) {
+func (r *bulkActionSubscriptionRepo) Restore(_ context.Context, id int64, status string, _ time.Time) (*UserSubscription, error) {
 	sub := r.subscriptions[id]
 	sub.DeletedAt, sub.Status = nil, status
 	r.mutated(id)

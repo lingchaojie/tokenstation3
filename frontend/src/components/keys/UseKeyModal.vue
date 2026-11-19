@@ -275,7 +275,8 @@ import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildCodexModelCatalogUrl, fetchCodexModelsManifest } from '@/api/codex'
 import type { GroupPlatform } from '@/types'
-import { buildClientConfigFiles } from './clientConfigFiles'
+import { DEFAULT_OPENAI_CLIENT_MODEL } from '@/constants/clientModels'
+import { buildClientConfigFiles, getDefaultCodexAuthMode } from './clientConfigFiles'
 import {
   findCodexCatalogModel,
   parseCodexCatalogModels,
@@ -318,8 +319,8 @@ const { copyToClipboard: clipboardCopy } = useClipboard()
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
-type CodexAuthMode = 'legacy' | 'api-key'
-const codexAuthMode = ref<CodexAuthMode>('legacy')
+const defaultCodexAuthMode = computed(() => getDefaultCodexAuthMode(props.platform ?? undefined))
+const codexAuthMode = ref(defaultCodexAuthMode.value)
 type CodexModelManifestState = 'idle' | 'loading' | 'ready' | 'error'
 const codexModelManifestState = ref<CodexModelManifestState>('idle')
 const codexModelManifestContent = ref('')
@@ -374,12 +375,12 @@ const defaultClientTab = computed(() => {
 watch(() => [props.platform, props.claudeCodeOnly], () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
-  codexAuthMode.value = 'legacy'
+  codexAuthMode.value = defaultCodexAuthMode.value
 }, { immediate: true })
 
 watch(() => props.show, (show) => {
   if (show) {
-    codexAuthMode.value = 'legacy'
+    codexAuthMode.value = defaultCodexAuthMode.value
   } else {
     resetCodexModelManifest()
   }
@@ -553,7 +554,7 @@ const showShellTabs = computed(() =>
 )
 
 const showCodexAuthMode = computed(() =>
-  props.platform === 'openai' &&
+  defaultCodexAuthMode.value === 'api-key' &&
   (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws')
 )
 
@@ -749,7 +750,7 @@ function preferredCodexModel(platform: Props['platform']): string {
     case 'deepseek':
       return 'deepseek-v4-pro'
     default:
-      return 'gpt-5.5'
+      return DEFAULT_OPENAI_CLIENT_MODEL
   }
 }
 
@@ -965,7 +966,7 @@ interface WorkBuddyModelConfig {
 function workBuddyModelsForPlatform(platform: Props['platform']): WorkBuddyModelConfig[] {
   const openAIModels: WorkBuddyModelConfig[] = [
     {
-      id: 'gpt-5.5',
+      id: DEFAULT_OPENAI_CLIENT_MODEL,
       maxInputTokens: 1050000,
       maxOutputTokens: 128000,
       supportsImages: true,
@@ -1113,7 +1114,7 @@ client = OpenAI(
 )
 
 stream = client.responses.create(
-	model="gpt-5.5",
+	model="${DEFAULT_OPENAI_CLIENT_MODEL}",
 	input="Hello, GPT",
 	stream=True,
 )
@@ -1353,6 +1354,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'gpt-5.3-codex-spark': openaiModel('GPT-5.3 Codex Spark', 128000, 32000),
     'gpt-5.2': openaiModel('GPT-5.2', 400000),
     'gpt-6.1-sol': openaiModel('GPT-6.1 Sol', 1050000, 128000, maxReasoningVariants),
+    'gpt-6.1-terra': openaiModel('GPT-6.1 Terra', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
     'gpt-6.2-sol': openaiModel('GPT-6.2 Sol', 1050000, 128000, maxReasoningVariants),
     'gpt-6.2-astra': openaiModel('GPT-6.2 Astra', 1050000, 128000, maxReasoningVariants),
     'gpt-6-sol': openaiModel('GPT-6 Sol', 1050000, 128000, { none: {}, ...maxReasoningVariants }),
@@ -1640,6 +1642,16 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       options: { thinking: { type: 'adaptive' }, effort: 'high' },
       variants: Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max'].map(effort => [effort, { effort }]))
     },
+    'claude-fable-5-2': {
+      ...claudeModel('Claude Fable 5.2', 1000000, 128000, { type: 'adaptive' }),
+      options: { thinking: { type: 'adaptive' }, effort: 'high' },
+      variants: Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max'].map(effort => [effort, { effort }]))
+    },
+    'claude-mythos-5-2': {
+      ...claudeModel('Claude Mythos 5.2', 1000000, 128000, { type: 'adaptive' }),
+      options: { thinking: { type: 'adaptive' }, effort: 'high' },
+      variants: Object.fromEntries(['low', 'medium', 'high', 'xhigh', 'max'].map(effort => [effort, { effort }]))
+    },
     'claude-fable-5-1': claudeAdaptive('Claude Fable 5.1'),
     'claude-fable-5': claudeAdaptive('Claude Fable 5'),
     'claude-mythos-5': claudeAdaptive('Claude Mythos 5'),
@@ -1736,7 +1748,9 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       : undefined
   const defaultModelByPlatform: Record<string, string> = {
     anthropic: 'anthropic/claude-fable-5',
-    openai: 'openai/gpt-5.5',
+    openai: props.platform === 'openai' || props.platform === 'unified'
+      ? `openai/${DEFAULT_OPENAI_CLIENT_MODEL}`
+      : 'openai/gpt-5.5',
     gemini: 'gemini/gemini-2.5-flash',
     'antigravity-claude': 'antigravity-claude/claude-fable-5',
     'antigravity-gemini': 'antigravity-gemini/gemini-2.5-flash'

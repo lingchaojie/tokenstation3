@@ -23,7 +23,9 @@ func TestProviderLineReaderDeliversQueuedProviderDataBeforeIdleTimeout(t *testin
 		events := make(chan providerLineScanEvent, 1)
 		events <- providerLineScanEvent{line: "second"}
 		timer := time.NewTimer(0)
-		reader := &providerLineReader{events: events, timer: timer, timerCh: timer.C}
+		budget := newSSEQueueBudget(nil)
+		require.True(t, budget.acquire(len("second"), nil))
+		reader := &providerLineReader{events: events, timer: timer, timerCh: timer.C, queueBudget: budget}
 
 		line, ok, err := reader.Next()
 		timer.Stop()
@@ -262,4 +264,32 @@ func TestProviderLineReaderScannerLimitDrainsUnreadFiniteTailBeforeCapture(t *te
 	require.True(t, ok)
 	require.Equal(t, providerBody, capture.Response)
 	require.False(t, capture.ResponseTruncated)
+}
+
+func TestProviderLineReaderCollectsTailAcrossQueueBudget(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.SSEQueueMaxBytes = 5
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader("alpha\nbeta\n"))}
+	reader := newProviderLineReader(resp, cfg, nil)
+	require.Eventually(t, func() bool { return len(reader.events) == 1 }, time.Second, time.Millisecond)
+
+	type result struct {
+		lines []string
+		err   error
+	}
+	collected := make(chan result, 1)
+	go func() {
+		lines, err := reader.CloseAndCollectBufferedTail()
+		collected <- result{lines, err}
+	}()
+	select {
+	case got := <-collected:
+		require.NoError(t, got.err)
+		require.Equal(t, []string{"alpha", "beta"}, got.lines)
+		require.Zero(t, reader.queueBudget.used.Load())
+	case <-time.After(2 * time.Second):
+		// Unblock the scanner even if the regression leaves its queue full.
+		reader.queueBudget.release(len("alpha"))
+		t.Fatal("timed out collecting buffered provider tail")
+	}
 }

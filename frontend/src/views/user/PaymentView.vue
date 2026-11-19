@@ -15,18 +15,23 @@
         <!-- Payment in progress (shared by recharge and subscription) -->
         <template v-if="paymentPhase === 'paying'">
           <PaymentStatusPanel
+            :key="paymentState.orderId"
             :order-id="paymentState.orderId"
             :amount="paymentState.amount"
             :pay-amount="paymentState.payAmount"
             :qr-code="paymentState.qrCode"
             :expires-at="paymentState.expiresAt"
             :payment-type="paymentState.paymentType"
+            :provider-key="paymentState.providerKey"
+            :confirmation-pending="paymentState.confirmationPending"
             :pay-url="paymentState.payUrl"
             :order-type="paymentState.orderType"
             :currency="paymentState.currency || selectedCurrency"
             @done="onPaymentDone"
             @success="onPaymentSuccess"
             @settled="onPaymentSettled"
+            @confirmation-pending="onPaymentConfirmationPending"
+            @unavailable="resetPayment"
           />
         </template>
         <!-- Tab content (select phase) -->
@@ -336,7 +341,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -348,6 +353,7 @@ import { useSubscriptionStore } from '@/stores/subscriptions'
 import { useAppStore } from '@/stores'
 import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import { paymentAPI } from '@/api/payment'
+import { captureStoredUserIdentity, getStoredUserID } from '@/api/tokenRefresh'
 import { userAPI } from '@/api/user'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
@@ -361,12 +367,15 @@ import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   buildCreateOrderPayload,
   clearPaymentRecoverySnapshot,
+  createPaymentRecoverySnapshot,
   decidePaymentLaunch,
   getVisibleMethods,
+  isPaymentRecoveryUnavailable,
   normalizeVisibleMethod,
   readPaymentRecoverySnapshot,
   type PaymentRecoverySnapshot,
   writePaymentRecoverySnapshot,
+  writeStripePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
 import {
   displayMonthlyPlanName,
@@ -612,15 +621,27 @@ async function invokeWechatJsapiPayment(payload: Record<string, unknown>): Promi
 }
 
 const paymentState = ref<PaymentRecoverySnapshot>(emptyPaymentState())
+const checkoutOwnerId = getStoredUserID() ?? authStore.user?.id
+const isCheckoutUser = captureStoredUserIdentity()
+let disposed = false
+let activeRecoveryRaw: string | null = null
 
-function persistRecoverySnapshot(snapshot: PaymentRecoverySnapshot) {
-  if (typeof window === 'undefined' || !snapshot.orderId) return
-  writePaymentRecoverySnapshot(window.localStorage, snapshot, PAYMENT_RECOVERY_STORAGE_KEY)
+function isCurrentCheckout() {
+  return !disposed && isCheckoutUser()
+}
+
+function persistRecoverySnapshot(snapshot: PaymentRecoverySnapshot, update = false) {
+  if (!isCurrentCheckout() || !snapshot.orderId) return
+  const storage = window.localStorage
+  if (update && storage.getItem(PAYMENT_RECOVERY_STORAGE_KEY) !== activeRecoveryRaw) return
+  writePaymentRecoverySnapshot(storage, { ...snapshot, ownerId: checkoutOwnerId })
+  activeRecoveryRaw = storage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)
 }
 
 function removeRecoverySnapshot() {
-  if (typeof window === 'undefined') return
+  if (!activeRecoveryRaw || window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY) !== activeRecoveryRaw) return
   clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+  activeRecoveryRaw = null
 }
 
 function resetPayment() {
@@ -704,6 +725,11 @@ async function onPaymentSuccess() {
 
 function onPaymentSettled() {
   removeRecoverySnapshot()
+}
+
+function onPaymentConfirmationPending() {
+  paymentState.value = { ...paymentState.value, confirmationPending: true, payUrl: '', qrCode: '' }
+  persistRecoverySnapshot(paymentState.value, true)
 }
 
 // All checkout data from single API call
@@ -1092,6 +1118,7 @@ async function confirmSubscribe() {
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {
+  if (!isCurrentCheckout()) return
   submitting.value = true
   errorMessage.value = ''
   errorHintMessage.value = ''
@@ -1115,6 +1142,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     }
 
     const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
+    if (!isCurrentCheckout()) return
     const openWindow = (url: string) => {
       const win = window.open(url, 'paymentPopup', getPaymentPopupFeatures())
       if (!win || win.closed) {
@@ -1132,7 +1160,6 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         path: '/payment/stripe',
         query: {
           order_id: String(result.order_id),
-          client_secret: result.client_secret,
           method: stripeMethod || undefined,
           resume_token: result.resume_token || undefined,
         },
@@ -1178,6 +1205,9 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     paymentPhase.value = 'paying'
     persistRecoverySnapshot(decision.recovery)
 
+    if (decision.kind === 'stripe_popup' || decision.kind === 'stripe_route') {
+      writeStripePaymentRecoverySnapshot(window.localStorage, { ...decision.recovery, ownerId: checkoutOwnerId })
+    }
     if (decision.kind === 'stripe_popup') {
       openWindow(decision.paymentState.payUrl)
       return
@@ -1193,6 +1223,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     if (decision.kind === 'wechat_jsapi' && decision.jsapi) {
       try {
         const jsapiResult = await invokeWechatJsapiPayment(decision.jsapi as Record<string, unknown>)
+        if (!isCurrentCheckout()) return
         const errMsg = String(jsapiResult.err_msg || '').toLowerCase()
         if (errMsg.includes('cancel')) {
           appStore.showInfo(t('payment.qr.cancelled'))
@@ -1218,6 +1249,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
           await redirectToPaymentResult(resultState)
         }
       } catch (err: unknown) {
+        if (!isCurrentCheckout()) return
         resetPayment()
         const fallbackApplied = await attemptMobileQrFallback(err, {
           orderAmount,
@@ -1240,6 +1272,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       openWindow(decision.paymentState.payUrl)
     }
   } catch (err: unknown) {
+    if (!isCurrentCheckout()) return
     const apiErr = err as Record<string, unknown>
     if (apiErr.reason === 'TOO_MANY_PENDING') {
       const metadata = apiErr.metadata as Record<string, unknown> | undefined
@@ -1317,7 +1350,7 @@ function shouldFallbackToDesktopQr(err: unknown, paymentMethod: string, attempte
 }
 
 async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackContext): Promise<boolean> {
-  if (!shouldFallbackToDesktopQr(err, context.paymentType, context.attempted)) {
+  if (!isCurrentCheckout() || !shouldFallbackToDesktopQr(err, context.paymentType, context.attempted)) {
     return false
   }
 
@@ -1333,13 +1366,13 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       isWechatBrowser: false,
     })
     const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
+    if (!isCurrentCheckout()) return false
     const stripeMethod = visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
     const stripeRouteUrl = result.client_secret
       ? router.resolve({
         path: '/payment/stripe',
         query: {
           order_id: String(result.order_id),
-          client_secret: result.client_secret,
           method: stripeMethod,
           resume_token: result.resume_token || undefined,
         },
@@ -1440,9 +1473,78 @@ async function resumeWechatPaymentFromQuery() {
   }
 }
 
+async function restoreRecoverySnapshot(wechatResume: boolean) {
+  const storage = window.localStorage
+  const raw = storage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)
+  const requestedId = wechatResume ? 0 : Number(queryStringValue(route.query.order_id))
+  const explicitId = Number.isSafeInteger(requestedId) && requestedId > 0 ? requestedId : 0
+  const current = readPaymentRecoverySnapshot(raw, {
+    ownerId: checkoutOwnerId,
+    resumeToken: typeof route.query.resume_token === 'string' ? route.query.resume_token : undefined,
+    allowExpiredConfirmation: true,
+  })
+  let restored = !explicitId || current?.orderId === explicitId ? current : null
+  const orderId = explicitId || restored?.orderId
+  if (!orderId || !checkoutOwnerId || !isCurrentCheckout()) return
+
+  if (restored?.ownerId === checkoutOwnerId) {
+    activeRecoveryRaw = raw
+    if (wechatResume) {
+      removeRecoverySnapshot()
+      return
+    }
+  }
+  try {
+    const { data: order } = await paymentAPI.getOrder(orderId)
+    if (!isCurrentCheckout()) return
+    const rawUnchanged = storage.getItem(PAYMENT_RECOVERY_STORAGE_KEY) === raw
+    if (!explicitId && !rawUnchanged) return
+    if (order.id !== orderId || order.user_id !== checkoutOwnerId) return
+    if (restored?.outTradeNo && restored.outTradeNo !== order.out_trade_no) {
+      if (!explicitId) return
+      restored = null
+    }
+
+    activeRecoveryRaw = restored && rawUnchanged ? raw : null
+    if (wechatResume || order.status !== 'PENDING') {
+      removeRecoverySnapshot()
+      return
+    }
+
+    const confirmationPending = order.confirmation_pending === true || restored?.confirmationPending === true
+    if (!restored && !confirmationPending && !order.qr_code && !order.pay_url) return
+    paymentState.value = createPaymentRecoverySnapshot({
+      ...emptyPaymentState(), ...restored, ownerId: checkoutOwnerId,
+      orderId, amount: order.amount ?? restored?.amount ?? 0, payAmount: order.pay_amount ?? restored?.payAmount ?? 0,
+      outTradeNo: order.out_trade_no, paymentType: order.payment_type || restored?.paymentType || '',
+      providerKey: order.provider_key || restored?.providerKey, confirmationPending,
+      expiresAt: order.expires_at || restored?.expiresAt || '', orderType: order.order_type || restored?.orderType || '',
+      currency: order.currency || restored?.currency || '', paymentMode: order.payment_mode || restored?.paymentMode || '',
+      payUrl: confirmationPending ? '' : order.pay_url || restored?.payUrl || '',
+      qrCode: confirmationPending ? '' : order.qr_code || restored?.qrCode || '',
+    }, restored?.createdAt)
+    persistRecoverySnapshot(paymentState.value, true)
+    paymentPhase.value = 'paying'
+    const method = paymentState.value.paymentType
+    const restoredMethod = normalizeVisibleMethod(method) || (visibleMethods.value[method] ? method : '')
+    if (restoredMethod) selectedMethod.value = restoredMethod
+  } catch (error) {
+    if (isCurrentCheckout() && isPaymentRecoveryUnavailable(error)) removeRecoverySnapshot()
+  }
+}
+
+function onCheckoutStorage() {
+  if (!isCheckoutUser()) {
+    activeRecoveryRaw = null
+    resetPayment()
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('storage', onCheckoutStorage)
   try {
     const res = await paymentAPI.getCheckoutInfo()
+    if (!isCurrentCheckout()) return
     checkout.value = res.data
     if (enabledMethods.value.length) {
       const order: readonly string[] = METHOD_ORDER
@@ -1453,32 +1555,10 @@ onMounted(async () => {
       })
       selectedMethod.value = sorted[0]
     }
-    if (typeof window !== 'undefined') {
-      if (hasWechatResumeQuery(route.query)) {
-        removeRecoverySnapshot()
-      }
-      const routeResumeToken = typeof route.query.resume_token === 'string'
-        ? route.query.resume_token
-        : typeof route.query.wechat_resume_token === 'string'
-          ? route.query.wechat_resume_token
-          : undefined
-      const restored = readPaymentRecoverySnapshot(
-        window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY),
-        { resumeToken: routeResumeToken },
-      )
-      if (restored) {
-        paymentState.value = restored
-        paymentPhase.value = 'paying'
-        const restoredMethod = normalizeVisibleMethod(restored.paymentType)
-          || (visibleMethods.value[restored.paymentType] ? restored.paymentType : '')
-        if (restoredMethod) {
-          selectedMethod.value = restoredMethod
-        }
-      } else {
-        removeRecoverySnapshot()
-      }
-    }
+    await restoreRecoverySnapshot(hasWechatResumeQuery(route.query))
+    if (!isCurrentCheckout()) return
     await subscriptionStore.fetchActiveSubscriptions()
+    if (!isCurrentCheckout()) return
     await resumeWechatPaymentFromQuery()
     if (checkout.value.balance_disabled && subscriptionEnabled.value) {
       activeTab.value = 'subscription'
@@ -1497,5 +1577,10 @@ onMounted(async () => {
     }
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
   finally { loading.value = false }
+})
+
+onUnmounted(() => {
+  disposed = true
+  window.removeEventListener('storage', onCheckoutStorage)
 })
 </script>

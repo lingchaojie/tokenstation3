@@ -11,10 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type userStoreUnavailableRepoStub struct{}
@@ -208,6 +210,77 @@ func TestExecuteUserIdempotentJSONFallbackWithoutCoordinator(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 1, executed)
+}
+
+type replayAPIKeyRepo struct {
+	service.APIKeyRepository
+	group   *service.Group
+	created int
+}
+
+func (r *replayAPIKeyRepo) Create(_ context.Context, key *service.APIKey) error {
+	r.created++
+	key.ID = int64(r.created)
+	key.Group = r.group
+	return nil
+}
+
+type replayAPIKeyUserRepo struct {
+	service.UserRepository
+}
+
+func (r replayAPIKeyUserRepo) GetByID(_ context.Context, id int64) (*service.User, error) {
+	return &service.User{ID: id}, nil
+}
+
+type replayAPIKeyGroupRepo struct {
+	service.GroupRepository
+	group *service.Group
+}
+
+func (r replayAPIKeyGroupRepo) GetByID(_ context.Context, _ int64) (*service.Group, error) {
+	return r.group, nil
+}
+
+func (r replayAPIKeyGroupRepo) GetDefaultAPIKeyGroupID(_ context.Context, _ string) (*int64, error) {
+	return &r.group.ID, nil
+}
+
+func TestAPIKeyCreateReplayLocalizesTheStoredGroupForEachRequest(t *testing.T) {
+	previous := service.DefaultIdempotencyCoordinator()
+	t.Cleanup(func() { service.SetDefaultIdempotencyCoordinator(previous) })
+	service.SetDefaultIdempotencyCoordinator(service.NewIdempotencyCoordinator(newUserMemoryIdempotencyRepoStub(), service.DefaultIdempotencyConfig()))
+	group := &service.Group{
+		ID: 2, Status: service.StatusActive, Platform: service.PlatformOpenAI,
+		Name: "Default", Description: "Default group",
+		I18n: service.GroupI18n{"en": {Name: "Example", Description: "Example group"}, "zh-CN": {Name: "示例", Description: "示例分组"}},
+	}
+	repo := &replayAPIKeyRepo{group: group}
+	groups := replayAPIKeyGroupRepo{group: group}
+	apiKeyService := service.NewAPIKeyService(repo, replayAPIKeyUserRepo{}, groups, nil, nil, nil, &config.Config{})
+	apiKeyService.SetProviderRouting(nil, groups)
+	router := gin.New()
+	router.Use(withUserSubject(1))
+	router.POST("/api/v1/api-keys", NewAPIKeyHandler(apiKeyService).Create)
+	for i, tc := range []struct{ language, name, description string }{
+		{"en", "Example", "Example group"},
+		{"zh-CN", "示例", "示例分组"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/api-keys", bytes.NewBufferString(`{"name":"example","key_type":"openai"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "same-key")
+		req.Header.Set("Accept-Language", tc.language)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.Equal(t, i == 1, w.Header().Get("X-Idempotency-Replayed") == "true")
+		require.Contains(t, w.Header().Get("Vary"), "Accept-Language")
+		require.Equal(t, group.ID, gjson.GetBytes(w.Body.Bytes(), "data.group_id").Int())
+		require.Equal(t, tc.name, gjson.GetBytes(w.Body.Bytes(), "data.group.name").String())
+		require.Equal(t, tc.description, gjson.GetBytes(w.Body.Bytes(), "data.group.description").String())
+		require.False(t, gjson.GetBytes(w.Body.Bytes(), "data.group.i18n").Exists())
+	}
+	require.Equal(t, 1, repo.created)
 }
 
 func TestExecuteUserIdempotentJSONFailCloseOnStoreUnavailable(t *testing.T) {

@@ -1769,7 +1769,7 @@ func TestHandleAnthropicStreamingResponseRejectsBufferedPartialTailAfterTerminal
 				result, err := svc.handleAnthropicStreamingResponse(
 					resp, c,
 					&Account{ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI},
-					"gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", time.Now(),
+					"gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", time.Now(), nil,
 				)
 				resultCh <- outcome{result: result, err: err}
 			}()
@@ -2068,7 +2068,7 @@ func TestForwardAsAnthropic_BufferedEventNamedTerminalWithoutUpstreamCloseReturn
 	}
 }
 
-func TestForwardAsAnthropic_MissingUsageBeforeOutputReturnsBillingErrorWithoutFailover(t *testing.T) {
+func TestForwardAsAnthropic_MissingTerminalBeforeOutputFailsOver(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -2097,18 +2097,14 @@ func TestForwardAsAnthropic_MissingUsageBeforeOutputReturnsBillingErrorWithoutFa
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
-	require.ErrorContains(t, err, "upstream response missing billable usage")
 	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr), "missing usage is a billing error, not a reason to replay the request")
-	require.NotNil(t, result)
-	require.True(t, result.UpstreamFailed)
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
 	require.False(t, c.Writer.Written(), "no client body/header should be committed before safe failover")
 	require.Empty(t, rec.Body.String())
-	_, hasOpsErrors := c.Get(OpsUpstreamErrorsKey)
-	require.False(t, hasOpsErrors, "missing usage is recorded by the request error path, not as an upstream protocol error")
 }
 
-func TestForwardAsAnthropic_MissingUsageAfterOutputReturnsBillingErrorWithoutFailover(t *testing.T) {
+func TestForwardAsAnthropic_CompletedAfterOutputWithoutUsageReturnsBillingError(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -2121,10 +2117,12 @@ func TestForwardAsAnthropic_MissingUsageAfterOutputReturnsBillingErrorWithoutFai
 		"",
 		`data: {"type":"response.output_text.delta","delta":"partial"}`,
 		"",
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0}}}`,
+		"",
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_partial_missing_terminal"}},
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_complete_missing_usage"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
 
@@ -2148,22 +2146,26 @@ func TestForwardAsAnthropic_MissingUsageAfterOutputReturnsBillingErrorWithoutFai
 	require.NotNil(t, result)
 	require.True(t, result.UpstreamFailed)
 	require.False(t, result.ClientDisconnect)
-	require.False(t, result.CaptureResponseComplete, "clean EOF and missing usage must not synthesize provider completion")
+	require.True(t, result.CaptureResponseComplete)
 	require.True(t, c.Writer.Written())
 	require.Contains(t, rec.Body.String(), "event: message_start")
 	require.Contains(t, rec.Body.String(), "partial")
+	require.Contains(t, rec.Body.String(), "event: message_stop")
 
 	_, hasOpsErrors := c.Get(OpsUpstreamErrorsKey)
-	require.False(t, hasOpsErrors, "missing terminal is not an upstream protocol error")
+	require.False(t, hasOpsErrors, "missing usage is recorded by the billing error path")
 }
 
-func TestForwardAsAnthropic_MissingUsageAfterClientDisconnectReturnsBillingErrorWithoutFailover(t *testing.T) {
+func TestForwardAsAnthropic_CompletedAfterClientDisconnectWithoutUsageReturnsBillingError(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Writer = &openAICompatFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
 	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	// A real disconnect also cancels the request context.
+	reqCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body)).WithContext(reqCtx)
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	upstreamBody := strings.Join([]string{
@@ -2171,10 +2173,12 @@ func TestForwardAsAnthropic_MissingUsageAfterClientDisconnectReturnsBillingError
 		"",
 		`data: {"type":"response.output_text.delta","delta":"partial"}`,
 		"",
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0}}}`,
+		"",
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_client_disconnect_missing_terminal"}},
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_client_disconnect_missing_usage"}},
 		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
 

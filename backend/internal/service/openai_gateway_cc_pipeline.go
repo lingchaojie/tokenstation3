@@ -34,6 +34,22 @@ import (
 // （GLM effort 归一化、fast policy、Grok 分支、ClientDisconnect 语义等）仍留在
 // 调用方，属于有意保留的行为差异，不在此强行统一。
 
+// flushBeforeUpstreamRead 在扫描器向上游读取新数据之前调用 flush。
+//
+// bufio.Scanner 只在缓冲里没有完整行时才调用 Read，所以 flush 恰好发生在
+// "要等上游下一批数据"之前：已经到达的行不会被延后写给客户端，而同一次读取里
+// 到达的多行（data 行与事件间空行、一次到达的多个事件）合并成一次 flush，
+// 不再每行一次写系统调用。
+type flushBeforeUpstreamRead struct {
+	r     io.Reader
+	flush func()
+}
+
+func (f *flushBeforeUpstreamRead) Read(p []byte) (int, error) {
+	f.flush()
+	return f.r.Read(p)
+}
+
 // newUpstreamSSEScanner 构造读取上游 SSE 流的行扫描器，按配置放大单行上限。
 func resolveUpstreamSSEEventLimit(cfg *config.Config) int64 {
 	maxLineSize := defaultMaxLineSize
@@ -58,7 +74,7 @@ func (s *OpenAIGatewayService) newUpstreamSSEScanner(r io.Reader) *bufio.Scanner
 	scanner := bufio.NewScanner(r)
 	maxLineSize := int(resolveUpstreamSSEEventLimit(s.cfg))
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
-	scanner.Split(boundedStreamScanLines(maxLineSize, errStreamScannerTokenLimit))
+	scanner.Split(newBoundedSSESplit(s.cfg, maxLineSize, boundedStreamScanLines(maxLineSize, errStreamScannerTokenLimit)))
 	return scanner
 }
 
@@ -87,13 +103,18 @@ func (s *OpenAIGatewayService) newStreamHeaderWriter(c *gin.Context, upstream ht
 // （下游 handleXxxErrorResponse 需要再次读取），返回原始错误体与脱敏后的
 // 上游错误消息。
 func (s *OpenAIGatewayService) readOpenAIUpstreamError(resp *http.Response) ([]byte, string) {
-	respBody, responseComplete := s.readUpstreamErrorBodyWithCompleteness(resp)
+	respBody, upstreamMsg, _ := s.readOpenAIUpstreamErrorWithCompleteness(resp, false)
+	return respBody, upstreamMsg
+}
+
+func (s *OpenAIGatewayService) readOpenAIUpstreamErrorWithCompleteness(resp *http.Response, probeExactLimit bool) ([]byte, string, bool) {
+	respBody, responseComplete := s.readBoundedUpstreamErrorBody(resp, probeExactLimit)
 	_ = resp.Body.Close()
 	resp.Body = replayOpenAIUpstreamErrorBody(respBody, responseComplete)
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-	return respBody, upstreamMsg
+	return respBody, upstreamMsg, responseComplete
 }
 
 // failoverOpenAIUpstreamHTTPError 对 >=400 的上游响应做 failover 判定：命中时

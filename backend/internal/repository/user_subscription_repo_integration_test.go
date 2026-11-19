@@ -232,7 +232,10 @@ func (s *UserSubscriptionRepoSuite) TestRestore() {
 
 	s.Require().NoError(s.repo.Delete(s.ctx, sub.ID), "Delete")
 
-	restored, err := s.repo.Restore(s.ctx, sub.ID, service.SubscriptionStatusExpired)
+	revoked, err := s.repo.GetByIDIncludeDeleted(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(revoked.DeletedAt)
+	restored, err := s.repo.Restore(s.ctx, sub.ID, service.SubscriptionStatusExpired, *revoked.DeletedAt)
 	s.Require().NoError(err, "Restore")
 	s.Require().Equal(service.SubscriptionStatusExpired, restored.Status)
 	s.Require().Nil(restored.DeletedAt)
@@ -241,6 +244,36 @@ func (s *UserSubscriptionRepoSuite) TestRestore() {
 	s.Require().NoError(err, "GetByID after restore")
 	s.Require().Nil(got.DeletedAt)
 	s.Require().Equal(service.SubscriptionStatusExpired, got.Status)
+}
+
+func (s *UserSubscriptionRepoSuite) TestRestoreDoesNotOverwriteConcurrentRestore() {
+	usr := s.mustCreateUser("concurrent-restore@test.com", service.RoleUser)
+	group := s.mustCreateGroup("g-concurrent-restore")
+	sub := s.mustCreateSubscription(usr.ID, group.ID, nil)
+	s.Require().NoError(s.repo.Delete(s.ctx, sub.ID))
+	observed, err := s.repo.GetByIDIncludeDeleted(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(observed.DeletedAt)
+
+	_, err = s.repo.Restore(s.ctx, sub.ID, service.SubscriptionStatusActive, *observed.DeletedAt)
+	s.Require().NoError(err)
+	_, err = s.repo.Restore(s.ctx, sub.ID, service.SubscriptionStatusExpired, *observed.DeletedAt)
+	s.Require().ErrorIs(err, service.ErrSubscriptionNotRevoked)
+
+	current, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.SubscriptionStatusActive, current.Status)
+
+	// Revoking the same subscription again creates a different generation.
+	newDeletion := observed.DeletedAt.Add(time.Second)
+	s.Require().NoError(s.client.UserSubscription.UpdateOneID(sub.ID).SetDeletedAt(newDeletion).Exec(s.ctx))
+	_, err = s.repo.Restore(s.ctx, sub.ID, service.SubscriptionStatusExpired, *observed.DeletedAt)
+	s.Require().ErrorIs(err, service.ErrSubscriptionNotRevoked)
+	current, err = s.repo.GetByIDIncludeDeleted(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(current.DeletedAt)
+	s.Require().True(current.DeletedAt.Equal(newDeletion))
+	s.Require().Equal(service.SubscriptionStatusActive, current.Status)
 }
 
 func (s *UserSubscriptionRepoSuite) TestDelete_Idempotent() {

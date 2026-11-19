@@ -48,6 +48,8 @@ type CNQuotaTier struct {
 	Window      string  `json:"window"`             // "5h" | "weekly" | "monthly"
 	UsedPercent float64 `json:"used_percent"`       // 已用百分比（0-100+，不做裁剪）
 	ResetAt     string  `json:"reset_at,omitempty"` // RFC3339，空表示无重置时间
+
+	resetMalformed bool
 }
 
 // CNProviderQuotaProbeResult 是 Coding Plan 额度探测的返回结构（管理端 + UI 消费）。
@@ -257,14 +259,16 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 	}
 
 	var tiers []CNQuotaTier
+	var reportedWindows map[string]bool
 	switch provider {
 	case PlatformKimi:
 		tiers = parseKimiUsageTiers(bodyBytes)
+		reportedWindows = kimiReportedQuotaWindows(bodyBytes)
 	case PlatformOpenCodeGo:
-		tiers = parseOpenCodeGoUsageTiers(bodyBytes)
+		tiers, reportedWindows = parseOpenCodeGoUsageTiers(bodyBytes)
 		result.PlanLevel = "OpenCode Go"
 	case PlatformZhipu:
-		tiers = parseZhipuTokenTiers(gjson.GetBytes(bodyBytes, "data"))
+		tiers, reportedWindows = parseZhipuTokenTiers(gjson.GetBytes(bodyBytes, "data"))
 		result.PlanLevel = strings.TrimSpace(gjson.GetBytes(bodyBytes, "data.level").String())
 	case PlatformMiniMax:
 		if status := gjson.GetBytes(bodyBytes, "base_resp.status_code"); status.Exists() && status.Int() != 0 {
@@ -275,7 +279,7 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 			result.Error = fmt.Sprintf("API error (%d): %s", status.Int(), msg)
 			return result, nil
 		}
-		tiers = parseMiniMaxUsageTiers(bodyBytes)
+		tiers, reportedWindows = parseMiniMaxUsageTiers(bodyBytes)
 		result.PlanLevel = strings.TrimSpace(gjson.GetBytes(bodyBytes, "current_subscribe_title").String())
 	}
 	if len(tiers) == 0 {
@@ -283,10 +287,27 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 		return result, nil
 	}
 	result.Tiers = tiers
+	// 2xx 但一个可用窗口都解析不出来，通常意味着上游报文改版/字段改名，而不是
+	// 「额度无限」。必须按失败处理：保留旧快照、不写成功时间；否则下面的缺席
+	// 清理会把 5h/weekly/monthly 全写 nil，调度层看到「没有窗口」就会解除预停调，
+	// 让仍处于耗尽的账号回池撞 429。
+	if len(tiers) == 0 {
+		result.Error = fmt.Sprintf(
+			"quota response for %s contains no recognized usage window (upstream schema may have changed); keeping the previous snapshot",
+			provider)
+		slog.Warn("cn_quota_no_recognized_window",
+			"account_id", account.ID, "provider", provider, "http_status", resp.StatusCode)
+		return result, nil
+	}
 	result.Success = true
 	result.CredentialValid = true
 
 	updates := cnQuotaExtraUpdates(provider, tiers, now)
+	// 只对 5h/weekly/monthly 三档通吃的供应商清理缺席窗口；Command Code 与
+	// Cline 走各自的取舍（抓取失败时保留月度），不在这里处理。
+	if provider == PlatformKimi || provider == PlatformZhipu || provider == PlatformMiniMax || provider == PlatformOpenCodeGo {
+		clearAbsentCNQuotaWindows(provider, tiers, updates, reportedWindows)
+	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
 		slog.Warn("cn_quota_persist_failed", "account_id", account.ID, "provider", provider, "error", err)
 	} else {
@@ -394,70 +415,130 @@ func zhipuQuotaHost(baseURL string) string {
 
 // parseKimiUsageTiers 解析 Kimi For Coding 的 /usages 响应。
 //
-//   - limits[].detail.{limit,remaining,resetTime} → 5h 窗口（取首个 detail）
-//   - usage.{limit,remaining,resetTime} → 周窗口
+// Kimi 目前并存两种套餐形态：
 //
-// utilization = (limit-remaining)/limit*100。
+//   - 老套餐（5h + 7d）：limits[].detail.{limit,remaining,resetTime} → 5h
+//     （取首个 detail），顶层 usage.{limit,remaining,resetTime} → 周窗口，
+//     utilization = (limit-remaining)/limit*100。
+//   - 新套餐（5h + 月度）：不再有顶层 usage，改由 usages.limit_5h /
+//     usages.limit_7d / usages.limit_month_total / usages.limit_month_code
+//     以 used_ratio（0-1）+ reset_time 上报。月度 total 与 code 任一耗尽都会
+//     限流，因此 monthly 取两者较大用量、较早重置时间。
+//
+// 两者同时出现时 used_ratio 优先（比 counts 更贴近官方口径），顶层 usage 仅兜底；
+// usages.limit_5h 只在 limits[] 没有 detail 时补位，避免重复产出 5h 档。
 func parseKimiUsageTiers(body []byte) []CNQuotaTier {
 	var tiers []CNQuotaTier
+	usages := gjson.GetBytes(body, "usages")
 
+	hasFiveHour := false
 	if limits := gjson.GetBytes(body, "limits"); limits.IsArray() {
 		limits.ForEach(func(_, item gjson.Result) bool {
 			detail := item.Get("detail")
 			if !detail.Exists() {
 				return true
 			}
-			limitResult := detail.Get("limit")
-			remainingResult := detail.Get("remaining")
-			limit, limitOK := cnParseF64(limitResult.Value())
-			remaining, remainingOK := cnParseF64(remainingResult.Value())
-			if !limitResult.Exists() || !remainingResult.Exists() || !limitOK || !remainingOK ||
-				math.IsNaN(limit) || math.IsInf(limit, 0) || math.IsNaN(remaining) || math.IsInf(remaining, 0) ||
-				limit < 0 || remaining < 0 {
+			// 字段节点存在不等于数值可信：limit/remaining 必须可解析、limit>0、
+			// remaining 落在 [0, limit]，否则跳过该条（`{"detail":{}}` 或 limit=0
+			// 不能产出一个「已用 0%」的伪窗口，那会掩盖真实的额度耗尽状态）。
+			limit, okLimit := cnParseF64(detail.Get("limit").Value())
+			remaining, okRemaining := cnParseF64(detail.Get("remaining").Value())
+			if !okLimit || !okRemaining || math.IsNaN(limit) || math.IsInf(limit, 0) ||
+				math.IsNaN(remaining) || math.IsInf(remaining, 0) || limit <= 0 || remaining < 0 || remaining > limit {
 				return true
 			}
-			used := limit - remaining
-			if used < 0 {
-				used = 0
-			}
-			var util float64
-			if limit > 0 {
-				util = used / limit * 100
-			}
-			tiers = append(tiers, CNQuotaTier{
-				Window:      "5h",
-				UsedPercent: util,
-				ResetAt:     cnNormalizeResetTime(detail.Get("resetTime").Value()),
-			})
-			return false // 取首个 detail 作为 5h 窗口
+			util := (limit - remaining) / limit * 100
+			reset := detail.Get("resetTime")
+			tiers = append(tiers, cnQuotaTierWithReset("5h", util, reset, cnNormalizeResetTime(reset.Value())))
+			hasFiveHour = true
+			return false // 取首个有效 detail 作为 5h 窗口
 		})
 	}
-
-	if usage := gjson.GetBytes(body, "usage"); usage.Exists() {
-		limitResult := usage.Get("limit")
-		remainingResult := usage.Get("remaining")
-		limit, limitOK := cnParseF64(limitResult.Value())
-		remaining, remainingOK := cnParseF64(remainingResult.Value())
-		if limitResult.Exists() && remainingResult.Exists() && limitOK && remainingOK &&
-			!math.IsNaN(limit) && !math.IsInf(limit, 0) && !math.IsNaN(remaining) && !math.IsInf(remaining, 0) &&
-			limit >= 0 && remaining >= 0 {
-			used := limit - remaining
-			if used < 0 {
-				used = 0
-			}
-			var util float64
-			if limit > 0 {
-				util = used / limit * 100
-			}
-			tiers = append(tiers, CNQuotaTier{
-				Window:      "weekly",
-				UsedPercent: util,
-				ResetAt:     cnNormalizeResetTime(usage.Get("resetTime").Value()),
-			})
+	if !hasFiveHour {
+		if tier, ok := kimiUsedRatioTier(usages.Get("limit_5h"), "5h"); ok {
+			tiers = append(tiers, tier)
+			hasFiveHour = true
 		}
 	}
 
+	// 周窗口：usages.limit_7d 优先，顶层 usage（老套餐单数）兜底。
+	if tier, ok := kimiUsedRatioTier(usages.Get("limit_7d"), "weekly"); ok {
+		tiers = append(tiers, tier)
+	} else if usage := gjson.GetBytes(body, "usage"); usage.Exists() {
+		limit, okLimit := cnParseF64(usage.Get("limit").Value())
+		remaining, okRemaining := cnParseF64(usage.Get("remaining").Value())
+		if okLimit && okRemaining && !math.IsNaN(limit) && !math.IsInf(limit, 0) &&
+			!math.IsNaN(remaining) && !math.IsInf(remaining, 0) && limit > 0 && remaining >= 0 && remaining <= limit {
+			reset := usage.Get("resetTime")
+			tiers = append(tiers, cnQuotaTierWithReset("weekly", (limit-remaining)/limit*100, reset, cnNormalizeResetTime(reset.Value())))
+		}
+	}
+
+	// 月度限额（新套餐）：total 与 code 是两个**独立**的限流窗口，任一耗尽都会限流。
+	// 用量取两者较大值；重置时间取**较晚**者——取较早会在另一个窗口仍耗尽时提前
+	// 解除预停调（例如 total 到 11-26 才恢复、code 到 11-20 恢复）。宁可晚回池，
+	// 不可提前撞 429。
+	totalWindow, codeWindow := usages.Get("limit_month_total"), usages.Get("limit_month_code")
+	total, hasTotal := kimiUsedRatioTier(totalWindow, "monthly")
+	code, hasCode := kimiUsedRatioTier(codeWindow, "monthly")
+	// Both are independent limits. A valid subwindow cannot replace an
+	// exhausted sibling whose value was present but unreadable.
+	if (totalWindow.Exists() && !hasTotal) || (codeWindow.Exists() && !hasCode) {
+		return tiers
+	}
+	if hasTotal || hasCode {
+		monthly := total
+		if !hasTotal {
+			monthly = code
+		} else if hasCode {
+			if code.UsedPercent > monthly.UsedPercent {
+				monthly.UsedPercent = code.UsedPercent
+			}
+			if code.ResetAt != "" && (monthly.ResetAt == "" || code.ResetAt > monthly.ResetAt) {
+				monthly.ResetAt = code.ResetAt
+			}
+			monthly.resetMalformed = monthly.resetMalformed || code.resetMalformed
+		}
+		tiers = append(tiers, monthly)
+	}
+
 	return tiers
+}
+
+// kimiReportedQuotaWindows identifies windows present on the wire, including
+// those whose values could not be parsed.
+func kimiReportedQuotaWindows(body []byte) map[string]bool {
+	root := gjson.ParseBytes(body)
+	limits := root.Get("limits")
+	usages := root.Get("usages")
+	return map[string]bool{
+		"5h":      (limits.Exists() && (!limits.IsArray() || limits.Get("0").Exists())) || usages.Get("limit_5h").Exists(),
+		"weekly":  root.Get("usage").Exists() || usages.Get("limit_7d").Exists(),
+		"monthly": usages.Get("limit_month_total").Exists() || usages.Get("limit_month_code").Exists(),
+	}
+}
+
+// kimiUsedRatioTier 解析 usages.<key>.{used_ratio,reset_time} 为窗口档位。
+// used_ratio 是 0-1 比例，输出换算为百分比；键缺失、不可解析或越界返回 false。
+func kimiUsedRatioTier(node gjson.Result, window string) (CNQuotaTier, bool) {
+	if !node.Exists() {
+		return CNQuotaTier{}, false
+	}
+	ratioNode := node.Get("used_ratio")
+	if !ratioNode.Exists() {
+		return CNQuotaTier{}, false
+	}
+	ratio, ok := cnParseF64(ratioNode.Value())
+	if !ok {
+		return CNQuotaTier{}, false
+	}
+	// 必须落在上游声明区间 [0,1]：越界值（例如把百分数 65 直接塞进 used_ratio）
+	// 会算出 6500%，NaN/Inf 同理不可信。
+	if ratio < 0 || ratio > 1 {
+		return CNQuotaTier{}, false
+	}
+	reset := node.Get("reset_time")
+	return cnQuotaTierWithReset(window, ratio*100, reset, cnNormalizeResetTime(reset.Value())), true
 }
 
 // parseMiniMaxUsageTiers 解析 MiniMax Token Plan / Coding Plan remains 响应。
@@ -466,10 +547,10 @@ func parseKimiUsageTiers(body []byte) []CNQuotaTier {
 // 展示已用 = 100 - remaining：
 //   - 5h：current_interval_remaining_percent + end_time
 //   - 周限额：仅 current_weekly_status == 1 时用 current_weekly_remaining_percent + weekly_end_time
-func parseMiniMaxUsageTiers(body []byte) []CNQuotaTier {
+func parseMiniMaxUsageTiers(body []byte) ([]CNQuotaTier, map[string]bool) {
 	remains := gjson.GetBytes(body, "model_remains")
 	if !remains.IsArray() {
-		return nil
+		return nil, nil
 	}
 	var general gjson.Result
 	remains.ForEach(func(_, item gjson.Result) bool {
@@ -480,35 +561,34 @@ func parseMiniMaxUsageTiers(body []byte) []CNQuotaTier {
 		return true
 	})
 	if !general.Exists() {
-		return nil
+		return nil, nil
 	}
 
+	intervalRemaining := general.Get("current_interval_remaining_percent")
+	weeklyEnabled := general.Get("current_weekly_status").Int() == 1
 	var tiers []CNQuotaTier
-	if remaining, ok := cnParseF64(general.Get("current_interval_remaining_percent").Value()); ok {
+	if remaining, ok := cnParseF64(intervalRemaining.Value()); ok {
 		used := 100 - remaining
 		if used < 0 {
 			used = 0
 		}
-		tiers = append(tiers, CNQuotaTier{
-			Window:      "5h",
-			UsedPercent: used,
-			ResetAt:     minimaxResetTime(general.Get("end_time")),
-		})
+		reset := general.Get("end_time")
+		tiers = append(tiers, cnQuotaTierWithReset("5h", used, reset, minimaxResetTime(reset)))
 	}
-	if general.Get("current_weekly_status").Int() == 1 {
+	if weeklyEnabled {
 		if remaining, ok := cnParseF64(general.Get("current_weekly_remaining_percent").Value()); ok {
 			used := 100 - remaining
 			if used < 0 {
 				used = 0
 			}
-			tiers = append(tiers, CNQuotaTier{
-				Window:      "weekly",
-				UsedPercent: used,
-				ResetAt:     minimaxResetTime(general.Get("weekly_end_time")),
-			})
+			reset := general.Get("weekly_end_time")
+			tiers = append(tiers, cnQuotaTierWithReset("weekly", used, reset, minimaxResetTime(reset)))
 		}
 	}
-	return tiers
+	return tiers, map[string]bool{
+		"5h":     intervalRemaining.Exists() || general.Get("end_time").Exists(),
+		"weekly": weeklyEnabled,
+	}
 }
 
 func minimaxResetTime(v gjson.Result) string {
@@ -525,7 +605,7 @@ func minimaxResetTime(v gjson.Result) string {
 	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
 }
 
-// cnZhipuWindow 标识智谱 TOKENS_LIMIT 条目所属窗口。
+// cnZhipuWindow 标识智谱额度条目（TOKENS_LIMIT / CREDIT_LIMIT）所属窗口。
 type cnZhipuWindow int
 
 const (
@@ -557,14 +637,17 @@ func classifyZhipuWindowUnit(unit int64) cnZhipuWindow {
 //
 // CREDIT_LIMIT（信用额度）与 TOKENS_LIMIT（token 窗口）度量不同：两者同时返回时
 // 只让 TOKENS_LIMIT 参与 5h/weekly 槽位竞争，避免信用额度百分比污染阈值停调
-// 快照；仅当无任何 TOKENS_LIMIT 条目时才降级用 CREDIT_LIMIT 展示。
+// 快照；仅当无任何 TOKENS_LIMIT 条目时才降级用 CREDIT_LIMIT 展示 —— 此时
+// CREDIT_LIMIT 同样按 unit 分类（它也携带 unit），不依赖 reset 时间排序。
 // 老套餐只回 1 条 TOKENS_LIMIT，自然降级为仅 5h；新套餐回 2 条。
-func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
+func parseZhipuTokenTiers(data gjson.Result) ([]CNQuotaTier, map[string]bool) {
 	type entry struct {
 		resetMs    int64
 		hasReset   bool
 		percentage float64
 		resetISO   string
+		resetRaw   gjson.Result
+		unit       int64
 	}
 	var (
 		fiveHour     entry
@@ -574,8 +657,8 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 		unclassified []entry
 	)
 
-	classify := func(item gjson.Result, e entry) {
-		switch classifyZhipuWindowUnit(item.Get("unit").Int()) {
+	classify := func(unit int64, e entry) {
+		switch classifyZhipuWindowUnit(unit) {
 		case cnZhipuWindow5h:
 			if !fiveHourSet {
 				fiveHour, fiveHourSet = e, true
@@ -594,15 +677,29 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 	}
 	var creditFallback []entry
 	hasTokensLimit := false
+	tokenWindows := make(map[string]bool, 2)
+	creditWindows := make(map[string]bool, 2)
 
 	data.Get("limits").ForEach(func(_, item gjson.Result) bool {
 		limitType := strings.ToUpper(strings.TrimSpace(item.Get("type").String()))
 		if limitType != "TOKENS_LIMIT" && limitType != "CREDIT_LIMIT" {
 			return true
 		}
-		percentageResult := item.Get("percentage")
-		percentage, ok := cnParseF64(percentageResult.Value())
-		if !percentageResult.Exists() || !ok || math.IsNaN(percentage) || math.IsInf(percentage, 0) || percentage < 0 {
+		unit := item.Get("unit").Int()
+		reported := tokenWindows
+		if limitType == "CREDIT_LIMIT" {
+			reported = creditWindows
+		}
+		switch classifyZhipuWindowUnit(unit) {
+		case cnZhipuWindow5h:
+			reported["5h"] = true
+		case cnZhipuWindowWeekly:
+			reported["weekly"] = true
+		}
+		// percentage 缺失/非数字/NaN/越界时不能默认 0：那会产出一个「已用 0%」的
+		// 合法窗口，既掩盖真实耗尽状态，也会被缺席清理当成有效快照落库。
+		percentage, okPercentage := cnParseF64(item.Get("percentage").Value())
+		if !okPercentage || math.IsNaN(percentage) || math.IsInf(percentage, 0) || percentage < 0 || percentage > 100 {
 			return true
 		}
 		var (
@@ -610,7 +707,8 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 			hasReset bool
 			resetISO string
 		)
-		if nr := item.Get("nextResetTime"); nr.Exists() {
+		nr := item.Get("nextResetTime")
+		if nr.Exists() {
 			switch nr.Type {
 			case gjson.Number:
 				resetMs = nr.Int()
@@ -621,10 +719,10 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 				hasReset = resetISO != ""
 			}
 		}
-		e := entry{resetMs: resetMs, hasReset: hasReset, percentage: percentage, resetISO: resetISO}
+		e := entry{resetMs: resetMs, hasReset: hasReset, percentage: percentage, resetISO: resetISO, resetRaw: nr, unit: unit}
 		if limitType == "TOKENS_LIMIT" {
 			hasTokensLimit = true
-			classify(item, e)
+			classify(e.unit, e)
 		} else {
 			creditFallback = append(creditFallback, e)
 		}
@@ -632,8 +730,17 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 	})
 
 	// 无任何 TOKENS_LIMIT 条目（部分套餐只报信用额度）：降级用 CREDIT_LIMIT 展示。
+	// CREDIT_LIMIT 条目同样带 unit（3=5h / 6=weekly；实测 GLM Coding Plan 两条窗口
+	// 都是 CREDIT_LIMIT），必须和 TOKENS_LIMIT 一样先按 unit 显式分类 —— 否则会退化
+	// 成 reset 时间启发式，而周期末尾周窗口比 5h 更早重置，时间排序必然把两档标反。
 	if !hasTokensLimit {
-		unclassified = append(unclassified, creditFallback...)
+		for _, e := range creditFallback {
+			if classifyZhipuWindowUnit(e.unit) != cnZhipuWindowUnknown {
+				classify(e.unit, e)
+				continue
+			}
+			unclassified = append(unclassified, e)
+		}
 	}
 
 	// 无 reset 的条目排前，再按 reset 升序，依次填入仍空缺的槽位。
@@ -654,12 +761,15 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 
 	var tiers []CNQuotaTier
 	if fiveHourSet {
-		tiers = append(tiers, CNQuotaTier{Window: "5h", UsedPercent: fiveHour.percentage, ResetAt: fiveHour.resetISO})
+		tiers = append(tiers, cnQuotaTierWithReset("5h", fiveHour.percentage, fiveHour.resetRaw, fiveHour.resetISO))
 	}
 	if weeklySet {
-		tiers = append(tiers, CNQuotaTier{Window: "weekly", UsedPercent: weekly.percentage, ResetAt: weekly.resetISO})
+		tiers = append(tiers, cnQuotaTierWithReset("weekly", weekly.percentage, weekly.resetRaw, weekly.resetISO))
 	}
-	return tiers
+	if hasTokensLimit {
+		return tiers, tokenWindows
+	}
+	return tiers, creditWindows
 }
 
 // cnQuotaExtraUpdates 根据 tier 列表构造 provider 维度的 Extra 快照更新。
@@ -689,6 +799,38 @@ func cnQuotaExtraUpdates(provider string, tiers []CNQuotaTier, now time.Time) ma
 	return updates
 }
 
+// clearAbsentCNQuotaWindows 把本次探测缺席的窗口显式写 nil（JSONB 合并语义下等于
+// 移除按键）：账号 extra 的更新走 `extra || $1`，只"不写"会保留旧值。上游改套餐
+// （Kimi 老套餐 7d → 新套餐月度）后旧窗口不再上报，不清理就会把切换前的用量永久
+// 冻结在快照里（生产实测冻结 13 天，列表一直显示过期的 7D 用量）。
+//
+// 仅供 5h/weekly/monthly 三档通吃的供应商调用；Command Code / Cline 有自己的
+// 取舍（周期端点抓取失败时保留月度值），不在此列。
+func clearAbsentCNQuotaWindows(provider string, tiers []CNQuotaTier, updates map[string]any, reportedWindows map[string]bool) {
+	present := make(map[string]CNQuotaTier, len(tiers))
+	for _, tier := range tiers {
+		present[tier.Window] = tier
+	}
+	for _, window := range []struct{ name, used, reset string }{
+		{"5h", cnExtraSuffix5hUsed, cnExtraSuffix5hReset},
+		{"weekly", cnExtraSuffixWeeklyUsed, cnExtraSuffixWeeklyReset},
+		{"monthly", cnExtraSuffixMonthlyUsed, cnExtraSuffixMonthlyReset},
+	} {
+		tier, ok := present[window.name]
+		if !ok {
+			if reportedWindows[window.name] {
+				continue // Preserve the last valid snapshot for a malformed window.
+			}
+			updates[cnExtraKey(provider, window.used)] = nil
+			updates[cnExtraKey(provider, window.reset)] = nil
+			continue
+		}
+		if tier.ResetAt == "" && !tier.resetMalformed {
+			updates[cnExtraKey(provider, window.reset)] = nil
+		}
+	}
+}
+
 // parseOpenCodeGoUsageTiers 解析 OpenCode Go GET /usage 响应。
 //
 // 结构对齐 cc-switch extractor：
@@ -696,12 +838,13 @@ func cnQuotaExtraUpdates(provider string, tiers []CNQuotaTier, now time.Time) ma
 //	{ "usage": { "rolling": {percent, resetsAt}, "weekly": {...}, "monthly": {...} } }
 //
 // percent 为已用百分比（0-100）；rolling 映射为 5h 窗口。
-func parseOpenCodeGoUsageTiers(body []byte) []CNQuotaTier {
+func parseOpenCodeGoUsageTiers(body []byte) ([]CNQuotaTier, map[string]bool) {
 	usage := gjson.GetBytes(body, "usage")
 	if !usage.Exists() {
-		return nil
+		return nil, nil
 	}
 	var tiers []CNQuotaTier
+	reported := make(map[string]bool, 3)
 	for _, item := range []struct {
 		key    string
 		window string
@@ -714,6 +857,7 @@ func parseOpenCodeGoUsageTiers(body []byte) []CNQuotaTier {
 		if !node.Exists() {
 			continue
 		}
+		reported[item.window] = true
 		percentNode := node.Get("percent")
 		if !percentNode.Exists() {
 			continue
@@ -725,35 +869,63 @@ func parseOpenCodeGoUsageTiers(body []byte) []CNQuotaTier {
 		if used < 0 {
 			used = 0
 		}
-		tiers = append(tiers, CNQuotaTier{
-			Window:      item.window,
-			UsedPercent: used,
-			ResetAt:     cnNormalizeResetTime(node.Get("resetsAt").Value()),
-		})
+		reset := node.Get("resetsAt")
+		tiers = append(tiers, cnQuotaTierWithReset(item.window, used, reset, cnNormalizeResetTime(reset.Value())))
 	}
-	return tiers
+	return tiers, reported
+}
+
+// Keep malformed reset data separate from a provider's empty reset value so
+// a valid quantity can be persisted without clearing the previous reset.
+func cnQuotaTierWithReset(window string, used float64, reset gjson.Result, resetAt string) CNQuotaTier {
+	tier := CNQuotaTier{Window: window, UsedPercent: used, ResetAt: resetAt}
+	switch reset.Type {
+	case gjson.Null:
+	case gjson.Number:
+		tier.resetMalformed = resetAt == "" && reset.Float() > 0
+	case gjson.String:
+		text := strings.TrimSpace(reset.String())
+		tier.resetMalformed = resetAt == "" && text != "" && text != "0"
+	default:
+		tier.ResetAt = ""
+		tier.resetMalformed = true
+	}
+	return tier
 }
 
 // cnParseF64 把 JSON 数值或字符串解析为 float64（兼容 "100" 与 100）。
 func cnParseF64(raw any) (float64, bool) {
+	var value float64
 	switch v := raw.(type) {
 	case float64:
-		return v, true
+		value = v
 	case float32:
-		return float64(v), true
+		value = float64(v)
 	case int:
-		return float64(v), true
+		value = float64(v)
 	case int64:
-		return float64(v), true
+		value = float64(v)
 	case json.Number:
 		f, err := v.Float64()
-		return f, err == nil
+		if err != nil {
+			return 0, false
+		}
+		value = f
 	case string:
 		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return f, err == nil
+		if err != nil {
+			return 0, false
+		}
+		value = f
 	default:
 		return 0, false
 	}
+	// strconv.ParseFloat 接受 "NaN"/"Inf"，JSON 的 1e999 也会得到 +Inf；
+	// 这类值参与百分比与阈值比较会让停调判定失效，一律视为不可解析。
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, false
+	}
+	return value, true
 }
 
 // cnNormalizeResetTime 把上游重置时间（ISO8601 字符串 / 秒级 / 毫秒级数字）归一化为

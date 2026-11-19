@@ -99,10 +99,11 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { usePaymentStore } from '@/stores/payment'
 import { paymentAPI } from '@/api/payment'
+import { captureStoredUserIdentity, getStoredUserID } from '@/api/tokenRefresh'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
-import { PAYMENT_RECOVERY_STORAGE_KEY, readPaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
+import { readStripePaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
 import type { PaymentOrder } from '@/types/payment'
 import type { Stripe, StripeElements } from '@stripe/stripe-js'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -133,42 +134,48 @@ let disposed = false
 let stripeInstance: Stripe | null = null
 let elementsInstance: StripeElements | null = null
 let redirectTimer: ReturnType<typeof setTimeout> | null = null
+const isStripeUser = captureStoredUserIdentity()
+const stripeOrderId = Number(route.query.order_id)
+const canUseStripe = () => !disposed && isStripeUser() && Number(route.query.order_id) === stripeOrderId
 
 onMounted(async () => {
-  const orderId = Number(route.query.order_id)
-  const clientSecret = String(route.query.client_secret || '')
+  const orderId = stripeOrderId
   const method = String(route.query.method || '')
   const resumeToken = typeof route.query.resume_token === 'string' ? route.query.resume_token : undefined
-
-  if (!orderId || !clientSecret) {
-    loading.value = false
-    initError.value = t('payment.stripeMissingParams')
-    return
-  }
-
+  const ownerId = getStoredUserID()
+  // client_secret 只从本浏览器下单时写入的恢复快照读取，且快照订单必须与 URL 订单一致：
+  // 不信任 URL 中的 client_secret，避免页面展示的订单与实际收款的 PaymentIntent 被拼接错绑。
   try {
-    if (typeof window !== 'undefined') {
-      const restored = readPaymentRecoverySnapshot(
-        window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY),
-        { resumeToken },
-      )
-      if (restored?.orderId === orderId) {
-        currency.value = normalizePaymentCurrency(restored.currency)
-      }
+    const restored = ownerId !== null
+      ? readStripePaymentRecoverySnapshot(window.localStorage, orderId, resumeToken, ownerId)
+      : null
+    if (!restored) {
+      initError.value = t('payment.stripeMissingParams')
+      return
     }
+    const clientSecret = restored.clientSecret
+    currency.value = normalizePaymentCurrency(restored.currency)
     const res = await paymentAPI.getOrder(orderId)
+    if (!canUseStripe()) return
+    if (res.data.id !== orderId || res.data.user_id !== ownerId ||
+        (restored.outTradeNo && restored.outTradeNo !== res.data.out_trade_no)) {
+      initError.value = t('payment.stripeMissingParams')
+      return
+    }
     order.value = res.data
     if (res.data.currency) {
       currency.value = normalizePaymentCurrency(res.data.currency)
     }
 
     await paymentStore.fetchConfig()
+    if (!canUseStripe()) return
     const publishableKey = paymentStore.config?.stripe_publishable_key
     if (!publishableKey) { initError.value = t('payment.stripeNotConfigured'); return }
 
     const { loadStripe } = await import('@stripe/stripe-js/pure')
+    if (!canUseStripe()) return
     const stripe = await loadStripe(publishableKey)
-    if (disposed) return
+    if (!canUseStripe()) return
     if (!stripe) { initError.value = t('payment.stripeLoadFailed'); return }
 
     stripeInstance = stripe
@@ -183,10 +190,10 @@ onMounted(async () => {
       // 未指定方式时渲染完整 Payment Element
       showPaymentElement.value = true
       await nextTick()
-      mountPaymentElement(stripe, clientSecret)
+      if (canUseStripe()) mountPaymentElement(stripe, clientSecret)
     }
   } catch (err: unknown) {
-    initError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('payment.stripeLoadFailed'))
+    if (canUseStripe()) initError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('payment.stripeLoadFailed'))
   } finally {
     loading.value = false
   }
@@ -209,6 +216,7 @@ async function confirmAlipay(stripe: Stripe, clientSecret: string, orderId: numb
   redirecting.value = true
   const returnUrl = window.location.origin + '/payment/result?order_id=' + orderId + '&status=success'
   const { error } = await stripe.confirmAlipayPayment(clientSecret, { return_url: returnUrl })
+  if (!canUseStripe()) return
   if (error) {
     redirecting.value = false
     stripeError.value = error.message || t('payment.result.failed')
@@ -222,6 +230,7 @@ async function confirmWechatPay(stripe: Stripe, clientSecret: string) {
   }).confirmWechatPayPayment(clientSecret, {
     payment_method_options: { wechat_pay: { client: isMobileDevice() ? 'mobile_web' : 'web' } },
   })
+  if (!canUseStripe()) return
 
   if (error) {
     stripeError.value = error.message || t('payment.result.failed')
@@ -243,7 +252,7 @@ async function confirmWechatPay(stripe: Stripe, clientSecret: string) {
 }
 
 function mountPaymentElement(stripe: Stripe, clientSecret: string) {
-  if (disposed) return
+  if (!canUseStripe()) return
   const isDark = document.documentElement.classList.contains('dark')
   const elements = stripe.elements({
     clientSecret,
@@ -259,17 +268,18 @@ function mountPaymentElement(stripe: Stripe, clientSecret: string) {
 }
 
 async function handleGenericPay() {
-  if (!stripeInstance || !elementsInstance || stripeSubmitting.value) return
+  if (!canUseStripe() || !stripeInstance || !elementsInstance || stripeSubmitting.value) return
   stripeSubmitting.value = true
   stripeError.value = ''
   try {
     const { error } = await stripeInstance.confirmPayment({
       elements: elementsInstance,
       confirmParams: {
-        return_url: window.location.origin + '/payment/result?order_id=' + route.query.order_id + '&status=success',
+        return_url: window.location.origin + '/payment/result?order_id=' + stripeOrderId + '&status=success',
       },
       redirect: 'if_required',
     })
+    if (!canUseStripe()) return
     if (error) {
       stripeError.value = error.message || t('payment.result.failed')
     } else {
@@ -277,7 +287,7 @@ async function handleGenericPay() {
       scheduleClose()
     }
   } catch (err: unknown) {
-    stripeError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('payment.result.failed'))
+    if (canUseStripe()) stripeError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('payment.result.failed'))
   } finally {
     stripeSubmitting.value = false
   }
@@ -286,11 +296,14 @@ async function handleGenericPay() {
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 function startPolling() {
-  const orderId = Number(route.query.order_id)
-  if (!orderId || disposed) return
+  if (!stripeOrderId || !canUseStripe()) return
   pollTimer = setInterval(async () => {
-    const o = await paymentStore.pollOrderStatus(orderId)
-    if (!o) return
+    if (!canUseStripe()) {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+      return
+    }
+    const o = await paymentStore.pollOrderStatus(stripeOrderId)
+    if (!o || !canUseStripe()) return
     if (o.status === 'COMPLETED' || o.status === 'PAID') {
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
       stripeSuccess.value = true
@@ -301,12 +314,12 @@ function startPolling() {
 }
 
 function scheduleClose() {
-  if (disposed) return
+  if (!canUseStripe()) return
   if (window.opener) {
-    redirectTimer = setTimeout(() => { window.close() }, 2000)
+    redirectTimer = setTimeout(() => { if (canUseStripe()) window.close() }, 2000)
   } else {
     redirectTimer = setTimeout(() => {
-      router.push({ path: '/payment/result', query: { order_id: String(route.query.order_id || ''), status: 'success' } })
+      if (canUseStripe()) router.push({ path: '/payment/result', query: { order_id: String(stripeOrderId), status: 'success' } })
     }, 2000)
   }
 }

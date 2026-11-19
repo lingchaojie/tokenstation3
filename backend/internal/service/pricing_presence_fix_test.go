@@ -379,7 +379,7 @@ func TestLongContextInvalidCacheAbove_RespectsFinalApplicationPolicy(t *testing.
 	})
 
 	t.Run("legacy policy false does not validate official ladder", func(t *testing.T) {
-		cost, err := billing.calculateCostWithServiceTierPolicy("invalid-policy-model", above, 1, "priority", false)
+		cost, err := billing.calculateCostInternalWithPolicy("invalid-policy-model", above, 1, "priority", nil, false)
 		require.NoError(t, err)
 		require.False(t, cost.LongContextBillingApplied)
 	})

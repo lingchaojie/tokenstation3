@@ -170,7 +170,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	resp := &dashboardSnapshotV2Response{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		StartDate:   startTime.Format("2006-01-02"),
-		EndDate:     endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		EndDate:     endTime.AddDate(0, 0, -1).Format("2006-01-02"),
 		Granularity: granularity,
 	}
 	usageFilters := usagestats.UsageLogFilters{

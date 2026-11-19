@@ -193,7 +193,8 @@ func (s *OpenAIGatewayService) recordUsage(ctx context.Context, input *OpenAIRec
 	if (!result.HasBillableUsage() || isOpenAIKiroRelayCreditsOnlyUsage(input.Account, result)) && !input.CyberBlocked {
 		return ErrOpenAIUpstreamUsageMissing
 	}
-	if !validateOnly && s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI {
+	if !validateOnly && s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI &&
+		result.UpstreamEndpoint != featureKeyWebSearchEmulation {
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
 
@@ -528,7 +529,7 @@ func (s *OpenAIGatewayService) recordUsage(ctx context.Context, input *OpenAIRec
 }
 
 // openAISubscriptionLongContextExempt 按实际凭据和最终发送模型判断订阅豁免。
-// GPT-6.1 Sol 和 GPT-6.2 的订阅请求不收取模型长上下文附加费；API Key 仍使用 API 价卡。
+// GPT-6.1 Sol/Terra 和 GPT-6.2 的订阅请求不收取模型长上下文附加费；API Key 仍使用 API 价卡。
 // 使用发送模型，避免客户别名、渠道计费模型或响应模型计费切换改变上游订阅规则。
 func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForwardResult) bool {
 	if !account.IsOpenAIOAuthLike() || result == nil {
@@ -538,7 +539,7 @@ func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForward
 	if model == "" {
 		model = result.Model
 	}
-	return openai.GPT62ModelID(model) != "" || openai.IsGPT61SolModelSpelling(model)
+	return openai.GPT62ModelID(model) != "" || openai.IsGPT61SolModelSpelling(model) || openai.IsGPT61TerraModelSpelling(model)
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
@@ -684,11 +685,12 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 		})
 	}
 	longContextBillingEnabled := longContextBillingGate == nil || *longContextBillingGate
-	breakdown, err := s.billingService.calculateCostWithServiceTierPolicy(
+	breakdown, err := s.billingService.calculateCostInternalWithPolicy(
 		billingModel,
 		tokens,
 		multiplier,
 		serviceTier,
+		nil,
 		longContextBillingEnabled && !modelLongContextExempt,
 	)
 	if err == nil {

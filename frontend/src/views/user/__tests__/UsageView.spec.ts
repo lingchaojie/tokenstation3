@@ -1,10 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 
 import UsageView from '../UsageView.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
+
+const uiLocale = ref('en')
 
 const {
   query,
@@ -109,6 +111,7 @@ const messages: Record<string, string> = {
   'usage.preparingExport': 'Preparing export',
   'usage.exportSuccess': 'Export success',
   'usage.exportFailed': 'Export failed',
+  'usage.exportRateLimited': 'Rate limited',
   'common.refresh': 'Refresh',
   'common.reset': 'Reset',
 }
@@ -148,6 +151,7 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       t: (key: string) => messages[key] ?? key,
+      locale: uiLocale,
     }),
   }
 })
@@ -191,6 +195,7 @@ const mountUsageView = () => mount(UsageView, { global: { stubs: viewStubs } })
 
 describe('user UsageView tooltip', () => {
   beforeEach(() => {
+    uiLocale.value = 'en'
     query.mockReset()
     getStats.mockReset()
     getDashboardModels.mockReset()
@@ -205,6 +210,8 @@ describe('user UsageView tooltip', () => {
 
     getDashboardModels.mockResolvedValue({ models: [] })
     getDashboardSnapshotV2.mockResolvedValue({ trend: [], groups: [] })
+    getStats.mockResolvedValue({ endpoints: [] })
+    list.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100, pages: 0 })
     getAvailable.mockResolvedValue([])
 
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -223,6 +230,28 @@ describe('user UsageView tooltip', () => {
       observe() {}
       disconnect() {}
     }
+  })
+
+  it('reloads group labels in place when the UI language changes', async () => {
+    query.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
+    getAvailable
+      .mockResolvedValueOnce([{ id: 4, name: 'Example group' }])
+      .mockResolvedValueOnce([{ id: 4, name: '示例分组' }])
+    const wrapper = mountUsageView()
+    await flushPromises()
+    const groupSelect = wrapper.findAllComponents(Select).find((select) =>
+      (select.props('options') as SelectOption[]).some((option) => option.label === 'Example group')
+    )!
+    groupSelect.vm.$emit('update:modelValue', 4)
+    await nextTick()
+
+    uiLocale.value = 'zh-CN'
+    await flushPromises()
+
+    expect(getAvailable).toHaveBeenCalledTimes(2)
+    expect(groupSelect.props('options')).toContainEqual(expect.objectContaining({ label: '示例分组' }))
+    expect(groupSelect.props('modelValue')).toBe(4)
+    wrapper.unmount()
   })
 
   it('shows actual billed cost without rate or standard-cost comparison in user tooltip and summary card', async () => {
@@ -537,11 +566,11 @@ describe('user UsageView tooltip', () => {
       const params = call[0] as Record<string, unknown> | undefined
       const config = call[1]
       return (
-        params?.page_size === 100 &&
+        params?.page_size === 1000 &&
         params?.sort_by === 'created_at' &&
         params?.sort_order === 'desc' &&
         params?.native_compaction_v2 === true &&
-        config === undefined
+        config?.signal instanceof AbortSignal
       )
     })
     expect(hasSortedExportQuery).toBe(true)
@@ -609,7 +638,7 @@ describe('user UsageView tooltip', () => {
       model: 'gpt-5.4',
       api_key: { name: 'demo-key' },
     }
-    const pageResponse = { items: [usageLog], total: 101, pages: 2 }
+    const pageResponse = { items: [usageLog], total: 1001, pages: 2 }
     query.mockResolvedValue(pageResponse)
     const wrapper = mountUsageView()
     await flushPromises()
@@ -621,8 +650,8 @@ describe('user UsageView tooltip', () => {
     let resolveFirstPage!: (value: typeof pageResponse) => void
     const firstPage = new Promise<typeof pageResponse>((resolve) => { resolveFirstPage = resolve })
     query.mockClear()
-    query.mockImplementation((params, options) =>
-      !options && params.page === 1 ? firstPage : Promise.resolve(pageResponse)
+    query.mockImplementation((params) =>
+      params.page_size === 1000 && params.page === 1 ? firstPage : Promise.resolve(pageResponse)
     )
     const originalCreateObjectURL = window.URL.createObjectURL
     const originalRevokeObjectURL = window.URL.revokeObjectURL
@@ -636,8 +665,10 @@ describe('user UsageView tooltip', () => {
     try {
       await wrapper.findAll('button').find((button) => button.text() === 'Export CSV')!.trigger('click')
       const initialParams = { ...query.mock.calls[0][0] }
+      const exportOptions = query.mock.calls[0][1]
+      expect(exportOptions.signal).toBeInstanceOf(AbortSignal)
       expect(initialParams).toMatchObject({
-        page: 1, page_size: 100, start_date: '2026-03-01', end_date: '2026-03-08',
+        page: 1, page_size: 1000, start_date: '2026-03-01', end_date: '2026-03-08',
         sort_by: 'created_at', sort_order: 'desc',
       })
 
@@ -657,14 +688,124 @@ describe('user UsageView tooltip', () => {
       resolveFirstPage(pageResponse)
       await flushPromises()
 
-      const exportCalls = query.mock.calls.filter((call) => call.length === 1)
-      expect.soft(exportCalls).toEqual([[initialParams], [{ ...initialParams, page: 2 }]])
+      const exportCalls = query.mock.calls.filter((call) => call[1]?.signal === exportOptions.signal)
+      expect.soft(exportCalls).toEqual([[initialParams, exportOptions], [{ ...initialParams, page: 2 }, exportOptions]])
       expect.soft(filename).toBe('usage_2026-03-01_to_2026-03-08.csv')
       expect(showSuccess).toHaveBeenCalledWith('Export success')
       expect(showError).not.toHaveBeenCalled()
     } finally {
       window.URL.createObjectURL = originalCreateObjectURL
       window.URL.revokeObjectURL = originalRevokeObjectURL
+      clickSpy.mockRestore()
+      wrapper.unmount()
+    }
+  })
+
+  it('waits for Retry-After and retries the same page when export is rate limited', async () => {
+    query.mockResolvedValue({
+      items: [{ model: 'gpt-5.4', created_at: '2026-03-08T00:00:00Z' }],
+      total: 1,
+      pages: 1,
+    })
+    const wrapper = mountUsageView()
+    await flushPromises()
+    query.mockClear()
+    query.mockRejectedValueOnce({ status: 429, code: 'RATE_LIMITED', retry_after_seconds: 2 })
+    const originalCreateObjectURL = window.URL.createObjectURL
+    const originalRevokeObjectURL = window.URL.revokeObjectURL
+    window.URL.createObjectURL = vi.fn(() => 'blob:usage-export') as typeof window.URL.createObjectURL
+    window.URL.revokeObjectURL = vi.fn(() => {}) as typeof window.URL.revokeObjectURL
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.useFakeTimers()
+
+    try {
+      const exporting = (wrapper.vm as any).exportToCSV()
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(query).toHaveBeenCalledTimes(1)
+      expect(showInfo).toHaveBeenCalledWith('Rate limited')
+
+      await vi.advanceTimersByTimeAsync(1)
+      await exporting
+      expect(query).toHaveBeenCalledTimes(2)
+      expect(query.mock.calls[1]).toEqual(query.mock.calls[0])
+      expect(clickSpy).toHaveBeenCalled()
+      expect(showSuccess).toHaveBeenCalledWith('Export success')
+      expect(showError).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      window.URL.createObjectURL = originalCreateObjectURL
+      window.URL.revokeObjectURL = originalRevokeObjectURL
+      clickSpy.mockRestore()
+      wrapper.unmount()
+    }
+  })
+
+  it.each(['account switch', 'unmount'])('cancels a rate-limited export on %s', async (change) => {
+    localStorage.setItem('auth_user', JSON.stringify({ id: 1 }))
+    query.mockResolvedValue({
+      items: [{ model: 'old-account-model' }], total: 1, pages: 1,
+    })
+    const wrapper = mountUsageView()
+    await flushPromises()
+    query.mockClear()
+    query.mockRejectedValueOnce({ status: 429, retry_after_seconds: 2 })
+    const originalCreateObjectURL = window.URL.createObjectURL
+    const originalRevokeObjectURL = window.URL.revokeObjectURL
+    window.URL.createObjectURL = vi.fn(() => 'blob:usage-export')
+    window.URL.revokeObjectURL = vi.fn()
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.useFakeTimers()
+
+    try {
+      const exporting = (wrapper.vm as any).exportToCSV()
+      await vi.advanceTimersByTimeAsync(0)
+      if (change === 'account switch') {
+        localStorage.setItem('auth_user', JSON.stringify({ id: 2 }))
+        window.dispatchEvent(new StorageEvent('storage', { key: 'auth_user' }))
+      } else {
+        wrapper.unmount()
+      }
+      await vi.advanceTimersByTimeAsync(2000)
+      await exporting
+      expect(query).toHaveBeenCalledTimes(1)
+      expect(query.mock.calls[0][1]?.signal?.aborted).toBe(true)
+      expect(clickSpy).not.toHaveBeenCalled()
+      expect(showError).not.toHaveBeenCalled()
+    } finally {
+      if (change === 'account switch') wrapper.unmount()
+      vi.useRealTimers()
+      window.URL.createObjectURL = originalCreateObjectURL
+      window.URL.revokeObjectURL = originalRevokeObjectURL
+      clickSpy.mockRestore()
+      localStorage.removeItem('auth_user')
+    }
+  })
+
+  it('fails the export after repeated rate limiting', async () => {
+    query.mockResolvedValue({
+      items: [{ model: 'gpt-5.4', created_at: '2026-03-08T00:00:00Z' }],
+      total: 1,
+      pages: 1,
+    })
+    const wrapper = mountUsageView()
+    await flushPromises()
+    query.mockClear()
+    query.mockRejectedValue({ status: 429, code: 'RATE_LIMITED', retry_after_seconds: 1 })
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+
+    try {
+      const exporting = (wrapper.vm as any).exportToCSV()
+      await vi.advanceTimersByTimeAsync(3000)
+      await exporting
+      expect(query).toHaveBeenCalledTimes(4)
+      expect(clickSpy).not.toHaveBeenCalled()
+      expect(showError).toHaveBeenCalledWith('Export failed')
+      expect((wrapper.vm as any).exporting).toBe(false)
+    } finally {
+      vi.useRealTimers()
+      vi.mocked(console.error).mockRestore()
       clickSpy.mockRestore()
       wrapper.unmount()
     }

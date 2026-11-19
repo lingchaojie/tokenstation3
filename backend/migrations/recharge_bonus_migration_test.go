@@ -12,7 +12,7 @@ import (
 
 // Deployed migrations are immutable: adding a new upstream migration in the
 // historical range can silently alter upgrade ordering or checksum validation.
-func TestUpstreamB8deMigrationPolicy(t *testing.T) {
+func TestHistoricalMigrationsAndUpstreamLayout(t *testing.T) {
 	names, err := fs.Glob(FS, "*.sql")
 	require.NoError(t, err)
 	sort.Strings(names)
@@ -20,7 +20,7 @@ func TestUpstreamB8deMigrationPolicy(t *testing.T) {
 	var additions []string
 	count := 0
 	for _, name := range names {
-		if name >= "246_" {
+		if name >= "249_" {
 			additions = append(additions, name)
 			continue
 		}
@@ -31,11 +31,14 @@ func TestUpstreamB8deMigrationPolicy(t *testing.T) {
 		_, _ = historical.Write([]byte{0})
 		count++
 	}
-	require.Equal(t, 299, count)
-	require.Equal(t, "91d3b89ae4f24abb05733b3b3d8f4a0b98b0d69e5a7d733e982b2e3f9b2bf6f7", hex.EncodeToString(historical.Sum(nil)))
+	require.Equal(t, 302, count)
+	require.Equal(t, "8ac079facfda532238723548f6ccc8d6d6f6a1fdce4294d14c3d2c51e5200b63", hex.EncodeToString(historical.Sum(nil)))
 	require.Equal(t, []string{
-		"246_add_payment_order_bonus_amount.sql",
-		"247_add_typesafe_platform.sql",
-		"248_drop_platform_check_constraints.sql",
+		"249_group_i18n.sql",
+		"250_scoped_admin_api_keys.sql",
+		"251_add_usage_logs_api_key_cost_index_notx.sql",
+		"252_group_force_openai_ultrafast.sql",
+		"253_group_usage_rollup_nonblocking_build.sql",
+		"254_channel_pricing_ultrafast_multiplier.sql",
 	}, additions)
 }

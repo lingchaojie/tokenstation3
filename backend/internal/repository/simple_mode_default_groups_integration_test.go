@@ -37,11 +37,21 @@ func TestEnsureSimpleModeDefaultGroups_CreatesMissingDefaults(t *testing.T) {
 	assertDefaultGroup(service.PlatformAntigravity + "-default-1")
 	assertDefaultGroup(service.PlatformAntigravity + "-default-2")
 
-	grokDefault, err := client.Group.Query().
-		Where(group.NameEQ(service.PlatformGrok+"-default"), group.DeletedAtIsNil()).
-		Only(seedCtx)
-	require.NoError(t, err)
-	require.True(t, grokDefault.AllowImageGeneration)
+	for _, tc := range []struct {
+		name                 string
+		allowImageGeneration bool
+	}{
+		{name: service.PlatformGrok + "-default", allowImageGeneration: true},
+		{name: service.PlatformGemini + "-default"},
+		{name: service.PlatformAntigravity + "-default-1"},
+		{name: service.PlatformAntigravity + "-default-2"},
+	} {
+		imageDefault, err := client.Group.Query().
+			Where(group.NameEQ(tc.name), group.DeletedAtIsNil()).
+			Only(seedCtx)
+		require.NoError(t, err)
+		require.Equal(t, tc.allowImageGeneration, imageDefault.AllowImageGeneration, tc.name)
+	}
 }
 
 func TestEnsureSimpleModeDefaultGroups_BackfillsOnlyAutoCreatedGrokDefault(t *testing.T) {

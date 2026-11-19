@@ -2145,6 +2145,10 @@ func (s *stubAccountRepo) ClearModelRateLimits(ctx context.Context, id int64) er
 	return errors.New("not implemented")
 }
 
+func (s *stubAccountRepo) ClearModelRateLimit(ctx context.Context, id int64, scope string) error {
+	return errors.New("not implemented")
+}
+
 func (s *stubAccountRepo) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {
 	return errors.New("not implemented")
 }
@@ -2370,7 +2374,7 @@ func (stubUserSubscriptionRepo) Update(ctx context.Context, sub *service.UserSub
 func (stubUserSubscriptionRepo) Delete(ctx context.Context, id int64) error {
 	return errors.New("not implemented")
 }
-func (stubUserSubscriptionRepo) Restore(ctx context.Context, subscriptionID int64, restoredStatus string) (*service.UserSubscription, error) {
+func (stubUserSubscriptionRepo) Restore(ctx context.Context, subscriptionID int64, restoredStatus string, _ time.Time) (*service.UserSubscription, error) {
 	return nil, errors.New("not implemented")
 }
 func (r *stubUserSubscriptionRepo) ListByUserID(ctx context.Context, userID int64) ([]service.UserSubscription, error) {

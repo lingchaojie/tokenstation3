@@ -39,6 +39,7 @@ var errClineInvalidResponse = errors.New("invalid cline account response")
 // by account probes. expected contains the complete scope JSON observed before
 // the probe; nil means the scope was missing, distinct from JSON null. The
 // replacement is persisted exactly, including the caller's generation times.
+// A nil replacement removes the observed scope. Removing a missing scope is a no-op.
 // Request-side restrictions continue to use unconditional SetModelRateLimit.
 type ModelRateLimitCompareAndSetter interface {
 	SetModelRateLimitIfUnchanged(ctx context.Context, id int64, scope string, expected, replacement json.RawMessage) (bool, error)

@@ -5,12 +5,16 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -502,4 +506,174 @@ func TestShouldEmulateWebSearch_KiroRequiresChannelConfig(t *testing.T) {
 
 	account := newKiroOAuthAccount()
 	require.False(t, svc.shouldEmulateWebSearch(context.Background(), account, nil, webSearchToolBody))
+}
+
+func TestShouldEmulateWebSearchFor_OpenAIAPIKeyAccountEnabled(t *testing.T) {
+	mgr := websearch.NewManager([]websearch.ProviderConfig{{Type: "brave", APIKey: "k"}}, nil)
+	SetWebSearchManager(mgr)
+	defer SetWebSearchManager(nil)
+
+	setGlobalWebSearchConfig(&WebSearchEmulationConfig{
+		Enabled:   true,
+		Providers: []WebSearchProviderConfig{{Type: "brave", APIKey: "k"}},
+	})
+	defer clearGlobalWebSearchConfig()
+
+	settingSvc := newSettingServiceForWebSearchTest(true)
+	account := &Account{
+		ID:       1,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{featureKeyWebSearchEmulation: WebSearchModeEnabled},
+	}
+	groupID := int64(0)
+	require.True(t, shouldEmulateWebSearchFor(context.Background(), settingSvc, nil, account, &groupID, webSearchToolBody))
+	require.False(t, shouldEmulateWebSearchFor(context.Background(), settingSvc, nil, account, &groupID, nonWebSearchToolBody))
+}
+
+// Exercise the shared interception gate, including channel inheritance.
+func TestShouldEmulateWebSearchFor_AccountChannelModes(t *testing.T) {
+	previousManager := webSearchManagerPtr.Load()
+	previousConfig := webSearchEmulationCache.Load()
+	SetWebSearchManager(websearch.NewManager([]websearch.ProviderConfig{{Type: "brave", APIKey: "k"}}, nil))
+	t.Cleanup(func() {
+		webSearchManagerPtr.Store(previousManager)
+		if previousConfig == nil {
+			clearGlobalWebSearchConfig()
+		} else {
+			webSearchEmulationCache.Store(previousConfig)
+		}
+	})
+
+	settingSvc := newSettingServiceForWebSearchTest(true)
+	groupID := int64(42)
+	platforms := []string{
+		PlatformOpenAI, PlatformAnthropic, PlatformZhipu, PlatformCommandCode, PlatformOpenCodeGo, PlatformMiniMax,
+	}
+	for _, platform := range platforms {
+		for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth, AccountTypeSetupToken} {
+			for _, mode := range []string{WebSearchModeDefault, WebSearchModeEnabled, WebSearchModeDisabled} {
+				for _, channelEnabled := range []bool{false, true} {
+					channelMode := "channel_off"
+					if channelEnabled {
+						channelMode = "channel_on"
+					}
+					t.Run(platform+"/"+accountType+"/"+mode+"/"+channelMode, func(t *testing.T) {
+						account := &Account{
+							Platform: platform, Type: accountType,
+							Extra: map[string]any{featureKeyWebSearchEmulation: mode},
+						}
+						channelSvc := newChannelServiceWithCache(groupID, &Channel{
+							ID: 10, Status: StatusActive,
+							FeaturesConfig: map[string]any{
+								featureKeyWebSearchEmulation: map[string]any{platform: channelEnabled},
+							},
+						})
+						want := channelEnabled
+						if accountType == AccountTypeAPIKey {
+							switch mode {
+							case WebSearchModeEnabled:
+								want = true
+							case WebSearchModeDisabled:
+								want = false
+							}
+						} else if platform == PlatformOpenAI {
+							want = false
+						}
+						for _, globalEnabled := range []bool{false, true} {
+							setGlobalWebSearchConfig(&WebSearchEmulationConfig{
+								Enabled:   globalEnabled,
+								Providers: []WebSearchProviderConfig{{Type: "brave", APIKey: "k"}},
+							})
+							require.Equal(t, globalEnabled && want, shouldEmulateWebSearchFor(
+								context.Background(), settingSvc, channelSvc, account, &groupID, webSearchToolBody),
+								"globalEnabled=%v", globalEnabled)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+type messagesWebSearchFixture struct {
+	*websearch.Manager
+	err error
+}
+
+func (s messagesWebSearchFixture) SearchWithBestProvider(_ context.Context, request websearch.SearchRequest) (*websearch.SearchResponse, string, error) {
+	if s.err != nil {
+		return nil, "", s.err
+	}
+	return &websearch.SearchResponse{Query: request.Query, Results: []websearch.SearchResult{{
+		URL: "https://example.test/match", Title: "Match", Snippet: "Example",
+	}}}, "fixture", nil
+}
+
+func TestForwardAsAnthropicEmulatedSearchRecordsOneCall(t *testing.T) {
+	previousManager := webSearchManagerPtr.Load()
+	previousConfig := webSearchEmulationCache.Load()
+	t.Cleanup(func() {
+		webSearchManagerPtr.Store(previousManager)
+		if previousConfig == nil {
+			clearGlobalWebSearchConfig()
+		} else {
+			webSearchEmulationCache.Store(previousConfig)
+		}
+	})
+	setGlobalWebSearchConfig(&WebSearchEmulationConfig{Enabled: true, Providers: []WebSearchProviderConfig{{Type: "brave", APIKey: "fixture"}}})
+	s := &OpenAIGatewayService{settingService: newSettingServiceForWebSearchTest(true), billingService: &BillingService{}}
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{featureKeyWebSearchEmulation: WebSearchModeEnabled}}
+	searchError := errors.New("fixture search failed")
+	var lastID string
+	for _, tc := range []struct {
+		name   string
+		stream bool
+		err    error
+	}{
+		{name: "JSON"},
+		{name: "SSE", stream: true},
+		{name: "failed search", err: searchError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			webSearchManagerPtr.Store(&activeWebSearchManager{manager: messagesWebSearchFixture{err: tc.err}})
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			body := []byte(fmt.Sprintf(`{"type":"message","model":"gpt-6.2","max_tokens":4096,"stream":%t,"tools":[{"type":"web_search"}],"messages":[{"role":"user","content":"find this"}]}`, tc.stream))
+			require.True(t, IsOpenAIMessagesSearchCandidate(body))
+			ctx, planned := s.PlanOpenAIMessagesSearch(c.Request.Context(), account, nil, body)
+			require.True(t, planned)
+			result, err := s.ForwardAsAnthropic(ctx, c, account, body, "", "")
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				require.Nil(t, result)
+				require.Empty(t, recorder.Body.String())
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, 1, result.WebSearchCalls)
+			require.Equal(t, tc.stream, result.Stream)
+			require.Contains(t, recorder.Body.String(), "https://example.test/match")
+			require.True(t, isForcedUsageBillingRequestID(result.RequestID))
+			require.NotEqual(t, lastID, result.RequestID)
+			lastID = result.RequestID
+			for _, price := range []*float64{nil, float64Ptr(0.02), float64Ptr(0)} {
+				groupID := int64(1)
+				key := &APIKey{GroupID: &groupID, User: &User{ID: 1}, Group: &Group{RateMultiplier: 2, WebSearchPricePerCall: price}}
+				cost, err := s.calculateOpenAIRecordUsageCost(ctx, result, key, nil, 3, 1, 1, 2, UsageTokens{}, "", nil, false, time.Time{})
+				require.NoError(t, err)
+				require.Equal(t, string(BillingModePerRequest), cost.BillingMode)
+				want := 0.01
+				if price != nil {
+					want = *price
+				}
+				require.InDelta(t, want*2, cost.ActualCost, 1e-12)
+				reserved, priced := s.EstimateInflightReservation(ctx, key, InflightEstimateRequest{Model: "gpt-6.2", Kind: InflightEstimatePerRequest, SearchCalls: 1})
+				require.True(t, priced)
+				require.InDelta(t, cost.ActualCost, reserved, 1e-12)
+			}
+		})
+	}
 }

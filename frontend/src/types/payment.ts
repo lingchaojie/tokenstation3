@@ -102,6 +102,8 @@ export interface PaymentOrder {
   /** 充值赠送额度（USD），已计入 amount */
   bonus_amount?: number
   payment_type: string
+  provider_key?: string
+  confirmation_pending?: boolean
   out_trade_no: string
   pay_url?: string
   qr_code?: string

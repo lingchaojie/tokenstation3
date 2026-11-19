@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -209,6 +211,28 @@ func TestProjectAccountModelsPassthroughIgnoresStaleMappings(t *testing.T) {
 	require.JSONEq(t, string(body), string(projected))
 }
 
+func TestProjectAccountModelsPassthroughFilterKeepsSourceNames(t *testing.T) {
+	for _, codex := range []bool{false, true} {
+		t.Run(fmt.Sprint(codex), func(t *testing.T) {
+			account := newCodexModelsAPIKeyTestAccount("https://models.example/v1")
+			account.Extra = map[string]any{"openai_passthrough": true, "openai_passthrough_model_filter": true}
+			account.Credentials["model_mapping"] = map[string]any{
+				"qwen3.8-max": "must-not-rewrite", "qwen3.8-*": "also-not-a-model", "gpt-6.2": "not-on-the-wire",
+			}
+			body := `{"object":"list","data":[{"id":"qwen3.8-max","display_name":"Qwen Max"},{"id":"qwen3.8-plus"},{"id":"gpt-6.1-sol"}]}`
+			want := `{"object":"list","data":[{"id":"qwen3.8-max","display_name":"Qwen Max"},{"id":"qwen3.8-plus"}]}`
+			if codex {
+				body = strings.NewReplacer(`"data"`, `"models"`, `"id"`, `"slug"`).Replace(body)
+				want = strings.NewReplacer(`"data"`, `"models"`, `"id"`, `"slug"`).Replace(want)
+			}
+			group := &Group{ModelsListConfig: GroupModelsListConfig{Enabled: true, Models: []string{"gpt-6.1-sol", "gpt-6.2", "qwen3.8-max", "qwen3.8-plus"}}}
+			projected, err := projectAccountModelsBody([]byte(body), account, group, codex)
+			require.NoError(t, err)
+			require.JSONEq(t, want, string(projected))
+		})
+	}
+}
+
 func TestFetchOpenAIModelsListEmptyAndMalformedResponses(t *testing.T) {
 	for _, body := range []string{`{"data":[]}`, `{"data":null}`, `{}`, `{"data":{}}`, `{"data":[{}]}`, `{"data":[null]}`} {
 		t.Run(body, func(t *testing.T) {
@@ -302,6 +326,161 @@ func TestFetchOpenAIModelsListResolvesShadowOAuthCredentials(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(response.Body), `"id":"parent-model"`)
 	require.EqualValues(t, 1, calls.Load())
+}
+
+type scopedModelCatalogParentRepo struct {
+	AccountRepository
+	parent  *Account
+	lookups int
+}
+
+func (r *scopedModelCatalogParentRepo) GetByID(context.Context, int64) (*Account, error) {
+	r.lookups++
+	return r.parent, nil
+}
+
+func TestFetchOpenAIModelsListChecksScopedShadowCredentialOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		groups []int64
+		allow  bool
+	}{
+		{name: "only shadow allowed", groups: []int64{1}},
+		{name: "shadow and parent allowed", groups: []int64{1, 2}, allow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, calls := newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"parent-model"}]}`)
+			parent := newCodexModelsTestAccount()
+			parent.GroupIDs = []int64{2}
+			shadow := &Account{ID: 9, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent.ID, GroupIDs: []int64{1}}
+			repo := &scopedModelCatalogParentRepo{parent: parent}
+			s := &OpenAIGatewayService{accountRepo: repo}
+			ctx := adminaccess.WithPrincipal(t.Context(), &adminaccess.Principal{Policy: adminaccess.Policy{
+				Rules: []adminaccess.Rule{{Permissions: []string{"accounts.read"}, GroupIDs: tc.groups, AccountTypes: []string{AccountTypeOAuth}}},
+			}})
+			result, err := s.FetchOpenAIModelsList(ctx, shadow)
+			if tc.allow {
+				require.NoError(t, err)
+				require.Contains(t, string(result.Body), `"id":"parent-model"`)
+				require.EqualValues(t, 1, calls.Load())
+			} else {
+				require.Equal(t, "SCOPED_ACCOUNT_NOT_FOUND", infraerrors.Reason(err))
+				require.Nil(t, result)
+				require.Zero(t, calls.Load())
+			}
+			require.Equal(t, 1, repo.lookups, "catalog retrieval must use the credential account already checked")
+		})
+	}
+}
+
+type scopedModelCatalogStateRepository struct {
+	codexModelsAccountStateRepo
+	parent  *Account
+	lookups int
+}
+
+func (r *scopedModelCatalogStateRepository) GetByID(context.Context, int64) (*Account, error) {
+	r.lookups++
+	return r.parent, nil
+}
+
+func TestFetchOpenAIModelsListScopedOAuth401LeavesAccountStateUntouched(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"token_revoked"}}`))
+	}))
+	t.Cleanup(server.Close)
+	original := chatgptCodexModelsURL
+	chatgptCodexModelsURL = server.URL
+	t.Cleanup(func() { chatgptCodexModelsURL = original })
+
+	for _, tc := range []struct {
+		name             string
+		scoped           bool
+		wantHealthWrites int
+		wantOwnerReads   int
+	}{
+		{name: "scoped catalog", scoped: true, wantOwnerReads: 1},
+		{name: "legacy admin catalog", wantHealthWrites: 1, wantOwnerReads: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := newCodexModelsTestAccount()
+			parent.GroupIDs = []int64{2}
+			shadow := &Account{ID: 9, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent.ID, GroupIDs: []int64{1}}
+			repo := &scopedModelCatalogStateRepository{parent: parent}
+			s := newCodexModels401TestService(repo)
+			s.accountRepo = repo
+
+			ctx := t.Context()
+			if tc.scoped {
+				ctx = adminaccess.WithPrincipal(ctx, &adminaccess.Principal{Policy: adminaccess.Policy{
+					Rules: []adminaccess.Rule{{Permissions: []string{"accounts.read"}, GroupIDs: []int64{1, 2}, AccountTypes: []string{AccountTypeOAuth}}},
+				}})
+			}
+			before := calls.Load()
+			_, err := s.FetchOpenAIModelsList(ctx, shadow)
+			require.Equal(t, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", infraerrors.Reason(err))
+			assert.EqualValues(t, before+1, calls.Load())
+			assert.Equal(t, tc.wantHealthWrites, repo.setErrorCalls)
+			assert.Zero(t, repo.setTempUnschedCalls)
+			assert.Equal(t, tc.wantOwnerReads, repo.lookups)
+			assert.Equal(t, tc.wantHealthWrites > 0, s.isOpenAIAccountRuntimeBlocked(parent))
+		})
+	}
+}
+
+func TestFetchOpenAIModelsListScopedAgentIdentityUsesOnlyExistingTask(t *testing.T) {
+	for _, taskID := range []string{"", "existing-task"} {
+		t.Run("task="+taskID, func(t *testing.T) {
+			var modelsCalls, registerCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/task/register") {
+					registerCalls.Add(1)
+					_, _ = w.Write([]byte(`{"task_id":"replacement-task"}`))
+					return
+				}
+				modelsCalls.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"code":"invalid_task_id"}}`))
+			}))
+			t.Cleanup(server.Close)
+			originalModelsURL := chatgptCodexModelsURL
+			chatgptCodexModelsURL = server.URL
+			t.Cleanup(func() { chatgptCodexModelsURL = originalModelsURL })
+			originalAuthURL := openAIAgentIdentityAuthAPIBaseURL
+			openAIAgentIdentityAuthAPIBaseURL = server.URL
+			t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = originalAuthURL })
+
+			key, privateKey := newTestAgentIdentityKey(t)
+			account := &Account{
+				ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{1},
+				Credentials: map[string]any{
+					"auth_mode":         OpenAIAuthModeAgentIdentity,
+					"agent_runtime_id":  key.runtimeID,
+					"agent_private_key": privateKey,
+					"task_id":           taskID,
+				},
+			}
+			repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+			s := &OpenAIGatewayService{accountRepo: repo}
+			ctx := adminaccess.WithPrincipal(t.Context(), &adminaccess.Principal{Policy: adminaccess.Policy{
+				Rules: []adminaccess.Rule{{Permissions: []string{"accounts.read"}, GroupIDs: []int64{1}, AccountTypes: []string{AccountTypeOAuth}}},
+			}})
+
+			_, err := s.FetchOpenAIModelsList(ctx, account)
+			if taskID == "" {
+				assert.Equal(t, "OPENAI_CODEX_MODELS_AUTH_FAILED", infraerrors.Reason(err))
+				assert.Zero(t, modelsCalls.Load())
+			} else {
+				assert.Equal(t, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", infraerrors.Reason(err))
+				assert.EqualValues(t, 1, modelsCalls.Load())
+			}
+			assert.Zero(t, registerCalls.Load())
+			assert.Equal(t, taskID, account.GetCredential("task_id"))
+		})
+	}
 }
 
 func TestProjectAccountModelsCannotExposeCodexMediaThroughAlias(t *testing.T) {

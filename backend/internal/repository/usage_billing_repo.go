@@ -429,7 +429,7 @@ func shouldApplyUsageBillingAccountQuota(cmd *service.UsageBillingCommand) bool 
 	if cmd == nil {
 		return false
 	}
-	if strings.EqualFold(cmd.AccountType, service.AccountTypeAPIKey) || strings.EqualFold(cmd.AccountType, service.AccountTypeBedrock) {
+	if service.AccountTypeSupportsQuota(strings.ToLower(strings.TrimSpace(cmd.AccountType))) {
 		return true
 	}
 	return strings.EqualFold(cmd.AccountPlatform, service.PlatformKiro) && strings.EqualFold(cmd.AccountType, service.AccountTypeOAuth)

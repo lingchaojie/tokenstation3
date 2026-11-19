@@ -42,7 +42,7 @@ func (s *GatewayService) ForwardAsResponses(
 	beginCaptureAttempt(c)
 	captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform))
 
-	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngress(body)
+	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngressWithConfig(s.cfg, body)
 	if err != nil {
 		return nil, err
 	}
@@ -193,28 +193,41 @@ func (s *GatewayService) ForwardAsResponses(
 			proxyURL = account.Proxy.URL()
 		}
 
-		// 10. Build upstream request
-		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-		upstreamReq, finalBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
-		releaseUpstreamCtx()
-		if err != nil {
-			return nil, fmt.Errorf("build upstream request: %w", err)
-		}
-
-		forwardedBody = finalBody
-
-		// 11. Send request
-		s.captureOutboundRequest(c, account, upstreamReq, forwardedBody)
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
-		finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
-		if err != nil {
-			if resp != nil && resp.Body != nil {
-				_ = resp.Body.Close()
+		for retriedRotatedToken := false; ; {
+			// Build and send each attempt with a fresh archive capture.
+			upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
+			upstreamReq, finalBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+			releaseUpstreamCtx()
+			if err != nil {
+				return nil, fmt.Errorf("build upstream request: %w", err)
 			}
-			finishCapture()
-			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
-				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
-			})
+
+			forwardedBody = finalBody
+
+			// 11. Send request
+			s.captureOutboundRequest(c, account, upstreamReq, forwardedBody)
+			resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+			finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
+			if err != nil {
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				finishCapture()
+				return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+					UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+				})
+			}
+			if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken {
+				if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
+					_ = resp.Body.Close()
+					finishCapture()
+					AbortCaptureAttempt(c)
+					token = rotatedToken
+					retriedRotatedToken = true
+					continue
+				}
+			}
+			break
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -237,7 +250,12 @@ func (s *GatewayService) ForwardAsResponses(
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		// Apply account policies even for statuses outside the default failover list.
+		shouldDisable := false
+		if s.rateLimitService != nil {
+			shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+		}
+		if shouldDisable || s.shouldFailoverUpstreamError(resp.StatusCode) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				ProxyID:            opsUpstreamProxyID(account),
 				ProxyName:          opsUpstreamProxyName(account),
@@ -249,10 +267,6 @@ func (s *GatewayService) ForwardAsResponses(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			shouldDisable := false
-			if s.rateLimitService != nil {
-				shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
-			}
 			s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody, responseComplete)
 			return nil, &UpstreamFailoverError{
 				StatusCode:                resp.StatusCode,
@@ -278,12 +292,33 @@ func (s *GatewayService) ForwardAsResponses(
 	// 13. Handle normal response (convert Anthropic → Responses)
 	var forwardResult *ForwardResult
 	var handleErr error
+	writerSizeBeforeStream := c.Writer.Size()
 	if isCompaction {
 		forwardResult, handleErr = s.handleResponsesCompactionResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientStream, kiroDirectMode)
 	} else if clientStream {
 		forwardResult, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode, clientToolMapping)
 	} else {
 		forwardResult, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode, clientToolMapping)
+	}
+
+	var sseErr *sseStreamErrorEventError
+	if errors.As(handleErr, &sseErr) {
+		failure := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream || (forwardResult != nil && forwardResult.ClientDisconnect))
+		failure.RequestHeaders = captureRequestHeadersFromResponse(resp)
+		failure.ResponseHeaders = resp.Header.Clone()
+		failure.UpstreamEndpoint = captureEndpointFromResponse(resp)
+		failure.Platform = account.Platform
+		failure.HasUpstreamHTTPResponse = true
+		failure.UpstreamHTTPStatus = resp.StatusCode
+		failure.CaptureResponseIncomplete = forwardResult == nil || !forwardResult.CaptureResponseComplete
+		if forwardResult == nil {
+			finishCapture()
+			return nil, failure
+		}
+		handleErr = failure
+	}
+	if errors.Is(handleErr, errProviderStreamIdleTimeout) && s.rateLimitService != nil && (ctx == nil || ctx.Err() == nil) && (forwardResult == nil || !forwardResult.ClientDisconnect) {
+		s.rateLimitService.HandleStreamTimeout(ctx, account, mappedModel)
 	}
 
 	finishCapture()
@@ -373,30 +408,27 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		return
 	}
 
-	cacheReadTokens := src.CacheReadInputTokens
-	if cacheReadTokens == 0 && src.CachedTokens > 0 {
-		cacheReadTokens = src.CachedTokens
+	cacheReadTokens := max(src.CacheReadInputTokens, 0)
+	hasCacheReadTokens := src.CacheReadInputTokensPresent || src.CacheReadInputTokens != 0
+	if cacheReadTokens == 0 && (src.CachedTokensPresent || src.CachedTokens != 0) {
+		cacheReadTokens = max(src.CachedTokens, 0)
+		hasCacheReadTokens = true
 	}
-	if cacheReadTokens == 0 && src.PromptTokensDetails != nil && src.PromptTokensDetails.CachedTokens > 0 {
-		cacheReadTokens = src.PromptTokensDetails.CachedTokens
+	if cacheReadTokens == 0 && src.PromptTokensDetails != nil && (src.PromptTokensDetails.CachedTokensPresent || src.PromptTokensDetails.CachedTokens != 0) {
+		cacheReadTokens = max(src.PromptTokensDetails.CachedTokens, 0)
+		hasCacheReadTokens = true
 	}
 	if cacheReadTokens == 0 && src.PromptCacheHitTokens != nil {
 		cacheReadTokens = max(*src.PromptCacheHitTokens, 0)
+		hasCacheReadTokens = true
 	}
+	mergeAnthropicCacheCreationUsage(dst, src)
 
 	// Some Anthropic-compatible providers retain OpenAI-style prompt/cache
 	// fields. Prefer those authoritative totals or hit/miss buckets over the
 	// overloaded input_tokens field. This covers Kimi's changing stream
 	// semantics as well as GLM/DeepSeek cache aliases.
-	if src.PromptTokens > 0 || src.PromptCacheHitTokens != nil || src.PromptCacheMissTokens != nil {
-		if src.PromptCacheMissTokens != nil {
-			dst.InputTokens = max(*src.PromptCacheMissTokens, 0)
-		} else {
-			dst.InputTokens = max(src.PromptTokens-cacheReadTokens-src.CacheCreationInputTokens, 0)
-		}
-		dst.CacheReadInputTokens = cacheReadTokens
-		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
-	} else {
+	if src.PromptTokens <= 0 && src.PromptCacheHitTokens == nil && src.PromptCacheMissTokens == nil && !dst.promptTotalPresent {
 		// Without an authoritative prompt total or miss bucket, input_tokens is
 		// provider-specific: it may already be the uncached bucket, or it may be
 		// a total from an earlier event. Do not infer a subtraction merely because
@@ -405,13 +437,11 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		if src.InputTokens > 0 {
 			dst.InputTokens = src.InputTokens
 		}
-		if cacheReadTokens > 0 {
-			dst.CacheReadInputTokens = cacheReadTokens
-		}
-		if src.CacheCreationInputTokens > 0 {
-			dst.CacheCreationInputTokens = src.CacheCreationInputTokens
-		}
 	}
+	if hasCacheReadTokens && (cacheReadTokens > 0 || dst.CacheReadInputTokens <= 0) {
+		dst.CacheReadInputTokens = cacheReadTokens
+	}
+	normalizeAnthropicPromptTotal(dst, src.PromptTokens, src.PromptCacheMissTokens)
 	if src.OutputTokens > 0 {
 		dst.OutputTokens = src.OutputTokens
 	}
@@ -437,6 +467,59 @@ func mergeAnthropicUsageFromPayload(dst *ClaudeUsage, src apicompat.AnthropicUsa
 	dst.CacheCreation5mTokens = 0
 	dst.CacheCreation1hTokens = 0
 	return true
+}
+
+func normalizeAnthropicPromptTotal(usage *ClaudeUsage, promptTokens int, promptCacheMissTokens *int) {
+	if promptCacheMissTokens != nil {
+		usage.promptTotalPresent = false
+		usage.InputTokens = max(*promptCacheMissTokens, 0)
+		return
+	}
+	if promptTokens > 0 {
+		usage.promptTotalTokens = promptTokens
+		usage.promptTotalPresent = true
+	}
+	if usage.promptTotalPresent {
+		usage.InputTokens = max(usage.promptTotalTokens-usage.CacheReadInputTokens-usage.CacheCreationInputTokens, 0)
+	}
+}
+
+func mergeAnthropicCacheCreationUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
+	if src.HasCacheCreationInputTokens() && (src.CacheCreationInputTokens > 0 || dst.CacheCreationInputTokens <= 0) {
+		dst.CacheCreationInputTokens = max(src.CacheCreationInputTokens, 0)
+		dst.cacheCreationInputTokensPresent = true
+		dst.cacheCreationInputTokensFromDetails = false
+	}
+	if src.CacheCreation != nil {
+		if src.CacheCreation.Ephemeral5mInputTokens != nil {
+			dst.CacheCreation5mTokens = max(*src.CacheCreation.Ephemeral5mInputTokens, 0)
+		}
+		if src.CacheCreation.Ephemeral1hInputTokens != nil {
+			dst.CacheCreation1hTokens = max(*src.CacheCreation.Ephemeral1hInputTokens, 0)
+		}
+		if (!dst.cacheCreationInputTokensPresent || dst.cacheCreationInputTokensFromDetails || dst.CacheCreationInputTokens <= 0) && (src.CacheCreation.Ephemeral5mInputTokens != nil || src.CacheCreation.Ephemeral1hInputTokens != nil) {
+			dst.CacheCreationInputTokens = dst.CacheCreation5mTokens + dst.CacheCreation1hTokens
+			dst.cacheCreationInputTokensFromDetails = true
+		}
+	}
+}
+
+func mergeRawAnthropicCacheCreationUsage(node gjson.Result, dst *ClaudeUsage) {
+	aggregate := node.Get("cache_creation_input_tokens")
+	usage := apicompat.AnthropicUsage{
+		CacheCreationInputTokens:        int(aggregate.Int()),
+		CacheCreationInputTokensPresent: aggregate.Exists() && aggregate.Type != gjson.Null,
+		CacheCreation:                   &apicompat.AnthropicCacheCreation{},
+	}
+	if tokens := node.Get("cache_creation.ephemeral_5m_input_tokens"); tokens.Exists() && tokens.Type != gjson.Null {
+		value := int(tokens.Int())
+		usage.CacheCreation.Ephemeral5mInputTokens = &value
+	}
+	if tokens := node.Get("cache_creation.ephemeral_1h_input_tokens"); tokens.Exists() && tokens.Type != gjson.Null {
+		value := int(tokens.Int())
+		usage.CacheCreation.Ephemeral1hInputTokens = &value
+	}
+	mergeAnthropicCacheCreationUsage(dst, usage)
 }
 
 func syncAnthropicResponsesUsage(state *apicompat.AnthropicEventToResponsesState, usage ClaudeUsage) {
@@ -494,6 +577,8 @@ func normalizeAnthropicEventUsageForResponses(event *apicompat.AnthropicStreamEv
 		dst.OutputTokens = usage.OutputTokens
 		dst.CacheReadInputTokens = usage.CacheReadInputTokens
 		dst.CacheCreationInputTokens = usage.CacheCreationInputTokens
+		dst.CacheCreationInputTokensPresent = true
+		dst.CacheCreation = nil
 	}
 	normalize(event.Usage)
 	if event.Message != nil {
@@ -526,6 +611,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*ForwardResult, error) {
 	requestID := captureProviderRequestID(resp.Header)
+	observer := beginUpstreamResponseModelObservation(c)
 
 	lineReader := newProviderLineReader(resp, s.cfg, func(r io.Reader) *bufio.Scanner {
 		return newBufferedProviderSSEScanner(r, s.cfg)
@@ -536,7 +622,6 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	var finalResp *apicompat.AnthropicResponse
 	var contentAccumulator anthropicBufferedContentAccumulator
 	var usage ClaudeUsage
-	hasKiroMarkedFinalUsage := false
 	terminalObserved := false
 	incompleteProviderTail := false
 	var scanErr error
@@ -589,20 +674,22 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			terminalObserved = true
 		}
 
+		observer.ObserveAnthropic([]byte(payload))
+		if event.Type == "error" {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			return nil, &sseStreamErrorEventError{RawData: payload}
+		}
+
 		// message_start carries the initial response structure
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
-			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
-				hasKiroMarkedFinalUsage = true
-			}
+			mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage)
 		}
 
 		// message_delta carries final usage and stop_reason
 		if event.Type == "message_delta" {
 			if event.Usage != nil {
-				if mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage) {
-					hasKiroMarkedFinalUsage = true
-				}
+				mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage)
 			}
 			mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
@@ -626,7 +713,8 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 		}
-		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream read failed before message_stop: "+sanitizeStreamError(scanErr))
+		failure := newIncompleteProviderStreamFailover(resp, "upstream stream read failed before message_stop: "+sanitizeStreamError(scanErr))
+		return nil, errors.Join(failure, scanErr)
 	}
 	if incompleteProviderTail {
 		lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
@@ -640,17 +728,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream ended without a message_start response")
 	}
 	contentAccumulator.materialize(finalResp)
-
-	// Update usage from accumulated delta
-	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 ||
-		usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
-		finalResp.Usage = apicompat.AnthropicUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     usage.CacheReadInputTokens,
-		}
-	}
+	normalizeAnthropicEventUsageForResponses(&apicompat.AnthropicStreamEvent{Message: finalResp}, usage)
 
 	// Convert to Responses format
 	if isClaude55SignedThinkingModel(mappedModel) {
@@ -680,15 +758,18 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}
 
 	return &ForwardResult{
-		RequestID:               requestID,
-		UpstreamHeaders:         resp.Header,
-		Usage:                   usage,
-		Model:                   originalModel,
-		UpstreamModel:           mappedModel,
-		ReasoningEffort:         reasoningEffort,
-		Stream:                  false,
-		Duration:                time.Since(startTime),
-		CaptureResponseComplete: true,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         usage,
+		Model:                         originalModel,
+		UpstreamModel:                 mappedModel,
+		ReasoningEffort:               reasoningEffort,
+		Stream:                        false,
+		Duration:                      time.Since(startTime),
+		UpstreamResponseModel:         observer.Model(),
+		UpstreamResponseModelConflict: observer.Conflict(),
+		UpstreamResponseServiceTier:   observer.ServiceTier(),
+		CaptureResponseComplete:       true,
 	}, nil
 }
 
@@ -705,6 +786,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*ForwardResult, error) {
 	requestID := captureProviderRequestID(resp.Header)
+	observer := beginUpstreamResponseModelObservation(c)
 	writeHeaders := func() {
 		if s.responseHeaderFilter != nil {
 			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -727,6 +809,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	firstChunk := true
 	semanticOutput := false
 	terminalObserved := false
+	providerStopObserved := false
 	providerPayloadObserved := false
 	incompleteProviderTail := false
 	clientDisconnected := false
@@ -739,6 +822,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			maxLineSize = s.cfg.Gateway.MaxLineSize
 		}
 		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+		scanner.Split(newBoundedSSESplit(s.cfg, maxLineSize, nil))
 		return scanner
 	})
 	defer lineReader.Close()
@@ -746,17 +830,20 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:               requestID,
-			UpstreamHeaders:         resp.Header,
-			Usage:                   usage,
-			Model:                   originalModel,
-			UpstreamModel:           mappedModel,
-			ReasoningEffort:         reasoningEffort,
-			Stream:                  true,
-			Duration:                time.Since(startTime),
-			FirstTokenMs:            firstTokenMs,
-			ClientDisconnect:        clientDisconnected,
-			CaptureResponseComplete: terminalObserved,
+			RequestID:                     requestID,
+			UpstreamHeaders:               resp.Header,
+			Usage:                         usage,
+			Model:                         originalModel,
+			UpstreamModel:                 mappedModel,
+			ReasoningEffort:               reasoningEffort,
+			Stream:                        true,
+			Duration:                      time.Since(startTime),
+			FirstTokenMs:                  firstTokenMs,
+			ClientDisconnect:              clientDisconnected,
+			CaptureResponseComplete:       terminalObserved,
+			UpstreamResponseModel:         observer.Model(),
+			UpstreamResponseModelConflict: observer.Conflict(),
+			UpstreamResponseServiceTier:   observer.ServiceTier(),
 		}
 	}
 
@@ -769,6 +856,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 
 		// Extract usage from message_delta
+		if event.Type == "message_delta" && event.Delta != nil && event.Delta.StopReason != "" {
+			providerStopObserved = true
+		}
 		if event.Type == "message_delta" && event.Usage != nil {
 			mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage)
 		}
@@ -782,6 +872,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 		if event.Type == "message_stop" {
 			terminalObserved = true
+		}
+		if clientDisconnected {
+			return false
 		}
 
 		// Keep the terminal Responses usage aligned with the normalized billing
@@ -831,6 +924,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	}
 
 	finalizeStream := func() (*ForwardResult, error) {
+		if clientDisconnected {
+			return resultWithUsage(), nil
+		}
 		if finalEvents := apicompat.FinalizeAnthropicResponsesStream(state); len(finalEvents) > 0 {
 			for _, evt := range finalEvents {
 				sse, err := apicompat.ResponsesEventToSSE(evt)
@@ -848,7 +944,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	// Read Anthropic SSE events
 	for {
-		line, ok, err := lineReader.Next()
+		line, ok, err := nextAnthropicCompatProviderLine(lineReader, ginRequestContext(c), &clientDisconnected)
 		if err != nil {
 			scanErr = err
 			break
@@ -859,6 +955,10 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		eventType, ok := parseAnthropicSSEField(line, "event")
 		if !ok {
 			if payload, dataLine := parseAnthropicSSEField(line, "data"); dataLine && strings.TrimSpace(payload) != "" {
+				if strings.TrimSpace(payload) == "[DONE]" && providerPayloadObserved {
+					providerStopObserved = true
+					break
+				}
 				incompleteProviderTail = true
 				break
 			}
@@ -866,7 +966,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 
 		// Read data line
-		dataLine, ok, err := lineReader.Next()
+		dataLine, ok, err := nextAnthropicCompatProviderLine(lineReader, ginRequestContext(c), &clientDisconnected)
 		if err != nil {
 			scanErr = err
 			break
@@ -897,6 +997,20 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(invalidEventErr))
 		}
+		observer.ObserveAnthropic([]byte(payload))
+		if event.Type == "error" {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			failure := anthropicCompatInBandFailure(payload)
+			if staged.committed || clientDisconnected {
+				if !clientDisconnected {
+					writeAnthropicCompatResponsesStreamFailure(c, state, clientToolRestorer, failure)
+				}
+				result := resultWithUsage()
+				result.CaptureTerminalError = true
+				return result, failure.err
+			}
+			return nil, failure.err
+		}
 		mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 
 		if processEvent(&event, payload) {
@@ -910,6 +1024,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 	}
 
+	if errors.Is(scanErr, errProviderStreamIdleTimeout) && (terminalObserved || providerStopObserved) {
+		scanErr = nil
+	}
 	if scanErr != nil {
 		if !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {
 			logger.L().Warn("forward_as_responses stream: read error",
@@ -918,11 +1035,19 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			)
 		}
 		if staged.committed || clientDisconnected {
+			if !clientDisconnected && !terminalObserved && !providerStopObserved {
+				failure := anthropicCompatProviderFailure(scanErr)
+				writeAnthropicCompatResponsesStreamFailure(c, state, clientToolRestorer, failure)
+			}
 			result := resultWithUsage()
 			result.CaptureTerminalError = true
 			return result, scanErr
 		}
-		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream read failed before semantic output: "+sanitizeStreamError(scanErr))
+		failure := newIncompleteProviderStreamFailover(resp, "upstream stream read failed before semantic output: "+sanitizeStreamError(scanErr))
+		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
+			failure.RetryableOnSameAccount = false
+		}
+		return nil, errors.Join(failure, scanErr)
 	}
 	if incompleteProviderTail {
 		lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
@@ -933,6 +1058,20 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			return result, incompleteErr
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, incompleteErr.Error())
+	}
+	if providerPayloadObserved && !terminalObserved && !providerStopObserved && !clientDisconnected {
+		failure := &anthropicCompatStreamFailure{
+			err:     errors.New("stream usage incomplete: missing terminal event"),
+			errType: "stream_incomplete",
+			message: "upstream stream ended without a terminal event",
+		}
+		if !staged.committed {
+			return nil, errors.Join(newIncompleteProviderStreamFailover(resp, failure.message), failure.err)
+		}
+		writeAnthropicCompatResponsesStreamFailure(c, state, clientToolRestorer, failure)
+		result := resultWithUsage()
+		result.CaptureTerminalError = true
+		return result, failure.err
 	}
 
 	return finalizeStream()

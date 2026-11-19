@@ -39,7 +39,7 @@ var (
 	// cache_creation_input_token_cost_above_1hr_above_200k_tokens 等）。
 	// 组 1 为基础价字段名主干，组 2 为 1h 缓存时长段（可为空），组 3 为服务档后缀（可为空）。
 	cacheTierPricePattern = regexp.MustCompile(`^(cache_(?:creation|read)_input_token_cost)(_above_1hr)?_above_\d+k_tokens((?:_[a-z]+)?)$`)
-	// Official GPT Image 2.5 token rates (2026-09-08):
+	// Official GPT Image 2.5 / 2.6 token rates (verified 2026-11-06):
 	// https://developers.openai.com/api/docs/pricing#image-generation-models
 	openAIGPTImage25FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:       5e-06,
@@ -87,6 +87,23 @@ var (
 		CacheCreationInputTokenCostPriority: 2.5e-05,
 		CacheReadInputTokenCost:             1e-06,
 		CacheReadInputTokenCostPriority:     2e-06,
+		LongContextInputTokenThreshold:      272_000,
+		LongContextInputCostMultiplier:      2,
+		LongContextOutputCostMultiplier:     1.5,
+		SupportsServiceTier:                 true,
+		LiteLLMProvider:                     "openai",
+		Mode:                                "chat",
+		SupportsPromptCaching:               true,
+	}
+	openAIGPT61TerraFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:                   1e-6,
+		InputCostPerTokenPriority:           2e-6,
+		OutputCostPerToken:                  5e-6,
+		OutputCostPerTokenPriority:          10e-6,
+		CacheCreationInputTokenCost:         1.25e-6,
+		CacheCreationInputTokenCostPriority: 2.5e-6,
+		CacheReadInputTokenCost:             0.05e-6,
+		CacheReadInputTokenCostPriority:     0.1e-6,
 		LongContextInputTokenThreshold:      272_000,
 		LongContextInputCostMultiplier:      2,
 		LongContextOutputCostMultiplier:     1.5,
@@ -163,6 +180,15 @@ var (
 		Mode:                                "chat",
 		SupportsPromptCaching:               true,
 	}
+	// Fable/Mythos 5.2 share the official price card, including both cache TTLs:
+	// https://platform.claude.com/docs/en/about-claude/pricing
+	claude52FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 8e-6, OutputCostPerToken: 40e-6,
+		CacheCreationInputTokenCost: 10e-6, CacheCreationInputTokenCostAbove1hr: 16e-6,
+		CacheCreationInputTokenCostConfigured: true, CacheCreationInputTokenCostAbove1hrConfigured: true,
+		CacheReadInputTokenCost: 0.2e-6,
+		LiteLLMProvider:         "anthropic", Mode: "chat", SupportsPromptCaching: true,
+	}
 	claudeOpus55FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 4e-6, OutputCostPerToken: 20e-6,
 		CacheCreationInputTokenCost: 5e-6, CacheCreationInputTokenCostAbove1hr: 8e-6,
@@ -180,6 +206,14 @@ var (
 		CacheCreationInputTokenCostConfigured: true, CacheCreationInputTokenCostAbove1hrConfigured: true,
 		CacheReadInputTokenCost: 0.2e-6,
 		LiteLLMProvider:         "anthropic", Mode: "chat", SupportsPromptCaching: true,
+	}
+	claudeHaiku55FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 1e-7, OutputCostPerToken: 5e-7,
+		CacheCreationInputTokenCost: 1.25e-7, CacheCreationInputTokenCostAbove1hr: 2e-7,
+		CacheReadInputTokenCost:        1e-8,
+		LongContextInputTokenThreshold: 100000,
+		LongContextInputCostMultiplier: 5, LongContextOutputCostMultiplier: 5,
+		LiteLLMProvider: "anthropic", Mode: "chat", SupportsPromptCaching: true,
 	}
 	openAIGPT56SolFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   4e-06,
@@ -300,9 +334,12 @@ type LiteLLMModelPricing struct {
 	cacheWrite1hPrioritySource                string
 	cacheReadPriceSource                      string
 	cacheReadPrioritySource                   string
+	imageCacheReadPriceSource                 string
 	imageInputPriceSource                     string
 	imageOutputPriceSource                    string
 	longContextThresholdSource                string
+	longContextInputAbsolute                  bool
+	longContextOutputAbsolute                 bool
 	longContextInputSource                    string
 	longContextOutputSource                   string
 	longContextCacheWrite5mSource             string
@@ -374,9 +411,11 @@ type PricingService struct {
 	// 需要从本地目录缓存重建叠加层。
 	customFilesHash string
 
-	// 停止信号
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	// lifecycleMu 串行化后台任务注册与停止。
+	lifecycleMu      sync.Mutex
+	backgroundCtx    context.Context
+	cancelBackground context.CancelFunc
+	wg               sync.WaitGroup
 }
 
 func markLiteLLMBucketSources(pricing *LiteLLMModelPricing, entry LiteLLMRawEntry, rawEntry, override json.RawMessage) {
@@ -402,6 +441,7 @@ func markLiteLLMBucketSources(pricing *LiteLLMModelPricing, entry LiteLLMRawEntr
 	pricing.cacheWrite1hPrioritySource = source(entry.CacheCreationInputTokenCostAbove1hrPriority != nil, "cache_creation_input_token_cost_above_1hr_priority")
 	pricing.cacheReadPriceSource = source(entry.CacheReadInputTokenCost != nil, "cache_read_input_token_cost")
 	pricing.cacheReadPrioritySource = source(entry.CacheReadInputTokenCostPriority != nil, "cache_read_input_token_cost_priority")
+	pricing.imageCacheReadPriceSource = source(entry.CacheReadInputImageTokenCost != nil, "cache_read_input_image_token_cost")
 	pricing.imageInputPriceSource = source(entry.InputCostPerImageToken != nil, "input_cost_per_image_token")
 	pricing.imageOutputPriceSource = source(entry.OutputCostPerImageToken != nil, "output_cost_per_image_token")
 	pricing.longContextThresholdSource = source(entry.LongContextInputTokenThreshold != nil, "long_context_input_token_threshold")
@@ -481,11 +521,13 @@ func rawObjectHasNonNullKey(raw json.RawMessage, keys ...string) bool {
 
 // NewPricingService 创建价格服务
 func NewPricingService(cfg *config.Config, remoteClient PricingRemoteClient) *PricingService {
+	backgroundCtx, cancelBackground := context.WithCancel(context.Background())
 	s := &PricingService{
-		cfg:          cfg,
-		remoteClient: remoteClient,
-		pricingData:  make(map[string]*LiteLLMModelPricing),
-		stopCh:       make(chan struct{}),
+		cfg:              cfg,
+		remoteClient:     remoteClient,
+		pricingData:      make(map[string]*LiteLLMModelPricing),
+		backgroundCtx:    backgroundCtx,
+		cancelBackground: cancelBackground,
 	}
 	return s
 }
@@ -508,15 +550,33 @@ func (s *PricingService) Initialize() error {
 	// 启动定时更新
 	s.startUpdateScheduler()
 
-	logger.LegacyPrintf("service.pricing", "[Pricing] Service initialized with %d models", len(s.pricingData))
+	s.mu.RLock()
+	modelCount := len(s.pricingData)
+	s.mu.RUnlock()
+	logger.LegacyPrintf("service.pricing", "[Pricing] Service initialized with %d models", modelCount)
 	return nil
 }
 
 // Stop 停止价格服务
 func (s *PricingService) Stop() {
-	close(s.stopCh)
+	s.lifecycleMu.Lock()
+	s.cancelBackground()
+	s.lifecycleMu.Unlock()
 	s.wg.Wait()
 	logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Service stopped")
+}
+
+func (s *PricingService) startBackgroundTask(task func(context.Context)) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.backgroundCtx.Err() != nil {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		task(s.backgroundCtx)
+	}()
 }
 
 // startUpdateScheduler 启动定时调度器：每个周期先做远程目录哈希同步（配置了 remote_url 时），
@@ -539,11 +599,10 @@ func (s *PricingService) startUpdateScheduler() {
 		hashInterval = 10 * time.Minute
 	}
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.startBackgroundTask(func(ctx context.Context) {
 		ticker := time.NewTicker(hashInterval)
 		defer ticker.Stop()
+		logger.LegacyPrintf("service.pricing", "[Pricing] Update scheduler started (check every %v, remote sync=%t, custom file watch=%t)", hashInterval, remoteEnabled, watchCustom)
 
 		for {
 			select {
@@ -556,50 +615,34 @@ func (s *PricingService) startUpdateScheduler() {
 				if watchCustom {
 					s.reloadIfCustomFilesChanged()
 				}
-			case <-s.stopCh:
+			case <-ctx.Done():
 				return
 			}
 		}
-	}()
-
-	logger.LegacyPrintf("service.pricing", "[Pricing] Update scheduler started (check every %v, remote sync=%t, custom file watch=%t)", hashInterval, remoteEnabled, watchCustom)
+	})
 }
 
 // checkAndUpdatePricing 检查并更新价格数据
 func (s *PricingService) checkAndUpdatePricing() error {
+	ctx := context.Background()
 	pricingFile := s.getPricingFilePath()
 
 	// 检查本地文件是否存在
 	if _, err := os.Stat(pricingFile); os.IsNotExist(err) {
 		logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Local pricing file not found, downloading...")
-		return s.downloadPricingData()
+		return s.downloadPricingData(ctx)
 	}
 
 	// 先加载本地文件（确保服务可用），再检查是否需要更新
 	if err := s.loadPricingData(pricingFile); err != nil {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to load local file, downloading: %v", err)
-		return s.downloadPricingData()
+		return s.downloadPricingData(ctx)
 	}
 
-	// 如果配置了哈希URL，通过远程哈希检查是否有更新
+	// 如果配置了哈希URL，通过远程哈希检查是否有更新。本地文件已加载，服务已可用，
+	// 后台校验不会阻塞启动，并由 Stop 取消和等待。
 	if s.cfg.Pricing.HashURL != "" {
-		remoteHash, err := s.fetchRemoteHash()
-		if err != nil {
-			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
-			return nil // 已加载本地文件，哈希获取失败不影响启动
-		}
-
-		s.mu.RLock()
-		localHash := s.localHash
-		s.mu.RUnlock()
-
-		if localHash == "" || remoteHash != localHash {
-			logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs on startup (local=%s remote=%s), downloading...",
-				localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
-			if err := s.downloadPricingData(); err != nil {
-				logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
-			}
-		}
+		s.startBackgroundTask(s.checkRemoteHashOnStartup)
 		return nil
 	}
 
@@ -614,7 +657,7 @@ func (s *PricingService) checkAndUpdatePricing() error {
 
 	if fileAge > maxAge {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Local file is %v old, updating...", fileAge.Round(time.Hour))
-		if err := s.downloadPricingData(); err != nil {
+		if err := s.downloadPricingData(ctx); err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
 		}
 	}
@@ -622,11 +665,36 @@ func (s *PricingService) checkAndUpdatePricing() error {
 	return nil
 }
 
+// checkRemoteHashOnStartup 启动后在后台比对远程哈希，不同则下载；失败只记日志，沿用已加载的本地文件。
+func (s *PricingService) checkRemoteHashOnStartup(ctx context.Context) {
+	remoteHash, err := s.fetchRemoteHash(ctx)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
+		return
+	}
+
+	s.mu.RLock()
+	localHash := s.localHash
+	s.mu.RUnlock()
+
+	if localHash == "" || remoteHash != localHash {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs on startup (local=%s remote=%s), downloading...",
+			localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
+		if err := s.downloadPricingData(ctx); err != nil && ctx.Err() == nil {
+			logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
+		}
+	}
+}
+
 // syncWithRemote 与远程同步（基于哈希校验）
 func (s *PricingService) syncWithRemote() error {
+	ctx := context.Background()
 	// 如果配置了哈希URL，从远程获取哈希进行比对
 	if s.cfg.Pricing.HashURL != "" {
-		remoteHash, err := s.fetchRemoteHash()
+		remoteHash, err := s.fetchRemoteHash(ctx)
 		if err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash: %v", err)
 			return nil // 哈希获取失败不影响正常使用
@@ -639,7 +707,7 @@ func (s *PricingService) syncWithRemote() error {
 		if localHash == "" || remoteHash != localHash {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs (local=%s remote=%s), downloading new version...",
 				localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
-			return s.downloadPricingData()
+			return s.downloadPricingData(ctx)
 		}
 		logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Hash check passed, no update needed")
 		return nil
@@ -649,7 +717,7 @@ func (s *PricingService) syncWithRemote() error {
 	pricingFile := s.getPricingFilePath()
 	info, err := os.Stat(pricingFile)
 	if err != nil {
-		return s.downloadPricingData()
+		return s.downloadPricingData(ctx)
 	}
 
 	fileAge := time.Since(info.ModTime())
@@ -657,7 +725,7 @@ func (s *PricingService) syncWithRemote() error {
 
 	if fileAge > maxAge {
 		logger.LegacyPrintf("service.pricing", "[Pricing] File is %v old, downloading...", fileAge.Round(time.Hour))
-		return s.downloadPricingData()
+		return s.downloadPricingData(ctx)
 	}
 
 	return nil
@@ -776,26 +844,32 @@ func (s *PricingService) reloadCustomPricingLayers() error {
 }
 
 // downloadPricingData 从远程下载价格数据
-func (s *PricingService) downloadPricingData() error {
+func (s *PricingService) downloadPricingData(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	remoteURL, err := s.validatePricingURL(s.cfg.Pricing.RemoteURL)
 	if err != nil {
 		return err
 	}
 	logger.LegacyPrintf("service.pricing", "[Pricing] Downloading from %s", remoteURL)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	downloadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	// 获取远程哈希（用于同步锚点，不作为完整性校验）
 	var remoteHash string
 	if strings.TrimSpace(s.cfg.Pricing.HashURL) != "" {
-		remoteHash, err = s.fetchRemoteHash()
+		remoteHash, err = s.fetchRemoteHash(ctx)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash (continuing): %v", err)
 		}
 	}
 
-	body, err := s.remoteClient.FetchPricingJSON(ctx, remoteURL)
+	body, err := s.remoteClient.FetchPricingJSON(downloadCtx, remoteURL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
@@ -813,6 +887,9 @@ func (s *PricingService) downloadPricingData() error {
 	if err != nil {
 		return fmt.Errorf("parse pricing data: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// 保存到本地文件
 	pricingFile := s.getPricingFilePath()
@@ -820,10 +897,10 @@ func (s *PricingService) downloadPricingData() error {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save file: %v", err)
 	}
 
-	// 使用远程哈希作为同步锚点，防止重复下载
-	// 当远程哈希不可用时，回退到数据本身的哈希
+	// 只有远程哈希与下载正文一致时才将其作为同步锚点。
+	// 不匹配时保留正文哈希，让下一轮同步重试，避免旧数据被误标为最新。
 	syncHash := dataHashStr
-	if remoteHash != "" {
+	if strings.EqualFold(remoteHash, dataHashStr) {
 		syncHash = remoteHash
 	}
 	hashFile := s.getHashFilePath()
@@ -856,7 +933,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 	}
 	applyBuiltInPricingCorrections(rawData)
 	overrides := s.loadPricingOverrideEntries()
-	rawData = s.applyPricingOverrides(rawData)
+	rawData = s.applyPricingOverrides(rawData, overrides)
 
 	result := make(map[string]*LiteLLMModelPricing)
 	skipped := 0
@@ -1152,9 +1229,11 @@ func deriveLongContextFromAboveTierFields(rawEntry json.RawMessage, pricing *Lit
 	}
 	if entry.LongContextInputCostMultiplier == nil {
 		pricing.LongContextInputCostMultiplier = inputMultiplier
+		pricing.longContextInputAbsolute = tp.input > 0 && pricing.InputCostPerToken > 0
 	}
 	if entry.LongContextOutputCostMultiplier == nil {
 		pricing.LongContextOutputCostMultiplier = outputMultiplier
+		pricing.longContextOutputAbsolute = tp.output > 0 && pricing.OutputCostPerToken > 0
 	}
 
 	thresholdSuffix := fmt.Sprintf("_above_%dk_tokens", threshold/1000)
@@ -1289,8 +1368,7 @@ func warnOrphanCacheTierFields(entries []string) {
 // 文件的解析都经过 parsePricingData，因此 override 是最高优先级的数据源。这里只修补
 // 已存在的条目：目录/回退里都没有的模型由 mergeOverrideOnlyModels 在两层数据合并后
 // 统一并入——若在此处抢先建条目，纯 override 条目会挡住回退文件中同名完整条目的合并。
-func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessage) map[string]json.RawMessage {
-	overrides := s.loadPricingOverrideEntries()
+func (s *PricingService) applyPricingOverrides(rawData, overrides map[string]json.RawMessage) map[string]json.RawMessage {
 	if len(overrides) == 0 {
 		return rawData
 	}
@@ -1539,13 +1617,16 @@ func (s *PricingService) useFallbackPricing() error {
 }
 
 // fetchRemoteHash 从远程获取哈希值
-func (s *PricingService) fetchRemoteHash() (string, error) {
+func (s *PricingService) fetchRemoteHash(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	hashURL, err := s.validatePricingURL(s.cfg.Pricing.HashURL)
 	if err != nil {
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	hash, err := s.remoteClient.FetchHashText(ctx, hashURL)
@@ -1706,10 +1787,10 @@ func (s *PricingService) buildModelLookupCandidates(modelLower string) []string 
 	normalized := normalizeModelNameForPricing(modelLower)
 
 	// A tier-specific entry should take precedence when the pricing catalog gains
-	// one later. Antigravity's Gemini Flash thinking tiers share the base rate,
+	// one later. Antigravity's Gemini thinking tiers share the base rate,
 	// so the normalized base remains the fallback after the exact aliases.
 	candidates := rawCandidates
-	if normalizeGeminiThinkingTierAlias(lastSegment(modelLower)) != lastSegment(modelLower) {
+	if isAntigravityThinkingTierAlias(lastSegment(modelLower)) {
 		candidates = append(candidates, normalized)
 	} else {
 		// Prefer canonical model names for all other aliases (including models/xxx).
@@ -1765,15 +1846,37 @@ func normalizeModelNameForPricing(model string) string {
 		}
 		return canonical
 	}
-	return normalizeGeminiThinkingTierAlias(model)
+	return normalizeAntigravityClaudeTierAlias(normalizeGeminiThinkingTierAlias(model))
 }
 
-// normalizeGeminiThinkingTierAlias maps Antigravity's Gemini Flash
-// thinking-tier model IDs to the public base model. The tier controls reasoning
-// behavior, not the published token rate, so this keeps -high/-low/-medium and
-// -tiered requests on the corresponding base model's price card.
+// normalizeAntigravityClaudeTierAlias maps Antigravity's Claude 5.5 thinking-tier
+// model IDs (claude-opus-5-5-high, claude-sonnet-5-5-low, ...) to the public base
+// model. Like the Gemini tiers, the suffix selects reasoning depth rather than a
+// separate token rate; without this the IDs fall into substring family matching
+// and are billed as claude-opus-5 / claude-sonnet-4-5.
+func normalizeAntigravityClaudeTierAlias(model string) string {
+	for _, baseModel := range []string{"claude-opus-5-5", "claude-sonnet-5-5"} {
+		for _, tier := range []string{"-high", "-low", "-medium"} {
+			if model == baseModel+tier {
+				return baseModel
+			}
+		}
+	}
+	return model
+}
+
+// isAntigravityThinkingTierAlias reports whether model is an Antigravity
+// Gemini or Claude thinking-tier alias of a priced base model.
+func isAntigravityThinkingTierAlias(model string) bool {
+	return normalizeGeminiThinkingTierAlias(model) != model || normalizeAntigravityClaudeTierAlias(model) != model
+}
+
+// normalizeGeminiThinkingTierAlias maps Antigravity's Gemini thinking-tier
+// model IDs to the public base model. The tier controls reasoning behavior, not
+// the published token rate, so this keeps -high/-low/-medium and -tiered
+// requests on the corresponding base model's price card.
 func normalizeGeminiThinkingTierAlias(model string) string {
-	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"} {
+	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon"} {
 		for _, tier := range []string{"-high", "-low", "-medium", "-tiered"} {
 			if model == baseModel+tier {
 				return baseModel
@@ -1811,6 +1914,20 @@ func (s *PricingService) extractBaseName(model string) string {
 
 // matchByModelFamily 基于模型系列匹配
 func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
+	model = normalizeAntigravityClaudeTierAlias(model)
+	var claude52Model string
+	switch {
+	case claude.IsFable52(model):
+		claude52Model = "claude-fable-5-2"
+	case claude.IsMythos52(model):
+		claude52Model = "claude-mythos-5-2"
+	}
+	if claude52Model != "" {
+		if pricing, ok := s.pricingData[claude52Model]; ok {
+			return pricing
+		}
+		return claude52FallbackPricing
+	}
 	if claude.IsOpus55(model) {
 		if pricing, ok := s.pricingData["claude-opus-5-5"]; ok {
 			return pricing
@@ -1822,6 +1939,12 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 			return pricing
 		}
 		return claudeSonnet55FallbackPricing
+	}
+	if claude.IsHaiku55(model) {
+		if pricing, ok := s.pricingData["claude-haiku-5-5"]; ok {
+			return pricing
+		}
+		return claudeHaiku55FallbackPricing
 	}
 	// modelFamily 定义一个模型系列的匹配和定价查找规则。
 	type modelFamily struct {
@@ -1956,6 +2079,12 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		}
 	}
 
+	if openai.IsGPT61TerraModelSpelling(model) {
+		if pricing, ok := s.pricingData["gpt-6.1-terra"]; ok {
+			return pricing
+		}
+		return openAIGPT61TerraFallbackPricing
+	}
 	if base := openai.GPT62ModelID(model); base != "" {
 		if pricing, ok := s.pricingData[base]; ok {
 			return pricing
@@ -2048,8 +2177,11 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		return openAIGPT54FallbackPricing
 	}
 
-	// Remote price mirrors can lag new releases. Never bill GPT Image 2.5
+	// Remote price mirrors can lag new releases. Never bill GPT Image 2.5 / 2.6
 	// using the older image model's rates when its entry is absent.
+	if model == "gpt-image-2.6-flare" || model == "gpt-image-2.6-sunburst" {
+		return openAIGPTImage25FallbackPricing
+	}
 	for _, imageModel := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} {
 		if model == imageModel || model == imageModel+"-2026-09-08" {
 			return openAIGPTImage25FallbackPricing
@@ -2123,7 +2255,7 @@ func (s *PricingService) GetStatus() map[string]any {
 
 // ForceUpdate 强制更新
 func (s *PricingService) ForceUpdate() error {
-	return s.downloadPricingData()
+	return s.downloadPricingData(context.Background())
 }
 
 // getPricingFilePath 获取价格文件路径
