@@ -1,14 +1,14 @@
 package handler
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -338,34 +338,39 @@ func InboundEndpointMiddleware() gin.HandlerFunc {
 			ctx := context.WithValue(c.Request.Context(), ctxkey.IngressProvider, provider)
 			c.Request = c.Request.WithContext(ctx)
 		}
-		captureIngressModel(c, rawPath)
-		c.Next()
+		if captureIngressModel(c, rawPath) {
+			c.Next()
+		}
 	}
 }
 
-func captureIngressModel(c *gin.Context, rawPath string) {
+func captureIngressModel(c *gin.Context, rawPath string) bool {
 	if c == nil || c.Request == nil || c.Request.Body == nil {
-		return
+		return true
 	}
 	if c.Request.Method != http.MethodPost || !ingressModelEndpoint(rawPath) {
-		return
+		return true
 	}
 	if enc := strings.TrimSpace(c.Request.Header.Get("Content-Encoding")); enc != "" && !strings.EqualFold(enc, "identity") {
-		return
+		return true
 	}
 
-	body, err := io.ReadAll(c.Request.Body)
-	c.Request.Body = io.NopCloser(bytes.NewReader(body))
-	c.Request.ContentLength = int64(len(body))
+	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
-		return
+		const component = "middleware.capture_ingress_model"
+		if !middleware.RejectRequestBodyReadError(c, component, err) {
+			middleware.AbortWithRequestBodyReadFailure(c, component, err)
+		}
+		return false
 	}
+	c.Request.Body = pkghttputil.NewPrereadBody(body)
+	c.Request.ContentLength = int64(len(body))
 	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	if model == "" {
-		return
+	if model != "" {
+		ctx := context.WithValue(c.Request.Context(), ctxkey.IngressModel, model)
+		c.Request = c.Request.WithContext(ctx)
 	}
-	ctx := context.WithValue(c.Request.Context(), ctxkey.IngressModel, model)
-	c.Request = c.Request.WithContext(ctx)
+	return true
 }
 
 func ingressModelEndpoint(path string) bool {

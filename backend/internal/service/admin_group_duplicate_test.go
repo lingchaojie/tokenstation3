@@ -177,7 +177,7 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 			HaikuMappedModel:   "gpt-5-mini",
 			ExactModelMappings: map[string]string{"claude-special": "gpt-special"},
 		},
-		ModelsListConfig:              GroupModelsListConfig{Enabled: true, Models: []string{"gpt-5.4", "gpt-5-mini"}},
+		ModelsListConfig:            GroupModelsListConfig{Enabled: true, Models: []string{"gpt-5.4", "gpt-5-mini"}},
 		RPMLimit:                    99,
 		MaxReasoningEffort:          "medium",
 		MaxReasoningEffortOverLimit: ReasoningEffortOverLimitDeny,
@@ -216,6 +216,7 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, source.ModelRouting, duplicate.ModelRouting)
 	require.Equal(t, source.MessagesDispatchModelConfig, duplicate.MessagesDispatchModelConfig)
 	require.Equal(t, source.ForceOpenAIFast, duplicate.ForceOpenAIFast)
+	require.Equal(t, source.ForceOpenAIUltrafast, duplicate.ForceOpenAIUltrafast)
 	require.Equal(t, source.FreeOpenAIFast, duplicate.FreeOpenAIFast)
 	require.Equal(t, source.ModelsListConfig, duplicate.ModelsListConfig)
 	require.Equal(t, source.RPMLimit, duplicate.RPMLimit)

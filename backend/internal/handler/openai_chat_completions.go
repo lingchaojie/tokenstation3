@@ -53,12 +53,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
-		if maxErr, ok := extractMaxBytesError(err); ok {
-			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
+		if handleRequestBodyReadError(c, reqLog, err) {
 			return
 		}
-		logRequestBodyReadFailure(reqLog, c.Request, err)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		status, message := requestBodyReadFailure(reqLog, c.Request, err)
+		h.errorResponse(c, status, "invalid_request_error", message)
 		return
 	}
 	if len(body) == 0 {
@@ -170,6 +169,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	// 分组利润控制：chat completions 文本入口请求级装门并固定 pricingAt。
 	ccPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
+	ccPricingCtx = service.WithOpenAICompatModelRouting(ccPricingCtx, service.OpenAICompatRouteMapped, forwardModel, "")
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
 	for {

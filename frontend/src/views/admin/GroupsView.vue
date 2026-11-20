@@ -483,26 +483,26 @@
         class="space-y-5"
       >
         <div>
-          <label class="input-label">{{ t("admin.groups.form.name") }}</label>
-          <input
+          <GroupI18nField
             v-model="createForm.name"
-            type="text"
+            v-model:i18n="createForm.i18n"
+            :label="t('admin.groups.form.name')"
+            field="name"
             required
-            class="input"
             :placeholder="t('admin.groups.enterGroupName')"
             data-tour="group-form-name"
           />
         </div>
         <div>
-          <label class="input-label">{{
-            t("admin.groups.form.description")
-          }}</label>
-          <textarea
+          <GroupI18nField
             v-model="createForm.description"
+            v-model:i18n="createForm.i18n"
+            :label="t('admin.groups.form.description')"
+            field="description"
+            multiline
             rows="3"
-            class="input"
             :placeholder="t('admin.groups.optionalDescription')"
-          ></textarea>
+          />
         </div>
         <div>
           <label class="input-label">{{
@@ -1453,6 +1453,19 @@
           </p>
           <div class="flex items-center justify-between gap-4 mt-4">
             <label class="text-sm text-gray-600 dark:text-gray-400">
+              {{ t("admin.groups.openaiFast.forceUltrafast") }}
+            </label>
+            <Toggle
+              data-testid="create-force-openai-ultrafast"
+              :aria-label="t('admin.groups.openaiFast.forceUltrafast')"
+              v-model="createForm.force_openai_ultrafast"
+            />
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {{ t("admin.groups.openaiFast.ultrafastHint") }}
+          </p>
+          <div class="flex items-center justify-between gap-4 mt-4">
+            <label class="text-sm text-gray-600 dark:text-gray-400">
               {{ t("admin.groups.openaiFast.free") }}
             </label>
             <Toggle
@@ -1977,24 +1990,24 @@
         class="space-y-5"
       >
         <div>
-          <label class="input-label">{{ t("admin.groups.form.name") }}</label>
-          <input
+          <GroupI18nField
             v-model="editForm.name"
-            type="text"
+            v-model:i18n="editForm.i18n"
+            :label="t('admin.groups.form.name')"
+            field="name"
             required
-            class="input"
             data-tour="edit-group-form-name"
           />
         </div>
         <div>
-          <label class="input-label">{{
-            t("admin.groups.form.description")
-          }}</label>
-          <textarea
+          <GroupI18nField
             v-model="editForm.description"
+            v-model:i18n="editForm.i18n"
+            :label="t('admin.groups.form.description')"
+            field="description"
+            multiline
             rows="3"
-            class="input"
-          ></textarea>
+          />
         </div>
         <div>
           <label class="input-label">{{
@@ -3087,6 +3100,19 @@
           </p>
           <div class="flex items-center justify-between gap-4 mt-4">
             <label class="text-sm text-gray-600 dark:text-gray-400">
+              {{ t("admin.groups.openaiFast.forceUltrafast") }}
+            </label>
+            <Toggle
+              data-testid="edit-force-openai-ultrafast"
+              :aria-label="t('admin.groups.openaiFast.forceUltrafast')"
+              v-model="editForm.force_openai_ultrafast"
+            />
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {{ t("admin.groups.openaiFast.ultrafastHint") }}
+          </p>
+          <div class="flex items-center justify-between gap-4 mt-4">
+            <label class="text-sm text-gray-600 dark:text-gray-400">
               {{ t("admin.groups.openaiFast.free") }}
             </label>
             <Toggle
@@ -3718,7 +3744,7 @@ import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
-import type { AdminGroup, CodexModelsManifestConfig, GroupPlatform, KiroEndpointMode, SubscriptionType } from "@/types";
+import type { AdminGroup, CodexModelsManifestConfig, GroupI18n, GroupPlatform, KiroEndpointMode, SubscriptionType } from "@/types";
 import { GROUP_PLATFORM_OPTIONS } from "@/constants/platforms";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
@@ -3733,6 +3759,7 @@ import Select from "@/components/common/Select.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import { platformLabel } from "@/utils/platformColors";
 import Icon from "@/components/icons/Icon.vue";
+import GroupI18nField from "@/components/admin/group/GroupI18nField.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
@@ -4212,6 +4239,7 @@ const editModelsListSelectedCount = computed(
 const createForm = reactive({
   name: "",
   description: "",
+  i18n: {} as GroupI18n,
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
   is_exclusive: false,
@@ -4221,6 +4249,7 @@ const createForm = reactive({
   monthly_limit_usd: null as number | null,
   long_context_pricing_enabled: true,
   force_openai_fast: false,
+  force_openai_ultrafast: false,
   free_openai_fast: false,
   model_pricing: [] as PricingFormEntry[],
   // 图片生成计费配置
@@ -4577,6 +4606,7 @@ const convertApiFormatToRoutingRules = async (
 const editForm = reactive({
   name: "",
   description: "",
+  i18n: {} as GroupI18n,
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
   is_exclusive: false,
@@ -4587,6 +4617,7 @@ const editForm = reactive({
   monthly_limit_usd: null as number | null,
   long_context_pricing_enabled: true,
   force_openai_fast: false,
+  force_openai_ultrafast: false,
   free_openai_fast: false,
   model_pricing: [] as PricingFormEntry[],
   // 图片生成计费配置
@@ -4802,7 +4833,11 @@ const editWebSearchFinalPricePreview = computed(() =>
 const resetDisabledBatchImagePricing = (
   form: Pick<
     ImagePricingFormState,
-    "platform" | "allow_image_generation" | "allow_batch_image_generation" | "batch_image_discount_multiplier" | "batch_image_hold_multiplier"
+    | "platform"
+    | "allow_image_generation"
+    | "allow_batch_image_generation"
+    | "batch_image_discount_multiplier"
+    | "batch_image_hold_multiplier"
   >,
 ) => {
   if (form.platform !== "gemini" || !form.allow_image_generation) {
@@ -5025,6 +5060,7 @@ const closeCreateModal = () => {
   clearAllAccountSearchState();
   createForm.name = "";
   createForm.description = "";
+  createForm.i18n = {};
   createForm.platform = "anthropic";
   createForm.rate_multiplier = 1.0;
   createForm.is_exclusive = false;
@@ -5049,6 +5085,7 @@ const closeCreateModal = () => {
   createForm.video_model_prices = createVideoModelPricesForm();
   createForm.long_context_pricing_enabled = true;
   createForm.force_openai_fast = false;
+  createForm.force_openai_ultrafast = false;
   createForm.free_openai_fast = false;
   createForm.model_pricing = [];
   createForm.web_search_price_per_call = null;
@@ -5185,6 +5222,10 @@ const handleCreateGroup = async () => {
         createForm.platform,
         createForm.force_openai_fast,
       ),
+      force_openai_ultrafast: normalizeGroupOpenAIFast(
+        createForm.platform,
+        createForm.force_openai_ultrafast,
+      ),
       free_openai_fast: normalizeGroupOpenAIFast(
         createForm.platform,
         createForm.free_openai_fast,
@@ -5311,6 +5352,12 @@ const handleEdit = async (group: AdminGroup) => {
   editingGroup.value = group;
   editForm.name = group.name;
   editForm.description = group.description || "";
+  editForm.i18n = Object.fromEntries(
+    Object.entries(group.i18n ?? {}).map(([locale, text]) => [
+      locale,
+      { ...text },
+    ]),
+  );
   editForm.platform = group.platform;
   editForm.rate_multiplier = group.rate_multiplier;
   editForm.is_exclusive = group.is_exclusive;
@@ -5322,6 +5369,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.long_context_pricing_enabled =
     group.long_context_pricing_enabled ?? true;
   editForm.force_openai_fast = group.force_openai_fast ?? false;
+  editForm.force_openai_ultrafast = group.force_openai_ultrafast ?? false;
   editForm.free_openai_fast = group.free_openai_fast ?? false;
   editForm.model_pricing = groupPricingFromAPI(group.model_pricing);
   editForm.allow_image_generation = group.allow_image_generation ?? false;
@@ -5460,6 +5508,7 @@ const closeEditModal = () => {
   editForm.video_model_prices = createVideoModelPricesForm();
   editForm.long_context_pricing_enabled = true;
   editForm.force_openai_fast = false;
+  editForm.force_openai_ultrafast = false;
   editForm.free_openai_fast = false;
   editForm.model_pricing = [];
   editForm.web_search_price_per_call = null;
@@ -5514,6 +5563,10 @@ const handleUpdateGroup = async () => {
       force_openai_fast: normalizeGroupOpenAIFast(
         editForm.platform,
         editForm.force_openai_fast,
+      ),
+      force_openai_ultrafast: normalizeGroupOpenAIFast(
+        editForm.platform,
+        editForm.force_openai_ultrafast,
       ),
       free_openai_fast: normalizeGroupOpenAIFast(
         editForm.platform,

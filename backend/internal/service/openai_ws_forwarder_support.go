@@ -336,6 +336,10 @@ func (s *OpenAIGatewayService) handleOpenAIWSErrorEventTransientFailure(ctx cont
 // failures and transient failures. Its return value lets stream callers avoid
 // applying the same transition twice for an error/response.failed pair.
 func (s *OpenAIGatewayService) handleOpenAIWSFailureAccountSideEffects(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) bool {
+	// A request-local capacity signal has no account side effects to deduplicate.
+	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", payload) {
+		return false
+	}
 	message := extractOpenAISSEErrorMessage(payload)
 	status := openAIStreamFailureStatus(payload, message)
 	switch status {
@@ -571,7 +575,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 		return 0, nil, "", nil
 	}
-	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
+	if requestedModel != "" && !supportsOpenAIRequestModel(account, requestedModel, requireCompact) {
 		return 0, nil, "", nil
 	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
@@ -610,7 +614,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
-		if requestedModel != "" && !latest.IsModelSupported(requestedModel) {
+		if requestedModel != "" && !supportsOpenAIRequestModel(latest, requestedModel, requireCompact) {
 			return 0, nil, "", nil
 		}
 		if !latest.SupportsOpenAIEndpointCapability(requiredCapability) {

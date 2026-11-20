@@ -1017,6 +1017,12 @@ export default {
         yes: 'Yes',
         no: 'No'
       },
+      i18nField: {
+        default: 'Default',
+        add: 'Add {language} version',
+        edit: 'Edit {language} version',
+        placeholder: '{language} version; leave empty to show the default text'
+      },
       enterGroupName: 'Enter group name',
       optionalDescription: 'Optional description',
       platformHint: 'Select the platform this group is associated with',
@@ -1111,6 +1117,7 @@ export default {
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
         allowImageGeneration: 'Allow image generation for this group',
         allowBatchImageGeneration: 'Allow batch image generation for this group',
+        perImageBilling: 'Bill per generated image',
         independentMultiplier: 'Use independent image multiplier',
         imageMultiplier: 'Image multiplier',
         batchDiscountMultiplier: 'Batch image discount',
@@ -1226,6 +1233,8 @@ export default {
         title: 'OpenAI Fast mode',
         force: 'Force Fast (priority)',
         hint: 'Forces service_tier=priority on OpenAI requests in this group. The global Fast/Flex policy can still filter or block it. New requests update immediately after saving; existing WebSocket sessions must reconnect.',
+        forceUltrafast: 'Force Ultra Fast (ultrafast)',
+        ultrafastHint: 'Sets service_tier=ultrafast on supported models. GPT-6.2 Sol and Astra default to 6× Standard, GPT-6 Astra to 6×, and GPT-6.1 Sol to 2×. A configured channel multiplier overrides those rates. Pro 200 includes Sol, and Pro 500 includes Sol and Astra. Other subscription accounts use the tiers their catalog advertises. If Ultra Fast is unavailable, the group uses Force Fast when enabled or follows the client. Free Fast excludes Ultra Fast.',
         free: 'Free Fast',
         freeHint: 'Fast requests in this group still use the priority tier, but customers are charged the equivalent Standard price.'
       },

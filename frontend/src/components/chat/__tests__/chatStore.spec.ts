@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import axios from 'axios'
 import { useChatStore } from '@/stores/chat'
 import { apiClient } from '@/api/client'
+import { refreshAuthTokens } from '@/api/tokenRefresh'
 import {
   chatAPI,
   sendChatMessageStream,
@@ -390,14 +392,6 @@ describe('useChatStore', () => {
 
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 401, message: 'expired' }), { status: 401 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        code: 0,
-        data: {
-          access_token: 'new-token',
-          refresh_token: 'new-refresh',
-          expires_in: 60,
-        },
-      }), { status: 200 }))
       .mockResolvedValueOnce(new Response('data: [DONE]\n\n', {
         status: 200,
         headers: {
@@ -405,6 +399,9 @@ describe('useChatStore', () => {
           'X-Web-Chat-Assistant-Message-ID': '101',
         },
       }))
+    const refreshPost = vi.spyOn(axios, 'post').mockResolvedValue({
+      data: { code: 0, data: { access_token: 'new-token', refresh_token: 'new-refresh', expires_in: 60 } },
+    })
 
     const result = await sendChatMessageStream(1, {
       model: 'gpt-text',
@@ -417,13 +414,73 @@ describe('useChatStore', () => {
     expect(localStorage.getItem('auth_token')).toBe('new-token')
     expect(localStorage.getItem('refresh_token')).toBe('new-refresh')
     expect(Number(localStorage.getItem('token_expires_at'))).toBeGreaterThan(Date.now())
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/auth/refresh')
-    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(refreshPost).toHaveBeenCalledTimes(1)
+    expect(refreshPost.mock.calls[0][0]).toBe('/api/v1/auth/refresh')
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
       headers: expect.objectContaining({
         Authorization: 'Bearer new-token',
       }),
     })
+  })
+
+  it('shares a one-time token rotation while refreshing the same user profile', async () => {
+    localStorage.setItem('auth_token', 'old-token')
+    localStorage.setItem('refresh_token', 'old-refresh')
+    localStorage.setItem('auth_user', JSON.stringify({ id: 1, balance: 10 }))
+    const tokens = { access_token: 'new-token', refresh_token: 'new-refresh', expires_in: 60, token_type: 'Bearer' }
+    let publish = () => {}
+    const refreshing = new Promise<{ data: { code: number; data: typeof tokens } }>((resolve) => {
+      publish = () => resolve({ data: { code: 0, data: tokens } })
+    })
+    const post = vi.spyOn(axios, 'post').mockReturnValue(refreshing)
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return new Response(JSON.stringify({ code: 0, data: tokens }))
+      }
+      const authorization = new Headers(init?.headers).get('Authorization')
+      if (authorization === 'Bearer old-token') {
+        localStorage.setItem('auth_user', JSON.stringify({ id: 1, balance: 11 }))
+        return new Response('', { status: 401 })
+      }
+      return new Response('data: [DONE]\n\n')
+    })
+    const normal = refreshAuthTokens({ failedAccessToken: 'old-token' })
+    const stream = sendChatMessageStream(1, { model: 'gpt-text', provider: 'openai', content: 'Hello' })
+    // The stream's first 401 must be handled while the HTTP refresh is pending.
+    await Promise.resolve()
+    localStorage.setItem('auth_user', JSON.stringify({ id: 1, balance: 12 }))
+    publish()
+    await Promise.all([normal, stream])
+
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(localStorage.getItem('auth_user') ?? '{}')).toEqual({ id: 1, balance: 12 })
+    expect(localStorage.getItem('refresh_token')).toBe('new-refresh')
+    expect(sessionStorage.getItem('auth_expired')).toBeNull()
+  })
+
+  it('preserves a replacement login after an old stream receives a 401', async () => {
+    localStorage.setItem('auth_token', 'old-token')
+    localStorage.setItem('refresh_token', 'old-refresh')
+    localStorage.setItem('auth_user', JSON.stringify({ id: 1 }))
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async () => {
+      localStorage.setItem('auth_token', 'next-user-access')
+      localStorage.setItem('refresh_token', 'next-user-refresh')
+      localStorage.setItem('auth_user', JSON.stringify({ id: 2 }))
+      return new Response('', { status: 401 })
+    })
+    const post = vi.spyOn(axios, 'post')
+
+    await expect(sendChatMessageStream(1, {
+      model: 'gpt-text', provider: 'openai', content: 'Hello',
+    })).rejects.toThrow()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(post).not.toHaveBeenCalled()
+    expect(localStorage.getItem('auth_token')).toBe('next-user-access')
+    expect(localStorage.getItem('refresh_token')).toBe('next-user-refresh')
+    expect(sessionStorage.getItem('auth_expired')).toBeNull()
   })
 
   it('sends the highest thinking effort when deep thinking is enabled', async () => {

@@ -50,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -60,7 +60,7 @@ import userChannelsAPI, { type UserAvailableChannel } from '@/api/channels'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const appStore = useAppStore()
 
 const channels = ref<UserAvailableChannel[]>([])
@@ -101,16 +101,24 @@ const filteredChannels = computed(() => {
     .filter((ch): ch is UserAvailableChannel => ch !== null)
 })
 
+let activeLoad: AbortController | undefined
+
 async function loadChannels() {
+  activeLoad?.abort()
+  const request = new AbortController()
+  activeLoad = request
   loading.value = true
   try {
-    channels.value = await userChannelsAPI.getAvailable()
+    const availableChannels = await userChannelsAPI.getAvailable({ signal: request.signal })
+    if (!request.signal.aborted) channels.value = availableChannels
   } catch (err: unknown) {
-    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+    if (!request.signal.aborted) appStore.showError(extractApiErrorMessage(err, t('common.error')))
   } finally {
-    loading.value = false
+    if (activeLoad === request) loading.value = false
   }
 }
 
 onMounted(loadChannels)
+watch(() => locale?.value, loadChannels)
+onUnmounted(() => activeLoad?.abort())
 </script>

@@ -123,7 +123,7 @@ func (s *GatewayService) forwardBedrock(
 
 	// 错误/failover 处理
 	if resp.StatusCode >= 400 {
-		result, handleErr := s.handleBedrockUpstreamErrors(ctx, resp, c, account)
+		result, handleErr := s.handleBedrockUpstreamErrors(ctx, resp, c, account, bedrockSchedulingModelKey(ctx, account, reqModel))
 		return finalizeForwardResult(c, result), handleErr
 	}
 
@@ -287,13 +287,25 @@ func (s *GatewayService) executeBedrockUpstream(
 	return resp, nil
 }
 
-// handleBedrockUpstreamErrors 处理 Bedrock 上游 4xx/5xx 错误（failover + 错误响应）
+// handleBedrockUpstreamErrors 处理 Bedrock 上游 4xx/5xx 错误（failover + 错误响应）；
+// modelKey 是调度器按模型隔离账号状态时使用的模型键（account.GetMappedModel 的结果）。
 func (s *GatewayService) handleBedrockUpstreamErrors(
 	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
+	modelKey string,
 ) (*ForwardResult, error) {
+	// 内容过滤由请求内容决定，换号结果相同：不换号，按普通错误返回客户端。
+	if resp.StatusCode >= http.StatusInternalServerError {
+		respBody, readErr := s.readUpstreamErrorBody(resp)
+		_ = resp.Body.Close()
+		resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
+		if isBedrockContentFilterError(resp.StatusCode, respBody) {
+			return s.handleErrorResponse(ctx, resp, c, account, modelKey)
+		}
+	}
+
 	// retry exhausted + failover
 	if s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
@@ -304,7 +316,7 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 			logger.LegacyPrintf("service.gateway", "[Bedrock] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d Body=%s",
 				account.ID, account.Name, resp.StatusCode, truncateString(string(respBody), 1000))
 
-			s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			s.handleRetryExhaustedSideEffects(ctx, resp, account, modelKey)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				ProxyID:            opsUpstreamProxyID(account),
 				ProxyName:          opsUpstreamProxyName(account),
@@ -319,7 +331,7 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 			failure.CaptureResponseIncomplete = !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit())
 			return nil, failure
 		}
-		return s.handleRetryExhaustedError(ctx, resp, c, account)
+		return s.handleRetryExhaustedError(ctx, resp, c, account, modelKey)
 	}
 
 	// non-retryable failover
@@ -328,7 +340,7 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 		_ = resp.Body.Close()
 		resp.Body = replayGatewayUpstreamErrorBody(respBody, readErr)
 
-		s.handleFailoverSideEffects(ctx, resp, account)
+		s.handleFailoverSideEffects(ctx, resp, account, modelKey)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
 			ProxyName:          opsUpstreamProxyName(account),
@@ -345,7 +357,7 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 	}
 
 	// other errors
-	return s.handleErrorResponse(ctx, resp, c, account)
+	return s.handleErrorResponse(ctx, resp, c, account, modelKey)
 }
 
 // buildUpstreamRequestBedrock 构建 Bedrock 上游请求

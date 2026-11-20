@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -157,4 +159,50 @@ func TestWebChatMessageAuditOmitsPromptBodyButKeepsMetadata(t *testing.T) {
 	require.Equal(t, int64(42), *logs[0].ActorUserID)
 	require.Equal(t, "<prompt-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "plaintext-prompt-audit-canary")
+}
+
+func TestScopedAdminAuditKeepsOperationAttributionAndOmitsCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		ctx := context.WithValue(c.Request.Context(), ctxkey.RequestID, "scope-request-id")
+		ctx = adminaccess.WithPrincipal(ctx, &adminaccess.Principal{KeyID: "scoped-id", KeyName: "automation"})
+		c.Request = c.Request.WithContext(ctx)
+		c.Set(string(ContextKeyUser), AuthSubject{UserID: 42})
+		c.Set(string(ContextKeyUserRole), service.RoleAdmin)
+		c.Set(ContextKeyAuthEmail, "creator@example.com")
+		c.Set("auth_method", service.AuditAuthMethodAdminAPIKey)
+	})
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	router.PUT("/api/v1/admin/accounts/:id", func(c *gin.Context) {
+		var request map[string]string
+		require.NoError(t, json.NewDecoder(c.Request.Body).Decode(&request))
+		require.Equal(t, "credential-canary", request["secret"])
+		c.Status(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/accounts/123", bytes.NewBufferString(`{"secret":"credential-canary"}`))
+	req.Header.Set("x-api-key", "adm_sc_credential-canary")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	auditService.Stop()
+
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	require.Len(t, repository.logs, 1)
+	entry := repository.logs[0]
+	require.Equal(t, "admin.accounts.update", entry.Action)
+	require.Equal(t, "/api/v1/admin/accounts/:id", entry.Path)
+	require.Equal(t, "scope-request-id", entry.RequestID)
+	require.NotNil(t, entry.ActorUserID)
+	require.EqualValues(t, 42, *entry.ActorUserID)
+	require.Equal(t, "creator@example.com", entry.ActorEmail)
+	require.Equal(t, service.RoleAdmin, entry.ActorRole)
+	require.Equal(t, "scoped-id", entry.Extra["admin_key_id"])
+	require.Equal(t, "<scoped administrator body omitted>", entry.RequestBody)
+	require.Empty(t, entry.CredentialMasked)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 type webChatAPIKeyService interface {
@@ -505,7 +506,8 @@ func (s *WebChatService) forwardWebChatOpenAI(ctx context.Context, c *gin.Contex
 	if s.openAIGatewayService == nil {
 		return nil, nil, ErrNoAvailableAccounts
 	}
-	selection, err := s.openAIGatewayService.SelectAccountWithLoadAwareness(ctx, &group.ID, "", input.Model, nil)
+	selectionCtx := WithOpenAICompatModelRouting(ctx, OpenAICompatRouteMapped, gjson.GetBytes(body, "model").String(), group.DefaultMappedModel)
+	selection, err := s.openAIGatewayService.SelectAccountWithLoadAwareness(selectionCtx, &group.ID, "", input.Model, nil)
 	if err != nil {
 		return nil, nil, err
 	}

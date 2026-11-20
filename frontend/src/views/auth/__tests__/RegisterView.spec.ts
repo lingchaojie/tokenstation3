@@ -258,7 +258,10 @@ describe('RegisterView', () => {
     expect(showErrorMock).not.toHaveBeenCalled()
   })
 
-  it('shows the localized registration domain quota message returned by the backend', async () => {
+  it.each([
+    ['EMAIL_DOMAIN_REGISTRATION_LIMIT', '该邮箱域名无法注册新账户。请使用主流邮箱注册；如需使用企业邮箱，请联系客服添加域名白名单。'],
+    ['EMAIL_BLOCKED', 'auth.errors.EMAIL_BLOCKED'],
+  ])('shows the localized registration registration error returned by the backend (%s)', async (reason, expected) => {
     getPublicSettingsMock.mockResolvedValueOnce({
       ...publicSettings,
       turnstile_enabled: false,
@@ -266,7 +269,7 @@ describe('RegisterView', () => {
       registration_email_domain_quota_enabled: true
     })
     registerMock.mockRejectedValueOnce({
-      reason: 'EMAIL_DOMAIN_REGISTRATION_LIMIT',
+      reason,
       message: 'raw backend message'
     })
 
@@ -278,9 +281,7 @@ describe('RegisterView', () => {
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(showErrorMock).toHaveBeenCalledWith(
-      '该邮箱域名无法注册新账户。请使用主流邮箱注册；如需使用企业邮箱，请联系客服添加域名白名单。'
-    )
+    expect(showErrorMock).toHaveBeenCalledWith(expected)
   })
 
   // 域名限量注册开关默认关闭：恢复 PR5423 之前的客户端白名单预检，非白名单域名不发起注册请求。

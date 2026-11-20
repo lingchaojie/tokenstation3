@@ -349,6 +349,38 @@ describe('buildCreateOrderPayload', () => {
 })
 
 describe('readPaymentRecoverySnapshot', () => {
+  it('recovers a known EasyPay order after its payment deadline only when requested', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      provider_key: 'easypay',
+      payment_mode: 'redirect',
+      pay_url: 'https://pay.example.com/session/101',
+      expires_at: '2024-01-01T00:10:00.000Z',
+      resume_token: 'resume-101',
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+    })
+    const raw = JSON.stringify(decision.recovery)
+    const now = Date.UTC(2024, 0, 1, 0, 20, 0)
+
+    expect(readPaymentRecoverySnapshot(raw, { now })).toBeNull()
+    expect(readPaymentRecoverySnapshot(raw, {
+      now,
+      allowExpiredConfirmation: true,
+      resumeToken: 'resume-101',
+    })?.providerKey).toBe('easypay')
+    expect(readPaymentRecoverySnapshot(raw, {
+      now,
+      allowExpiredConfirmation: true,
+      resumeToken: 'another-order',
+    })).toBeNull()
+    expect(readPaymentRecoverySnapshot(JSON.stringify({ ...decision.recovery, providerKey: undefined }), {
+      now,
+      allowExpiredConfirmation: true,
+    })).toBeNull()
+  })
+
   it('restores an unexpired snapshot when the resume token matches', () => {
     const snapshot: PaymentRecoverySnapshot = {
       orderId: 33,

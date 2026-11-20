@@ -53,38 +53,36 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	clientStream := anthropicReq.Stream
 
 	// 2. Anthropic → Chat Completions (direct, no Responses intermediary)
-	chatReq, err := apicompat.AnthropicToChatCompletionsRequest(&anthropicReq)
+	chatReq, err := apicompat.AnthropicToChatCompletionsRequestWithMinOutputTokens(
+		&anthropicReq,
+		configuredMinOutputTokens(s.cfg),
+	)
 	if err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, fmt.Errorf("convert anthropic to chat completions: %w", err)
 	}
 
-	billingModel := resolveOpenAIForwardModel(account, anthropicReq.Model, defaultMappedModel)
-	if openai.GPT62ModelID(originalModel) != "" {
-		if mapped, matched := account.ResolveMappedModel(originalModel); matched {
-			billingModel = mapped
-		}
-	}
+	billingModel := resolveOpenAIAnthropicCompatBillingModel(account, originalModel, anthropicReq.Model, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
-	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
+	if err := validateGPT61RawEffort(body, upstreamModel); err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
 	if openai.RequiresResponsesForToolCalls(upstreamModel) && len(anthropicReq.Tools) > 0 {
-		err := fmt.Errorf("%s requires Responses for tool calls; this account only supports Chat Completions", upstreamModel)
+		err := fmt.Errorf("%s requires Responses for tool calls; this account only supports Chat Completions", normalizeKnownOpenAICodexModel(upstreamModel))
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
 	chatReq.Model = upstreamModel
-	if openai.GPT62ModelID(upstreamModel) != "" {
-		chatReq.Temperature, chatReq.TopP = nil, nil
-	}
 	chatReq.ReasoningEffort = openAICompatAnthropicReasoningEffort(&anthropicReq, upstreamModel, chatReq.ReasoningEffort)
 	if effort, err := gpt62RequestReasoningEffort(body, upstreamModel, billingModel, originalModel); err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	} else if effort != "" {
 		chatReq.ReasoningEffort = effort
+	}
+	if openai.GPT62ModelID(upstreamModel) != "" || openai.IsGPT61SolModelSpelling(upstreamModel) {
+		chatReq.Temperature, chatReq.TopP = nil, nil
 	}
 	chatReq.Stream = clientStream
 	if clientStream {
@@ -113,14 +111,28 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 			chatBody = policyBody
 		}
 	}
+	if err := validateGPT61CompatRequest(chatBody, upstreamModel); err != nil {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
+	// This conversion does not carry a client-supplied tier. Apply the tier
+	// policy here when the group explicitly forces Ultra Fast.
+	if openAIGroupForcedServiceTier(ctx, account, upstreamModel) == OpenAIFastTierUltrafast {
+		chatBody, err = s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, chatBody)
+		if err != nil {
+			var blocked *OpenAIFastBlockedError
+			if errors.As(err, &blocked) {
+				MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+				writeAnthropicError(c, http.StatusForbidden, "forbidden_error", blocked.Message)
+			}
+			return nil, err
+		}
+		serviceTier = extractOpenAIServiceTierFromBody(chatBody)
+	}
 	// Provider normalization and policy caps can both change the converted effort.
 	// Use the final outbound value for usage logs and billing.
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(chatBody, upstreamModel, billingModel, originalModel)
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, chatBody, upstreamModel)
-	// Unlike forwardResponsesViaRawChatCompletions, applyOpenAIFastPolicyToBody
-	// is intentionally skipped: Anthropic Messages bodies carry no service_tier,
-	// so the converted Chat Completions body never contains one and the policy
-	// would always be a no-op on this path.
 
 	logger.L().Debug("openai messages: forwarding via raw chat completions",
 		zap.Int64("account_id", account.ID),
@@ -202,18 +214,20 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	c.JSON(http.StatusOK, anthropicResp)
 
 	return &OpenAIForwardResult{
-		RequestID:                   requestID,
-		UpstreamHeaders:             resp.Header,
-		Usage:                       parsedUsage.Usage,
-		Model:                       originalModel,
-		BillingModel:                billingModel,
-		UpstreamModel:               upstreamModel,
-		ReasoningEffort:             reasoningEffort,
-		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
-		Stream:                      false,
-		Duration:                    time.Since(startTime),
-		CaptureResponseComplete:     true,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         parsedUsage.Usage,
+		Model:                         originalModel,
+		BillingModel:                  billingModel,
+		UpstreamModel:                 upstreamModel,
+		ReasoningEffort:               reasoningEffort,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+		ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		Stream:                        false,
+		Duration:                      time.Since(startTime),
+		CaptureResponseComplete:       true,
 	}, nil
 }
 
@@ -262,20 +276,22 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 
 	scan := s.scanCCStream(ctx, c, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
 	result := &OpenAIForwardResult{
-		RequestID:                   requestID,
-		UpstreamHeaders:             resp.Header,
-		Usage:                       scan.Usage,
-		Model:                       originalModel,
-		BillingModel:                billingModel,
-		UpstreamModel:               upstreamModel,
-		ReasoningEffort:             reasoningEffort,
-		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
-		Stream:                      true,
-		Duration:                    time.Since(startTime),
-		FirstTokenMs:                scan.FirstTokenMs,
-		ClientDisconnect:            clientDisconnected,
-		CaptureResponseComplete:     scan.SawDone,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         scan.Usage,
+		Model:                         originalModel,
+		BillingModel:                  billingModel,
+		UpstreamModel:                 upstreamModel,
+		ReasoningEffort:               reasoningEffort,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+		ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		Stream:                        true,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  scan.FirstTokenMs,
+		ClientDisconnect:              clientDisconnected,
+		CaptureResponseComplete:       scan.SawDone,
 	}
 	if scan.Err != nil {
 		var failoverErr *UpstreamFailoverError

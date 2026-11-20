@@ -109,6 +109,7 @@
               :show-metric-toggle="true"
               :enable-breakdown="false"
               :show-account-cost="false"
+              :show-standard-cost="false"
               :start-date="startDate"
               :end-date="endDate"
             />
@@ -119,6 +120,7 @@
               :show-metric-toggle="true"
               :enable-breakdown="false"
               :show-account-cost="false"
+              :show-standard-cost="false"
               :start-date="startDate"
               :end-date="endDate"
             />
@@ -135,6 +137,8 @@
               :show-source-toggle="false"
               :show-metric-toggle="true"
               :enable-breakdown="false"
+              :show-account-cost="false"
+              :show-standard-cost="false"
               :title="t('usage.endpointDistribution')"
               :start-date="startDate"
               :end-date="endDate"
@@ -733,7 +737,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
@@ -790,17 +794,20 @@ import {
   hasImageOutputCost,
 } from '@/utils/imageUsage'
 import { COMMON_ERROR_STATUS_CODES } from '@/utils/errorBadges'
+import { captureStoredUserIdentity } from '@/api/tokenRefresh'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const appStore = useAppStore()
 
 type DistributionMetric = 'tokens' | 'actual_cost'
 type EndpointSource = 'inbound' | 'upstream' | 'path'
 
 let abortController: AbortController | null = null
+let exportController: AbortController | null = null
 let chartReqSeq = 0
 let statsReqSeq = 0
 let modelStatsReqSeq = 0
+let groupsReqSeq = 0
 
 // Tooltip state
 const tooltipVisible = ref(false)
@@ -1179,10 +1186,12 @@ const loadApiKeys = async () => {
 }
 
 const loadGroups = async () => {
+  const seq = ++groupsReqSeq
   try {
-    groups.value = await userGroupsAPI.getAvailable()
+    const available = await userGroupsAPI.getAvailable()
+    if (seq === groupsReqSeq) groups.value = available
   } catch (error) {
-    console.error('Failed to load available groups:', error)
+    if (seq === groupsReqSeq) console.error('Failed to load available groups:', error)
   }
 }
 
@@ -1350,23 +1359,74 @@ const escapeCSVValue = (value: unknown): string => {
   return str
 }
 
+const EXPORT_PAGE_SIZE = 1000
+const EXPORT_RATE_LIMIT_MAX_RETRIES = 3
+const EXPORT_RATE_LIMIT_MAX_WAIT_SECONDS = 60
+
+const waitForExportRetry = (delayMs: number, signal: AbortSignal): Promise<void> => {
+  signal.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+// 导出逐页请求计入按用户的重查询限流。429 时按 Retry-After 等待后重试同一页。
+const queryExportPage = async (params: UsageQueryParams, signal: AbortSignal, checkOwner: () => void) => {
+  for (let attempt = 0; ; attempt++) {
+    checkOwner()
+    try {
+      return await usageAPI.query(params, { signal })
+    } catch (error: unknown) {
+      checkOwner()
+      const rateLimitError = error as { status?: number; retry_after_seconds?: number } | null
+      if (rateLimitError?.status !== 429 || attempt >= EXPORT_RATE_LIMIT_MAX_RETRIES) throw error
+      const waitSeconds = Math.min(
+        Math.max(rateLimitError.retry_after_seconds ?? EXPORT_RATE_LIMIT_MAX_WAIT_SECONDS, 1),
+        EXPORT_RATE_LIMIT_MAX_WAIT_SECONDS
+      )
+      appStore.showInfo(t('usage.exportRateLimited', { seconds: waitSeconds }))
+      await waitForExportRetry(waitSeconds * 1000, signal)
+    }
+  }
+}
+
 const exportToCSV = async () => {
+  if (exporting.value) return
   if (pagination.total === 0) {
     appStore.showWarning(t('usage.noDataToExport'))
     return
   }
+
+  const controller = new AbortController()
+  exportController = controller
+  const isSameUser = captureStoredUserIdentity()
+  const abortIfOwnerChanged = () => {
+    if (!isSameUser()) controller.abort()
+  }
+  const checkOwner = () => {
+    abortIfOwnerChanged()
+    controller.signal.throwIfAborted()
+  }
+  window.addEventListener('storage', abortIfOwnerChanged)
 
   exporting.value = true
   appStore.showInfo(t('usage.preparingExport'))
 
   try {
     const allLogs: UsageLog[] = []
-    const pageSize = 100 // Use a larger page size for export to reduce requests
-    const exportParams = buildUsageQueryParams(1, pageSize)
-    const totalRequests = Math.ceil(pagination.total / pageSize)
-
-    for (let page = 1; page <= totalRequests; page++) {
-      const response = await usageAPI.query({ ...exportParams, page })
+    const exportParams = buildUsageQueryParams(1, EXPORT_PAGE_SIZE)
+    const totalPages = Math.ceil(pagination.total / EXPORT_PAGE_SIZE)
+    for (let page = 1; page <= totalPages; page++) {
+      const response = await queryExportPage({ ...exportParams, page }, controller.signal, checkOwner)
+      checkOwner()
       allLogs.push(...response.items)
     }
 
@@ -1415,6 +1475,7 @@ const exportToCSV = async () => {
       ...rows.map((row) => row.join(','))
     ].join('\n')
 
+    checkOwner()
     const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -1425,9 +1486,13 @@ const exportToCSV = async () => {
 
     appStore.showSuccess(t('usage.exportSuccess'))
   } catch (error) {
-    appStore.showError(t('usage.exportFailed'))
-    console.error('CSV Export failed:', error)
+    if (!controller.signal.aborted) {
+      appStore.showError(t('usage.exportFailed'))
+      console.error('CSV Export failed:', error)
+    }
   } finally {
+    window.removeEventListener('storage', abortIfOwnerChanged)
+    exportController = null
     exporting.value = false
   }
 }
@@ -1598,8 +1663,12 @@ onMounted(() => {
   document.addEventListener('click', handleColumnClickOutside)
 })
 
+watch(locale, () => { void loadGroups() })
+
 onUnmounted(() => {
+  groupsReqSeq++
   abortController?.abort()
+  exportController?.abort()
   document.removeEventListener('click', handleColumnClickOutside)
 })
 </script>

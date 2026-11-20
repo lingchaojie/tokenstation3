@@ -425,6 +425,10 @@ func buildAgentIdentityAuthenticationHeaders(ctx context.Context, repo AccountRe
 	if err := ensureAgentIdentityTaskForAccount(ctx, repo, wsInvalidator, taskMu, account, ""); err != nil {
 		return nil, err
 	}
+	return signAgentIdentityAuthenticationHeaders(account)
+}
+
+func signAgentIdentityAuthenticationHeaders(account *Account) (http.Header, error) {
 	key, err := agentIdentityKeyFromAccount(account)
 	if err != nil {
 		return nil, err

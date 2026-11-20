@@ -135,8 +135,9 @@ type EndpointStat struct {
 	Endpoint    string  `json:"endpoint"`
 	Requests    int64   `json:"requests"`
 	TotalTokens int64   `json:"total_tokens"`
-	Cost        float64 `json:"cost"`        // 标准计费
-	ActualCost  float64 `json:"actual_cost"` // 实际扣除
+	Cost        float64 `json:"cost"`                   // 标准计费
+	ActualCost  float64 `json:"actual_cost"`            // 实际扣除
+	AccountCost float64 `json:"account_cost,omitempty"` // 账号成本（仅管理员接口返回）
 }
 
 // GroupUsageSummary represents today's, yesterday's, and cumulative cost for a single group.
@@ -370,7 +371,7 @@ type AccountUsageHistory struct {
 	Requests   int64   `json:"requests"`
 	Tokens     int64   `json:"tokens"`
 	Cost       float64 `json:"cost"`        // 标准计费（total_cost）
-	ActualCost float64 `json:"actual_cost"` // 账号口径费用（total_cost * account_rate_multiplier）
+	ActualCost float64 `json:"actual_cost"` // 兼容字段，表示账号成本（COALESCE(account_stats_cost, total_cost) * account_rate_multiplier）
 	UserCost   float64 `json:"user_cost"`   // 用户口径费用（actual_cost，受分组倍率影响）
 }
 
@@ -413,6 +414,9 @@ type AccountUsageSummary struct {
 
 // AccountUsageStatsResponse represents the full usage statistics response for an account
 type AccountUsageStatsResponse struct {
+	StartDate         string                `json:"start_date,omitempty"` // Inclusive report date in Timezone.
+	EndDate           string                `json:"end_date,omitempty"`   // Inclusive report date in Timezone.
+	Timezone          string                `json:"timezone,omitempty"`
 	History           []AccountUsageHistory `json:"history"`
 	Summary           AccountUsageSummary   `json:"summary"`
 	Models            []ModelStat           `json:"models"`

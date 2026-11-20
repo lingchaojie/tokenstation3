@@ -327,7 +327,7 @@ func TestGetOpenAICodexClientVersionFallsBackOnError(t *testing.T) {
 	require.Equal(t, codexCLIVersion, svc.GetOpenAICodexClientVersion(context.Background()))
 }
 
-// 规范 UA：面板未填完整 UA 时按当前生效版本号拼出标准 TUI 形态。
+// 规范 UA：面板未填完整 UA 时按当前生效版本号拼出标准 CLI 形态。
 func TestGetOpenAICodexCanonicalUserAgentBuildsFromVersion(t *testing.T) {
 	svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{
 		SettingKeyOpenAICodexClientVersionSynced: "0.200.1",

@@ -40,6 +40,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
+	SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
 
 	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if originalModel == "" {
@@ -276,17 +277,20 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &OpenAIForwardResult{
-		RequestID:               resp.Header.Get("x-request-id"),
-		UpstreamHeaders:         resp.Header,
-		Usage:                   claudeUsageToOpenAIUsage(usage),
-		Model:                   originalModel,
-		BillingModel:            billingModel,
-		UpstreamModel:           upstreamModel,
-		UpstreamEndpoint:        "/v1/messages",
-		Stream:                  false,
-		ReasoningEffort:         reasoningEffort,
-		Duration:                time.Since(startTime),
-		CaptureResponseComplete: true,
+		RequestID:                     resp.Header.Get("x-request-id"),
+		UpstreamHeaders:               resp.Header,
+		Usage:                         claudeUsageToOpenAIUsage(usage),
+		Model:                         originalModel,
+		BillingModel:                  billingModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+		UpstreamModel:                 upstreamModel,
+		UpstreamEndpoint:              "/v1/messages",
+		Stream:                        false,
+		ReasoningEffort:               reasoningEffort,
+		Duration:                      time.Since(startTime),
+		CaptureResponseComplete:       true,
 	}, nil
 }
 
@@ -348,6 +352,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
+	scanner.Split(newBoundedSSESplit(s.cfg, maxLineSize, nil))
 
 	type scanEvent struct {
 		line string
@@ -355,11 +360,16 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	}
 	events := make(chan scanEvent, 16)
 	done := make(chan struct{})
+	queueBudget := newSSEQueueBudget(s.cfg)
 	sendEvent := func(ev scanEvent) bool {
+		if !queueBudget.acquire(len(ev.line), done) {
+			return false
+		}
 		select {
 		case events <- ev:
 			return true
 		case <-done:
+			queueBudget.release(len(ev.line))
 			return false
 		}
 	}
@@ -427,6 +437,9 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	for {
 		select {
 		case ev, ok := <-events:
+			if ok {
+				queueBudget.release(len(ev.line))
+			}
 			if !ok {
 				if pendingStreamError != nil {
 					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, sawTerminalEvent, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), pendingStreamError
@@ -489,7 +502,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			}
 
 			if !clientDisconnected {
-				restored := string(reverseToolNamesIfPresent(c, []byte(line)))
+				restored := reverseToolNamesIfPresentString(c, line)
 				if _, err := io.WriteString(w, restored); err != nil {
 					clientDisconnected = true
 					logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
@@ -572,19 +585,22 @@ func (s *OpenAIGatewayService) nativeAnthropicStreamResult(
 		usage = &ClaudeUsage{}
 	}
 	return &OpenAIForwardResult{
-		RequestID:               resp.Header.Get("x-request-id"),
-		UpstreamHeaders:         resp.Header,
-		Usage:                   claudeUsageToOpenAIUsage(usage),
-		Model:                   originalModel,
-		BillingModel:            billingModel,
-		UpstreamModel:           upstreamModel,
-		UpstreamEndpoint:        "/v1/messages",
-		Stream:                  true,
-		ReasoningEffort:         reasoningEffort,
-		Duration:                time.Since(startTime),
-		FirstTokenMs:            firstTokenMs,
-		ClientDisconnect:        clientDisconnect,
-		CaptureResponseComplete: captureResponseComplete,
+		RequestID:                     resp.Header.Get("x-request-id"),
+		UpstreamHeaders:               resp.Header,
+		Usage:                         claudeUsageToOpenAIUsage(usage),
+		Model:                         originalModel,
+		BillingModel:                  billingModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+		UpstreamModel:                 upstreamModel,
+		UpstreamEndpoint:              "/v1/messages",
+		Stream:                        true,
+		ReasoningEffort:               reasoningEffort,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
 	}
 }
 
@@ -597,9 +613,10 @@ func claudeUsageToOpenAIUsage(u *ClaudeUsage) OpenAIUsage {
 		return OpenAIUsage{}
 	}
 	return OpenAIUsage{
-		InputTokens:              u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
-		OutputTokens:             u.OutputTokens,
-		CacheCreationInputTokens: u.CacheCreationInputTokens,
-		CacheReadInputTokens:     u.CacheReadInputTokens,
+		InputTokens:                     u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
+		OutputTokens:                    u.OutputTokens,
+		CacheCreationInputTokens:        u.CacheCreationInputTokens,
+		CacheReadInputTokens:            u.CacheReadInputTokens,
+		cacheCreationInputTokensPresent: u.cacheCreationInputTokensPresent,
 	}
 }

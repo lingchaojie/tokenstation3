@@ -388,7 +388,12 @@ func (h *PaymentHandler) GetMyOrders(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Paginated(c, sanitizePaymentOrdersForResponse(orders), int64(total), page, pageSize)
+	holds, err := h.paymentService.PaymentConfirmationHolds(c.Request.Context(), orders)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, sanitizePaymentOrdersForResponse(orders, holds), int64(total), page, pageSize)
 }
 
 // GetOrder returns a single order for the authenticated user.
@@ -410,7 +415,7 @@ func (h *PaymentHandler) GetOrder(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, sanitizePaymentOrderForResponse(order))
+	h.writePaymentOrderResponse(c, order)
 }
 
 // CancelOrder cancels a pending order for the authenticated user.
@@ -464,7 +469,16 @@ func (h *PaymentHandler) VerifyOrder(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, sanitizePaymentOrderForResponse(order))
+	h.writePaymentOrderResponse(c, order)
+}
+
+func (h *PaymentHandler) writePaymentOrderResponse(c *gin.Context, order *dbent.PaymentOrder) {
+	holds, err := h.paymentService.PaymentConfirmationHolds(c.Request.Context(), []*dbent.PaymentOrder{order})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, sanitizePaymentOrderForResponse(order, holds[strconv.FormatInt(order.ID, 10)]))
 }
 
 // PublicOrderResult is returned after a signed resume-token lookup. The token
@@ -638,22 +652,24 @@ type PaymentOrderResult struct {
 	RefundRequestReason *string    `json:"refund_request_reason,omitempty"`
 	PlanID              *int64     `json:"plan_id,omitempty"`
 	ProviderInstanceID  *string    `json:"provider_instance_id,omitempty"`
+	ProviderKey         string     `json:"provider_key,omitempty"`
+	ConfirmationPending bool       `json:"confirmation_pending,omitempty"`
 	PayURL              *string    `json:"pay_url,omitempty"`
 	QRCode              *string    `json:"qr_code,omitempty"`
 	PaymentMode         string     `json:"payment_mode,omitempty"`
 }
 
-func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder) []PaymentOrderResult {
+func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder, holds map[string]bool) []PaymentOrderResult {
 	out := make([]PaymentOrderResult, 0, len(orders))
 	for _, order := range orders {
-		if item := sanitizePaymentOrderForResponse(order); item != nil {
-			out = append(out, *item)
+		if order != nil {
+			out = append(out, *sanitizePaymentOrderForResponse(order, holds[strconv.FormatInt(order.ID, 10)]))
 		}
 	}
 	return out
 }
 
-func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderResult {
+func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder, confirmationPending bool) *PaymentOrderResult {
 	if order == nil {
 		return nil
 	}
@@ -680,8 +696,12 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 		RefundRequestReason: order.RefundRequestReason,
 		PlanID:              order.PlanID,
 		ProviderInstanceID:  order.ProviderInstanceID,
+		ProviderKey:         service.PaymentOrderProviderKey(order),
+		ConfirmationPending: confirmationPending,
 	}
-	if canResumePaymentOrder(order) {
+	if confirmationPending {
+		result.ProviderKey = payment.TypeEasyPay
+	} else if canResumePaymentOrder(order) {
 		result.PayURL = nonEmptyStringPtr(order.PayURL)
 		result.QRCode = nonEmptyStringPtr(order.QrCode)
 		result.PaymentMode = paymentOrderPaymentMode(order)

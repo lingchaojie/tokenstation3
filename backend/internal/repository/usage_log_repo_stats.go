@@ -814,7 +814,6 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 
 	stats := &UsageStats{}
 	var totalAccountCost float64
-	useAccountCostForEndpoint := filters.AccountID > 0 && filters.UserID == 0 && filters.APIKeyID == 0
 	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -847,10 +846,6 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		}
 
 		totalTokens := inputTokens + outputTokens + cacheCreationTokens + cacheReads
-		endpointActualCost := actualCost
-		if useAccountCostForEndpoint {
-			endpointActualCost = accountCost
-		}
 
 		switch {
 		case inboundGrouped == 1 && upstreamGrouped == 1:
@@ -867,17 +862,17 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		case inboundGrouped == 0 && upstreamGrouped == 1:
 			stats.Endpoints = append(stats.Endpoints, EndpointStat{
 				Endpoint: inboundEndpoint.String, Requests: requests, TotalTokens: totalTokens,
-				Cost: cost, ActualCost: endpointActualCost,
+				Cost: cost, ActualCost: actualCost, AccountCost: accountCost,
 			})
 		case inboundGrouped == 1 && upstreamGrouped == 0:
 			stats.UpstreamEndpoints = append(stats.UpstreamEndpoints, EndpointStat{
 				Endpoint: upstreamEndpoint.String, Requests: requests, TotalTokens: totalTokens,
-				Cost: cost, ActualCost: endpointActualCost,
+				Cost: cost, ActualCost: actualCost, AccountCost: accountCost,
 			})
 		case inboundGrouped == 0 && upstreamGrouped == 0:
 			stats.EndpointPaths = append(stats.EndpointPaths, EndpointStat{
 				Endpoint: inboundEndpoint.String + " -> " + upstreamEndpoint.String,
-				Requests: requests, TotalTokens: totalTokens, Cost: cost, ActualCost: endpointActualCost,
+				Requests: requests, TotalTokens: totalTokens, Cost: cost, ActualCost: actualCost, AccountCost: accountCost,
 			})
 		}
 	}
@@ -927,21 +922,17 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 		}
 	}
 
-	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
-	if accountID > 0 && userID == 0 && apiKeyID == 0 {
-		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
-	}
-
 	query := fmt.Sprintf(`
 		SELECT
 			COALESCE(NULLIF(TRIM(%s), ''), 'unknown') AS endpoint,
 			COUNT(*) AS requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			%s
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, endpointColumn, actualCostExpr)
+	`, endpointColumn)
 
 	args := []any{startTime, endTime}
 	if userID > 0 {
@@ -984,7 +975,7 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 	results = make([]EndpointStat, 0)
 	for rows.Next() {
 		var row EndpointStat
-		if err := rows.Scan(&row.Endpoint, &row.Requests, &row.TotalTokens, &row.Cost, &row.ActualCost); err != nil {
+		if err := rows.Scan(&row.Endpoint, &row.Requests, &row.TotalTokens, &row.Cost, &row.ActualCost, &row.AccountCost); err != nil {
 			return nil, err
 		}
 		results = append(results, row)
@@ -1179,6 +1170,9 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	}
 
 	resp = &AccountUsageStatsResponse{
+		StartDate:         startTime.Format(time.DateOnly),
+		EndDate:           endTime.AddDate(0, 0, -1).Format(time.DateOnly),
+		Timezone:          startTime.Location().String(),
 		History:           history,
 		Summary:           summary,
 		Models:            models,

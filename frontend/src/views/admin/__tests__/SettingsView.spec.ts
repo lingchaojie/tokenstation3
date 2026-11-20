@@ -14,6 +14,7 @@ const {
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
   getAdminApiKey,
+  regenerateAdminApiKey,
   getOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
@@ -40,6 +41,7 @@ const {
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
   getAdminApiKey: vi.fn(),
+  regenerateAdminApiKey: vi.fn(),
   getOverloadCooldownSettings: vi.fn(),
   getRateLimit429CooldownSettings: vi.fn(),
   updateRateLimit429CooldownSettings: vi.fn(),
@@ -79,12 +81,14 @@ vi.mock("@/api", () => ({
       getWebSearchEmulationConfig,
       updateWebSearchEmulationConfig,
       getAdminApiKey,
+      regenerateAdminApiKey,
       getOverloadCooldownSettings,
       getRateLimit429CooldownSettings,
       updateRateLimit429CooldownSettings,
       getStreamTimeoutSettings,
       getRectifierSettings,
       getBetaPolicySettings,
+      getRegistrationEmailBlacklist: vi.fn().mockResolvedValue({ emails: [], max: 20000 }),
     },
     accounts: {
       getUpstreamBillingProbeSettings,
@@ -127,6 +131,10 @@ vi.mock("@/composables/useClipboard", () => ({
   useClipboard: () => ({
     copyToClipboard: vi.fn(),
   }),
+}));
+
+vi.mock("@/components/admin/settings/AdminAccessKeysSettings.vue", () => ({
+  default: { template: "<div />" },
 }));
 
 vi.mock("@/utils/apiError", () => ({
@@ -750,6 +758,25 @@ describe("admin SettingsView payment visible method controls", () => {
     await wrapper.find('form').trigger('submit.prevent');
     await flushPromises();
     expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ cyber_policy_user_allowlist: '' }));
+  });
+
+  it("generates a legacy administrator API key when none exists", async () => {
+    regenerateAdminApiKey.mockResolvedValueOnce({ key: "admin-test-key-once" });
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const createKey = wrapper.findAll("button").find((button) =>
+      button.text() === "admin.settings.adminApiKey.create",
+    );
+    expect(createKey?.isVisible()).toBe(true);
+    await createKey!.trigger("click");
+    await flushPromises();
+
+    expect(regenerateAdminApiKey).toHaveBeenCalledOnce();
+    expect(wrapper.text()).toContain("admin-test-key-once");
+    expect(showSuccess).toHaveBeenCalledWith("admin.settings.adminApiKey.keyGenerated");
+    wrapper.unmount();
   });
 
   it("excludes announcement-page-owned settings from the generic form loader", async () => {

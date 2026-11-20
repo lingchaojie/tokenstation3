@@ -43,6 +43,9 @@ var (
 	ErrMonthlyLimitExceeded        = infraerrors.TooManyRequests("MONTHLY_LIMIT_EXCEEDED", "monthly usage limit exceeded")
 	ErrSubscriptionNilInput        = infraerrors.BadRequest("SUBSCRIPTION_NIL_INPUT", "subscription input cannot be nil")
 	ErrAdjustWouldExpire           = infraerrors.BadRequest("ADJUST_WOULD_EXPIRE", "adjustment would result in expired subscription (remaining days must be > 0)")
+
+	errRefundSubscriptionRevoked           = errors.New("subscription was revoked after the refund hold shortened it")
+	errRefundSubscriptionRevocationChanged = errors.New("subscription revocation changed after the refund hold")
 )
 
 // SubscriptionService 订阅服务
@@ -990,33 +993,47 @@ func (s *SubscriptionService) revokeSubscriptionDeferred(ctx context.Context, su
 	return deferredSubscriptionInvalidationFor(sub), nil
 }
 
-// RestoreSubscription 恢复已撤销订阅
-func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscriptionID int64) (*UserSubscription, error) {
+// revokeSubscriptionForRefundHold records the stored deletion timestamp
+// while the hold's transaction still owns the subscription row.
+func (s *SubscriptionService) revokeSubscriptionForRefundHold(ctx context.Context, subscriptionID int64) (*time.Time, *deferredSubscriptionInvalidation, error) {
+	invalidation, err := s.revokeSubscriptionDeferred(ctx, subscriptionID)
+	if err != nil {
+		return nil, nil, err
+	}
 	sub, err := s.userSubRepo.GetByIDIncludeDeleted(ctx, subscriptionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if sub.DeletedAt == nil {
-		return nil, ErrSubscriptionNotRevoked
+		return nil, nil, ErrSubscriptionNotRevoked
+	}
+	return sub.DeletedAt, invalidation, nil
+}
+
+// RestoreSubscription 恢复已撤销订阅
+func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscriptionID int64) (*UserSubscription, error) {
+	restored, _, err := s.restoreSubscription(ctx, subscriptionID, false, nil)
+	return restored, err
+}
+
+func (s *SubscriptionService) restoreSubscriptionDeferred(ctx context.Context, subscriptionID int64, heldRevocation *time.Time) (*UserSubscription, *deferredSubscriptionInvalidation, error) {
+	return s.restoreSubscription(ctx, subscriptionID, true, heldRevocation)
+}
+
+func (s *SubscriptionService) restoreSubscription(ctx context.Context, subscriptionID int64, deferInvalidation bool, heldRevocation *time.Time) (*UserSubscription, *deferredSubscriptionInvalidation, error) {
+	sub, err := s.userSubRepo.GetByIDIncludeDeleted(ctx, subscriptionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sub.DeletedAt == nil {
+		return nil, nil, ErrSubscriptionNotRevoked
+	}
+	if heldRevocation != nil && !heldRevocation.Equal(*sub.DeletedAt) {
+		return nil, nil, errRefundSubscriptionRevocationChanged
 	}
 
-	cacheGroupID := subscriptionCacheGroupID(sub)
-	if cacheGroupID == 0 {
-		exists, err := s.userSubRepo.ExistsGenericByUserID(ctx, sub.UserID)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			return nil, ErrSubscriptionRestoreConflict
-		}
-	} else {
-		exists, err := s.userSubRepo.ExistsActiveByUserIDAndGroupID(ctx, sub.UserID, cacheGroupID)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			return nil, ErrSubscriptionRestoreConflict
-		}
+	if err := s.checkSubscriptionRestoreConflict(ctx, sub); err != nil {
+		return nil, nil, err
 	}
 
 	restoredStatus := sub.Status
@@ -1025,16 +1042,72 @@ func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscript
 		restoredStatus = SubscriptionStatusExpired
 	}
 
-	restored, err := s.userSubRepo.Restore(ctx, subscriptionID, restoredStatus)
+	restored, err := s.userSubRepo.Restore(ctx, subscriptionID, restoredStatus, *sub.DeletedAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	if deferInvalidation {
+		return restored, deferredSubscriptionInvalidationFor(restored), nil
+	}
 	if err := s.invalidateSubscriptionCaches(restored.UserID, subscriptionCacheGroupID(restored)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s.invalidatePublicPlansCacheIfPlanSeatChanged(ctx, nil, restored)
-	return restored, nil
+	return restored, nil, nil
+}
+
+// checkSubscriptionRestoreConflict looks for a current subscription in the
+// revoked subscription's scope, matching the repository's uniqueness rules.
+func (s *SubscriptionService) checkSubscriptionRestoreConflict(ctx context.Context, revoked *UserSubscription) error {
+	var exists bool
+	var err error
+	if groupID := subscriptionCacheGroupID(revoked); groupID == 0 {
+		exists, err = s.userSubRepo.ExistsGenericByUserID(ctx, revoked.UserID)
+	} else {
+		exists, err = s.userSubRepo.ExistsActiveByUserIDAndGroupID(ctx, revoked.UserID, groupID)
+	}
+	if err != nil {
+		return err
+	}
+	if exists {
+		return ErrSubscriptionRestoreConflict
+	}
+	return nil
+}
+
+// returnRefundSubscriptionDays reverses the shortening of an existing
+// subscription. Time elapsed since the refund was requested still counts.
+func (s *SubscriptionService) returnRefundSubscriptionDays(ctx context.Context, subscriptionID int64, days int) (*deferredSubscriptionInvalidation, error) {
+	sub, err := s.userSubRepo.GetByIDForUpdate(ctx, subscriptionID)
+	if err != nil {
+		if errors.Is(err, ErrSubscriptionNotFound) {
+			original, lookupErr := s.userSubRepo.GetByIDIncludeDeleted(ctx, subscriptionID)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if original.DeletedAt != nil {
+				if conflict := s.checkSubscriptionRestoreConflict(ctx, original); conflict != nil {
+					return nil, conflict
+				}
+				return nil, errRefundSubscriptionRevoked
+			}
+		}
+		return nil, err
+	}
+	expires := sub.ExpiresAt.AddDate(0, 0, days)
+	if expires.After(MaxExpiresAt) {
+		expires = MaxExpiresAt
+	}
+	if err := s.userSubRepo.ExtendExpiry(ctx, subscriptionID, expires); err != nil {
+		return nil, err
+	}
+	if sub.Status == SubscriptionStatusExpired && expires.After(s.currentTime()) {
+		if err := s.userSubRepo.UpdateStatus(ctx, subscriptionID, SubscriptionStatusActive); err != nil {
+			return nil, err
+		}
+	}
+	return deferredSubscriptionInvalidationFor(sub), nil
 }
 
 // ExtendSubscription 调整订阅时长（正数延长，负数缩短）

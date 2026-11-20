@@ -187,6 +187,89 @@ func TestPassthroughIngressBeforeTurnRejectionDoesNotForwardFollowUp(t *testing.
 	require.ErrorIs(t, gotFinalErr, rejection)
 }
 
+func TestWebSocketFollowUpValidatesEffectiveModelBeforeForwarding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tt := range []struct {
+		name        string
+		passthrough bool
+		filter      bool
+	}{
+		{name: "native OAuth retirement"},
+		{name: "passthrough OAuth retirement", passthrough: true},
+		{name: "passthrough API-key filter", passthrough: true, filter: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			cfg := passthroughLifecycleConfig()
+			cfg.Gateway.OpenAIWS.OAuthEnabled = true
+			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+			cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
+			account := passthroughLifecycleAccount()
+			if !tt.filter {
+				account.Type = AccountTypeOAuth
+				account.Credentials = map[string]any{"access_token": "oauth-test"}
+			} else {
+				account.Extra["openai_passthrough"] = true
+				account.Extra["openai_passthrough_model_filter"] = true
+				account.Credentials["model_mapping"] = map[string]any{"gpt-5.1": "gpt-5.1"}
+			}
+			mapped := "gpt-5.5"
+			firstEvent := `{"type":"response.completed","response":{"id":"resp_ws_allowed","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`
+			wire := newStagedPassthroughConn()
+			var native *openAIWSCaptureConn
+			svc := newPassthroughLifecycleService(cfg, wire)
+			if tt.passthrough {
+				if !tt.filter {
+					account.Extra["openai_oauth_responses_websockets_v2_mode"] = OpenAIWSIngressModePassthrough
+				} else {
+					mapped = "gpt-6.2"
+				}
+				wire.Send(firstEvent)
+			} else {
+				mapped = "retired-alias"
+				account.Extra["openai_oauth_responses_websockets_v2_mode"] = OpenAIWSIngressModeCtxPool
+				account.Credentials["model_mapping"] = map[string]any{"gpt-5.1": "gpt-5.1", mapped: "gpt-5.5"}
+				native = &openAIWSCaptureConn{events: [][]byte{[]byte(firstEvent)}}
+				svc.openaiWSPool = newOpenAIWSConnPool(cfg)
+				svc.openaiWSPool.setClientDialerForTest(&openAIWSCaptureDialer{conn: native})
+				defer svc.openaiWSPool.Close()
+			}
+			hooks := &OpenAIWSIngressHooks{MapRequestModel: func(turn int, model string) (string, error) {
+				if turn > 1 {
+					return mapped, nil
+				}
+				return model, nil
+			}}
+			server, serverErr := startPassthroughHookRecordingServer(t, ctx, svc, account, hooks)
+			defer server.Close()
+			client := dialPassthroughLifecycleClient(t, server)
+			defer func() { _ = client.CloseNow() }()
+			if tt.passthrough {
+				require.Equal(t, "gpt-5.1", gjson.GetBytes(requirePassthroughUpstreamWrite(t, wire, time.Second), "model").String())
+			}
+			event, err := readPassthroughLifecycleFrame(t, client, 3*time.Second)
+			require.NoError(t, err)
+			require.Equal(t, "resp_ws_allowed", gjson.GetBytes(event, "response.id").String())
+			require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","stream":false}`)))
+			if tt.passthrough {
+				_, closeErr := readPassthroughLifecycleFrame(t, client, 3*time.Second)
+				require.Equal(t, coderws.StatusPolicyViolation, coderws.CloseStatus(closeErr))
+			}
+			select {
+			case err = <-serverErr:
+				require.ErrorIs(t, err, ErrOpenAIWSUnsupportedModelSwitch)
+			case <-time.After(3 * time.Second):
+				t.Fatal("WebSocket did not reject the follow-up model")
+			}
+			if native != nil {
+				require.Len(t, native.writes, 1)
+			} else {
+				require.Empty(t, wire.writes)
+			}
+		})
+	}
+}
+
 func TestPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T) {
 	testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t, coderws.MessageText)
 }

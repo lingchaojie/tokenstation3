@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -255,9 +256,11 @@ func (h *UsageHandler) List(c *gin.Context) {
 		return
 	}
 
+	c.Writer.Header().Add("Vary", "Accept-Language")
+	acceptLanguage := c.GetHeader("Accept-Language")
 	out := make([]dto.UsageLog, 0, len(records))
 	for i := range records {
-		out = append(out, *dto.UsageLogFromService(&records[i]))
+		out = append(out, *dto.UsageLogFromService(&records[i]).Localized(acceptLanguage))
 	}
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
@@ -403,7 +406,8 @@ func (h *UsageHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UsageLogFromService(record))
+	c.Writer.Header().Add("Vary", "Accept-Language")
+	response.Success(c, dto.UsageLogFromService(record).Localized(c.GetHeader("Accept-Language")))
 }
 
 // Stats handles getting usage statistics
@@ -419,10 +423,6 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	stats.TotalAccountCost = nil
-	stats.UpstreamEndpoints = nil
-	stats.EndpointPaths = nil
-
 	response.Success(c, usageStatsForRegularUser(stats))
 }
 
@@ -455,6 +455,14 @@ func usageStatsForRegularUser(stats *usagestats.UsageStats) *usagestats.UsageSta
 	}
 	out := *stats
 	out.TotalCost = out.TotalActualCost
+	out.TotalAccountCost = nil
+	out.Endpoints = slices.Clone(stats.Endpoints)
+	for i := range out.Endpoints {
+		out.Endpoints[i].Cost = out.Endpoints[i].ActualCost
+		out.Endpoints[i].AccountCost = 0
+	}
+	out.UpstreamEndpoints = nil
+	out.EndpointPaths = nil
 	return &out
 }
 

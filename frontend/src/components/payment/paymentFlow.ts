@@ -8,6 +8,7 @@ import type {
 } from '@/types/payment'
 
 export const PAYMENT_RECOVERY_STORAGE_KEY = 'payment.recovery.current'
+const STRIPE_PAYMENT_RECOVERY_KEY_PREFIX = 'payment.recovery.stripe.'
 
 const VISIBLE_METHOD_ALIASES = {
   alipay: 'alipay',
@@ -32,10 +33,13 @@ export type PaymentLaunchKind =
 
 export interface PaymentRecoverySnapshot {
   orderId: number
+  ownerId?: number
   amount: number
   qrCode: string
   expiresAt: string
   paymentType: string
+  providerKey?: string
+  confirmationPending?: boolean
   payUrl: string
   outTradeNo: string
   clientSecret: string
@@ -145,12 +149,14 @@ export function decidePaymentLaunch(
   context: PaymentLaunchContext,
 ): PaymentLaunchDecision {
   const visibleMethod = normalizeVisibleMethod(context.visibleMethod) || context.visibleMethod
+  const providerKey = (result.provider_key || '').trim().toLowerCase()
   const baseState = createPaymentRecoverySnapshot({
     orderId: result.order_id,
     amount: result.amount,
     qrCode: result.qr_code || '',
     expiresAt: result.expires_at || '',
     paymentType: visibleMethod,
+    providerKey: providerKey || undefined,
     payUrl: result.pay_url || '',
     outTradeNo: result.out_trade_no || '',
     clientSecret: result.client_secret || '',
@@ -199,7 +205,6 @@ export function decidePaymentLaunch(
   }
 
   const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
-  const providerKey = (result.provider_key || '').trim().toLowerCase()
   // When forceQRCode is on for alipay, treat the device as desktop so the mobile-redirect
   // branch is bypassed and we fall through to qr_waiting.
   const effectiveMobile = context.forceQRCode && visibleMethod === 'alipay'
@@ -260,9 +265,44 @@ export function clearPaymentRecoverySnapshot(
   storage.removeItem(key)
 }
 
+export function isPaymentRecoveryUnavailable(error: unknown): boolean {
+  const status = (error as { status?: number } | null)?.status
+  return status === 401 || status === 403 || status === 404
+}
+
+export function writeStripePaymentRecoverySnapshot(storage: Storage, snapshot: PaymentRecoverySnapshot): void {
+  for (let index = storage.length - 1; index >= 0; index--) {
+    const key = storage.key(index)
+    if (key?.startsWith(STRIPE_PAYMENT_RECOVERY_KEY_PREFIX) && !readPaymentRecoverySnapshot(storage.getItem(key))) {
+      storage.removeItem(key)
+    }
+  }
+  writePaymentRecoverySnapshot(storage, snapshot, STRIPE_PAYMENT_RECOVERY_KEY_PREFIX + snapshot.orderId)
+}
+
+export function readStripePaymentRecoverySnapshot(
+  storage: Pick<Storage, 'getItem'>,
+  orderId: number,
+  resumeToken?: string,
+  ownerId?: number,
+): PaymentRecoverySnapshot | null {
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) return null
+  for (const key of [STRIPE_PAYMENT_RECOVERY_KEY_PREFIX + orderId, PAYMENT_RECOVERY_STORAGE_KEY]) {
+    const snapshot = readPaymentRecoverySnapshot(storage.getItem(key), { resumeToken, ownerId })
+    if (snapshot?.orderId === orderId && snapshot.clientSecret && !snapshot.intentId) {
+      return snapshot
+    }
+  }
+  return null
+}
+
+export function clearStripePaymentRecoverySnapshot(storage: Pick<Storage, 'removeItem'>, orderId: number): void {
+  storage.removeItem(STRIPE_PAYMENT_RECOVERY_KEY_PREFIX + orderId)
+}
+
 export function readPaymentRecoverySnapshot(
   raw: string | null | undefined,
-  options: { now?: number; resumeToken?: string } = {},
+  options: { now?: number; ownerId?: number; resumeToken?: string; allowExpiredConfirmation?: boolean } = {},
 ): PaymentRecoverySnapshot | null {
   if (!raw) return null
 
@@ -270,10 +310,13 @@ export function readPaymentRecoverySnapshot(
     const parsed = JSON.parse(raw) as Partial<PaymentRecoverySnapshot>
     if (
       typeof parsed.orderId !== 'number'
+      || (parsed.ownerId != null && (!Number.isSafeInteger(parsed.ownerId) || parsed.ownerId <= 0))
       || typeof parsed.amount !== 'number'
       || typeof parsed.qrCode !== 'string'
       || typeof parsed.expiresAt !== 'string'
       || typeof parsed.paymentType !== 'string'
+      || (parsed.providerKey != null && typeof parsed.providerKey !== 'string')
+      || (parsed.confirmationPending != null && typeof parsed.confirmationPending !== 'boolean')
       || typeof parsed.payUrl !== 'string'
       || (parsed.outTradeNo != null && typeof parsed.outTradeNo !== 'string')
       || typeof parsed.clientSecret !== 'string'
@@ -291,19 +334,27 @@ export function readPaymentRecoverySnapshot(
 
     const now = options.now ?? Date.now()
     const expiresAt = Date.parse(parsed.expiresAt)
-    if (Number.isFinite(expiresAt) && expiresAt <= now) {
+    const trackConfirmation = options.allowExpiredConfirmation
+      && (parsed.providerKey === 'easypay' || parsed.confirmationPending === true)
+    if (Number.isFinite(expiresAt) && expiresAt <= now && !trackConfirmation) {
       return null
     }
     if (options.resumeToken && parsed.resumeToken !== options.resumeToken) {
       return null
     }
+    if (options.ownerId !== undefined && parsed.ownerId !== undefined && parsed.ownerId !== options.ownerId) {
+      return null
+    }
 
     return {
       orderId: parsed.orderId,
+      ownerId: parsed.ownerId,
       amount: parsed.amount,
       qrCode: parsed.qrCode,
       expiresAt: parsed.expiresAt,
       paymentType: parsed.paymentType,
+      providerKey: parsed.providerKey || undefined,
+      confirmationPending: parsed.confirmationPending,
       payUrl: parsed.payUrl,
       outTradeNo: parsed.outTradeNo || '',
       clientSecret: parsed.clientSecret,

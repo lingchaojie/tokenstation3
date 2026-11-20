@@ -244,9 +244,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if carrier, ok := resp.Body.(providerBodyReadActivityCarrier); !ok || carrier.providerReadActivity() == nil {
 			resp.Body = newProviderBodyReadActivity(resp.Body)
 		}
-		resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, maxLineSize)
+		resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, maxLineSize, s.cfg)
 		if hasGrokResponsesClientToolMapping(clientToolMapping) {
-			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, clientToolMapping, maxLineSize)
+			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, clientToolMapping, maxLineSize, s.cfg)
 		}
 		streamResult, streamErr := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
 		finishCapture()
@@ -288,22 +288,25 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	}
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
 	result := &OpenAIForwardResult{
-		RequestID:               firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
-		UpstreamHeaders:         resp.Header,
-		ResponseID:              responseID,
-		Usage:                   *usage,
-		Model:                   originalModel,
-		UpstreamModel:           upstreamModel,
-		ReasoningEffort:         reasoningEffort,
-		Stream:                  reqStream,
-		OpenAIWSMode:            false,
-		ClientDisconnect:        clientDisconnect,
-		CaptureResponseComplete: captureResponseComplete,
-		CaptureTerminalError:    responseErr != nil,
-		UpstreamHTTPStatus:      resp.StatusCode,
-		ResponseHeaders:         resp.Header.Clone(),
-		Duration:                time.Since(startTime),
-		FirstTokenMs:            firstTokenMs,
+		RequestID:                     firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+		UpstreamHeaders:               resp.Header,
+		ResponseID:                    responseID,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+		UpstreamModel:                 upstreamModel,
+		ReasoningEffort:               reasoningEffort,
+		Stream:                        reqStream,
+		OpenAIWSMode:                  false,
+		ClientDisconnect:              clientDisconnect,
+		CaptureResponseComplete:       captureResponseComplete,
+		CaptureTerminalError:          responseErr != nil,
+		UpstreamHTTPStatus:            resp.StatusCode,
+		ResponseHeaders:               resp.Header.Clone(),
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
 	}
 	if imageCount > 0 {
 		result.ImageCount = imageCount

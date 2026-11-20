@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CC_SWITCH_USAGE_SCRIPT,
   GROK_CC_SWITCH_MODEL,
-  OPENAI_CC_SWITCH_CODEX_MODEL,
+  resolveCcSwitchImportConfig,
   buildCcSwitchImportDeeplink
 } from '@/utils/ccswitchImport'
 import type { GroupPlatform } from '@/types'
@@ -14,7 +14,7 @@ function paramsFromDeeplink(deeplink: string): URLSearchParams {
 
 describe('ccswitchImport utils', () => {
   it('defaults OpenAI CC Switch imports to the current Codex model', () => {
-    expect(OPENAI_CC_SWITCH_CODEX_MODEL).toBe('gpt-5.5')
+    expect(resolveCcSwitchImportConfig('openai', 'claude', 'https://api.example.com').model).toBe('gpt-6.1-sol')
   })
 
   it('defaults Grok Build imports to the current Grok model', () => {
@@ -46,8 +46,10 @@ describe('ccswitchImport utils', () => {
     expect(params.get('resource')).toBe('provider')
     expect(params.get('app')).toBe('codex')
     expect(params.get('endpoint')).toBe(endpoint)
-    expect(params.get('model')).toBe(OPENAI_CC_SWITCH_CODEX_MODEL)
+    expect(params.get('model')).toBe('gpt-6.1-sol')
     expect(atob(params.get('usageScript') || '')).toBe(baseInput.usageScript)
+    expect(params.get('apiKey')).toBe(baseInput.apiKey)
+    expect(params.has('config')).toBe(false)
   })
 
   it.each([
@@ -68,6 +70,7 @@ describe('ccswitchImport utils', () => {
     expect(params.get('endpoint')).toBe('https://api.example.com')
     expect(params.get('model')).toBe(GROK_CC_SWITCH_MODEL)
     expect(deeplink.startsWith('ccswitch://v1/import?')).toBe(true)
+    expect(params.has('config')).toBe(false)
   })
 
   it.each([
@@ -85,6 +88,7 @@ describe('ccswitchImport utils', () => {
     expect(params.get('app')).toBe(app)
     expect(params.get('endpoint')).toBe(baseInput.baseUrl)
     expect(params.has('model')).toBe(false)
+    expect(params.has('config')).toBe(false)
   })
 
   it('keeps Antigravity imports on the Claude endpoint without a model parameter', () => {
@@ -99,6 +103,7 @@ describe('ccswitchImport utils', () => {
     expect(params.get('app')).toBe('claude')
     expect(params.get('endpoint')).toBe(`${baseInput.baseUrl}/antigravity`)
     expect(params.has('model')).toBe(false)
+    expect(params.has('config')).toBe(false)
   })
 })
 

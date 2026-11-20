@@ -11,6 +11,9 @@ func NormalizeOpenAICompatRequestedModel(model string) string {
 	if base := openai.GPT62ModelID(model); base != "" {
 		return base
 	}
+	if openai.IsGPT61TerraModelSpelling(model) {
+		return "gpt-6.1-terra"
+	}
 	if openai.IsGPT61SolModelSpelling(model) {
 		return "gpt-6.1-sol"
 	}
@@ -27,7 +30,7 @@ func NormalizeOpenAICompatRequestedModel(model string) string {
 }
 
 func applyOpenAICompatModelNormalization(req *apicompat.AnthropicRequest) {
-	if req != nil && (openai.GPT62ModelID(req.Model) != "" || openai.IsGPT61SolModelSpelling(req.Model)) {
+	if req != nil && (openai.GPT62ModelID(req.Model) != "" || openai.IsGPT61SolModelSpelling(req.Model) || openai.IsGPT61TerraModelSpelling(req.Model)) {
 		canonical := openai.CanonicalizeOpenAIModelAliasSpelling(req.Model)
 		baseModel := NormalizeOpenAICompatRequestedModel(req.Model)
 		if effort, ok := strings.CutPrefix(canonical, baseModel+"-"); ok && effort != "openai-compact" {
@@ -69,6 +72,17 @@ func applyOpenAICompatModelNormalization(req *apicompat.AnthropicRequest) {
 		req.OutputConfig = &apicompat.AnthropicOutputConfig{}
 	}
 	req.OutputConfig.Effort = claudeEffort
+}
+
+// resolveOpenAIAnthropicCompatBillingModel keeps an explicit GPT-6.2 alias
+// authoritative after extracting its reasoning suffix for the conversion.
+func resolveOpenAIAnthropicCompatBillingModel(account *Account, originalModel, normalizedModel, dispatchModel string) string {
+	if openai.GPT62ModelID(originalModel) != "" {
+		if mapped, matched := account.ResolveMappedModel(originalModel); matched {
+			return mapped
+		}
+	}
+	return resolveOpenAIForwardModel(account, normalizedModel, dispatchModel)
 }
 
 func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reasoningEffort string, ok bool) {

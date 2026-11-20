@@ -50,7 +50,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	includeUsage := ccReq.StreamOptions != nil && ccReq.StreamOptions.IncludeUsage
 
 	// 2. Convert CC → Responses → Anthropic (chained conversion)
-	responsesReq, err := apicompat.ChatCompletionsToResponses(&ccReq)
+	responsesReq, err := chatCompletionsToResponses(s.cfg, &ccReq)
 	if err != nil {
 		return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 	}
@@ -103,6 +103,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	anthropicBody, err := json.Marshal(anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
+	}
+	if !account.IsOAuth() {
+		// OAuth accounts get their id from the mimicry below.
+		anthropicBody = withChatCompletionsMetadataUserID(body, anthropicBody)
 	}
 
 	// 6. Apply Claude Code mimicry for OAuth accounts.
@@ -169,28 +173,41 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			proxyURL = account.Proxy.URL()
 		}
 
-		// 10. Build upstream request
-		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-		upstreamReq, finalBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
-		releaseUpstreamCtx()
-		if err != nil {
-			return nil, fmt.Errorf("build upstream request: %w", err)
-		}
-
-		forwardedBody = finalBody
-
-		// 11. Send request
-		s.captureOutboundRequest(c, account, upstreamReq, forwardedBody)
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
-		finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
-		if err != nil {
-			if resp != nil && resp.Body != nil {
-				_ = resp.Body.Close()
+		for retriedRotatedToken := false; ; {
+			// Build and send each attempt with a fresh archive capture.
+			upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
+			upstreamReq, finalBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+			releaseUpstreamCtx()
+			if err != nil {
+				return nil, fmt.Errorf("build upstream request: %w", err)
 			}
-			finishCapture()
-			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
-				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
-			})
+
+			forwardedBody = finalBody
+
+			// 11. Send request
+			s.captureOutboundRequest(c, account, upstreamReq, forwardedBody)
+			resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+			finishCapture = s.beginGatewayCaptureResponse(c, account, resp)
+			if err != nil {
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				finishCapture()
+				return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+					UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+				})
+			}
+			if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken {
+				if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
+					_ = resp.Body.Close()
+					finishCapture()
+					AbortCaptureAttempt(c)
+					token = rotatedToken
+					retriedRotatedToken = true
+					continue
+				}
+			}
+			break
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -210,7 +227,12 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		// Apply account policies even for statuses outside the default failover list.
+		shouldDisable := false
+		if s.rateLimitService != nil {
+			shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+		}
+		if shouldDisable || s.shouldFailoverUpstreamError(resp.StatusCode) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				ProxyID:            opsUpstreamProxyID(account),
 				ProxyName:          opsUpstreamProxyName(account),
@@ -222,10 +244,6 @@ func (s *GatewayService) ForwardAsChatCompletions(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			shouldDisable := false
-			if s.rateLimitService != nil {
-				shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
-			}
 			s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody, responseComplete)
 			return nil, &UpstreamFailoverError{
 				StatusCode:                resp.StatusCode,
@@ -250,10 +268,31 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 13. Handle normal response
 	// Read Anthropic SSE → convert to Responses events → convert to CC format
 	var handleErr error
+	writerSizeBeforeStream := c.Writer.Size()
 	if clientStream {
 		result, handleErr = s.handleCCStreamingFromAnthropic(ctx, resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage, kiroDirectMode)
 	} else {
 		result, handleErr = s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode)
+	}
+
+	var sseErr *sseStreamErrorEventError
+	if errors.As(handleErr, &sseErr) {
+		failure := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream || (result != nil && result.ClientDisconnect))
+		failure.RequestHeaders = captureRequestHeadersFromResponse(resp)
+		failure.ResponseHeaders = resp.Header.Clone()
+		failure.UpstreamEndpoint = captureEndpointFromResponse(resp)
+		failure.Platform = account.Platform
+		failure.HasUpstreamHTTPResponse = true
+		failure.UpstreamHTTPStatus = resp.StatusCode
+		failure.CaptureResponseIncomplete = result == nil || !result.CaptureResponseComplete
+		if result == nil {
+			finishCapture()
+			return nil, failure
+		}
+		handleErr = failure
+	}
+	if errors.Is(handleErr, errProviderStreamIdleTimeout) && s.rateLimitService != nil && (ctx == nil || ctx.Err() == nil) && (result == nil || !result.ClientDisconnect) {
+		s.rateLimitService.HandleStreamTimeout(ctx, account, mappedModel)
 	}
 
 	finishCapture()
@@ -297,6 +336,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	allowKiroMarkedFinalUsage bool,
 ) (*ForwardResult, error) {
 	requestID := captureProviderRequestID(resp.Header)
+	observer := beginUpstreamResponseModelObservation(c)
 
 	lineReader := newProviderLineReader(resp, s.cfg, func(r io.Reader) *bufio.Scanner {
 		return newBufferedProviderSSEScanner(r, s.cfg)
@@ -306,7 +346,6 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	var finalResp *apicompat.AnthropicResponse
 	var contentAccumulator anthropicBufferedContentAccumulator
 	var usage ClaudeUsage
-	hasKiroMarkedFinalUsage := false
 	terminalObserved := false
 	incompleteProviderTail := false
 	var scanErr error
@@ -355,20 +394,22 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			terminalObserved = true
 		}
 
+		observer.ObserveAnthropic([]byte(payload))
+		if event.Type == "error" {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			return nil, &sseStreamErrorEventError{RawData: payload}
+		}
+
 		// message_start carries the initial response structure and cache usage
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
-			if mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage) {
-				hasKiroMarkedFinalUsage = true
-			}
+			mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage)
 		}
 
 		// message_delta carries final usage and stop_reason
 		if event.Type == "message_delta" {
 			if event.Usage != nil {
-				if mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage) {
-					hasKiroMarkedFinalUsage = true
-				}
+				mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage)
 			}
 			mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
@@ -390,7 +431,8 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 				zap.String("request_id", requestID),
 			)
 		}
-		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream read failed before message_stop: "+sanitizeStreamError(scanErr))
+		failure := newIncompleteProviderStreamFailover(resp, "upstream stream read failed before message_stop: "+sanitizeStreamError(scanErr))
+		return nil, errors.Join(failure, scanErr)
 	}
 	if incompleteProviderTail {
 		lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
@@ -404,17 +446,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream ended without a message_start response")
 	}
 	contentAccumulator.materialize(finalResp)
-
-	// Update usage from accumulated delta
-	if hasKiroMarkedFinalUsage || usage.InputTokens > 0 || usage.OutputTokens > 0 ||
-		usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
-		finalResp.Usage = apicompat.AnthropicUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     usage.CacheReadInputTokens,
-		}
-	}
+	normalizeAnthropicEventUsageForResponses(&apicompat.AnthropicStreamEvent{Message: finalResp}, usage)
 
 	// Chain: Anthropic → Responses → Chat Completions
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
@@ -439,15 +471,18 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	return &ForwardResult{
-		RequestID:               requestID,
-		UpstreamHeaders:         resp.Header,
-		Usage:                   usage,
-		Model:                   originalModel,
-		UpstreamModel:           mappedModel,
-		ReasoningEffort:         reasoningEffort,
-		Stream:                  false,
-		Duration:                time.Since(startTime),
-		CaptureResponseComplete: true,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         usage,
+		Model:                         originalModel,
+		UpstreamModel:                 mappedModel,
+		ReasoningEffort:               reasoningEffort,
+		Stream:                        false,
+		Duration:                      time.Since(startTime),
+		UpstreamResponseModel:         observer.Model(),
+		UpstreamResponseModelConflict: observer.Conflict(),
+		UpstreamResponseServiceTier:   observer.ServiceTier(),
+		CaptureResponseComplete:       true,
 	}, nil
 }
 
@@ -465,6 +500,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	allowKiroMarkedFinalUsage bool,
 ) (*ForwardResult, error) {
 	requestID := captureProviderRequestID(resp.Header)
+	observer := beginUpstreamResponseModelObservation(c)
 	writeHeaders := func() {
 		if s.responseHeaderFilter != nil {
 			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -491,6 +527,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	clientDisconnected := false
 	semanticOutput := false
 	terminalObserved := false
+	providerStopObserved := false
 	providerPayloadObserved := false
 	incompleteProviderTail := false
 	var stagedWriteErr error
@@ -502,6 +539,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			maxLineSize = s.cfg.Gateway.MaxLineSize
 		}
 		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+		scanner.Split(newBoundedSSESplit(s.cfg, maxLineSize, nil))
 		return scanner
 	})
 	defer lineReader.Close()
@@ -509,17 +547,20 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:               requestID,
-			UpstreamHeaders:         resp.Header,
-			Usage:                   usage,
-			Model:                   originalModel,
-			UpstreamModel:           mappedModel,
-			ReasoningEffort:         reasoningEffort,
-			Stream:                  true,
-			Duration:                time.Since(startTime),
-			FirstTokenMs:            firstTokenMs,
-			ClientDisconnect:        clientDisconnected,
-			CaptureResponseComplete: terminalObserved,
+			RequestID:                     requestID,
+			UpstreamHeaders:               resp.Header,
+			Usage:                         usage,
+			Model:                         originalModel,
+			UpstreamModel:                 mappedModel,
+			ReasoningEffort:               reasoningEffort,
+			Stream:                        true,
+			Duration:                      time.Since(startTime),
+			FirstTokenMs:                  firstTokenMs,
+			ClientDisconnect:              clientDisconnected,
+			CaptureResponseComplete:       terminalObserved,
+			UpstreamResponseModel:         observer.Model(),
+			UpstreamResponseModelConflict: observer.Conflict(),
+			UpstreamResponseServiceTier:   observer.ServiceTier(),
 		}
 	}
 
@@ -582,6 +623,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			firstTokenMs = &ms
 		}
 
+		if event.Type == "message_delta" && event.Delta != nil && event.Delta.StopReason != "" {
+			providerStopObserved = true
+		}
 		// Extract usage from message_delta
 		if event.Type == "message_delta" && event.Usage != nil {
 			mergeAnthropicUsageFromPayload(&usage, *event.Usage, payload, allowKiroMarkedFinalUsage)
@@ -597,6 +641,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if event.Type == "message_stop" {
 			terminalObserved = true
 		}
+		if clientDisconnected {
+			return false
+		}
 
 		// Keep the outward Responses/Chat usage on the same normalized buckets used
 		// for billing, including converter handlers that consume event usage.
@@ -608,7 +655,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		for _, resEvt := range responsesEvents {
 			ccChunks := apicompat.ResponsesEventToChatChunks(&resEvt, ccState)
 			for _, chunk := range ccChunks {
-				if disconnected := writeChunk(chunk); disconnected {
+				if writeChunk(chunk) {
 					return true
 				}
 			}
@@ -620,7 +667,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	for {
-		line, ok, err := lineReader.Next()
+		line, ok, err := nextAnthropicCompatProviderLine(lineReader, ginRequestContext(c), &clientDisconnected)
 		if err != nil {
 			scanErr = err
 			break
@@ -632,13 +679,17 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		eventType, ok := extractOpenAISSEEventLine(line)
 		if !ok {
 			if payload, dataLine := extractOpenAISSEDataLine(line); dataLine && strings.TrimSpace(payload) != "" {
+				if strings.TrimSpace(payload) == "[DONE]" && providerPayloadObserved {
+					providerStopObserved = true
+					break
+				}
 				incompleteProviderTail = true
 				break
 			}
 			continue
 		}
 
-		dataLine, ok, err := lineReader.Next()
+		dataLine, ok, err := nextAnthropicCompatProviderLine(lineReader, ginRequestContext(c), &clientDisconnected)
 		if err != nil {
 			scanErr = err
 			break
@@ -664,6 +715,20 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			}
 			return nil, newIncompleteProviderStreamFailover(resp, sanitizeStreamError(invalidEventErr))
 		}
+		observer.ObserveAnthropic([]byte(payload))
+		if event.Type == "error" {
+			lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+			failure := anthropicCompatInBandFailure(payload)
+			if staged.committed || clientDisconnected {
+				if !clientDisconnected {
+					writeAnthropicCompatCCStreamFailure(c, failure)
+				}
+				result := resultWithUsage()
+				result.CaptureTerminalError = true
+				return result, failure.err
+			}
+			return nil, failure.err
+		}
 		mergeKiroCreditsFromAnthropicPayload(&usage, payload)
 
 		if processAnthropicEvent(&event, payload) {
@@ -677,6 +742,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		}
 	}
 
+	if errors.Is(scanErr, errProviderStreamIdleTimeout) && (terminalObserved || providerStopObserved) {
+		scanErr = nil
+	}
 	if scanErr != nil {
 		if !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {
 			logger.L().Warn("forward_as_cc stream: read error",
@@ -685,11 +753,19 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			)
 		}
 		if staged.committed || clientDisconnected {
+			if !clientDisconnected && !terminalObserved && !providerStopObserved {
+				failure := anthropicCompatProviderFailure(scanErr)
+				writeAnthropicCompatCCStreamFailure(c, failure)
+			}
 			result := resultWithUsage()
 			result.CaptureTerminalError = true
 			return result, scanErr
 		}
-		return nil, newIncompleteProviderStreamFailover(resp, "upstream stream read failed before semantic output: "+sanitizeStreamError(scanErr))
+		failure := newIncompleteProviderStreamFailover(resp, "upstream stream read failed before semantic output: "+sanitizeStreamError(scanErr))
+		if errors.Is(scanErr, errProviderStreamIdleTimeout) {
+			failure.RetryableOnSameAccount = false
+		}
+		return nil, errors.Join(failure, scanErr)
 	}
 	if incompleteProviderTail {
 		lineReader.DrainCaptureOnParserFailure(ctx)
@@ -701,6 +777,21 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		}
 		return nil, newIncompleteProviderStreamFailover(resp, incompleteErr.Error())
 	}
+	if providerPayloadObserved && !terminalObserved && !providerStopObserved && !clientDisconnected {
+		failure := &anthropicCompatStreamFailure{
+			err:     errors.New("stream usage incomplete: missing terminal event"),
+			errType: "stream_incomplete",
+			message: "upstream stream ended without a terminal event",
+		}
+		if !staged.committed {
+			return nil, errors.Join(newIncompleteProviderStreamFailover(resp, failure.message), failure.err)
+		}
+		writeAnthropicCompatCCStreamFailure(c, failure)
+		result := resultWithUsage()
+		result.CaptureTerminalError = true
+		return result, failure.err
+	}
+
 	if !providerPayloadObserved {
 		invalidStreamErr := fmt.Errorf("stream ended without a valid provider message_start")
 		if staged.committed || clientDisconnected {

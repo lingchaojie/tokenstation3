@@ -17,12 +17,6 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-vi.mock('@/stores/payment', () => ({
-  usePaymentStore: () => ({
-    pollOrderStatus,
-  }),
-}))
-
 vi.mock('@/stores', () => ({
   useAppStore: () => ({
     showError,
@@ -31,6 +25,7 @@ vi.mock('@/stores', () => ({
 
 vi.mock('@/api/payment', () => ({
   paymentAPI: {
+    getOrder: async (id: number) => ({ data: await pollOrderStatus(id) }),
     cancelOrder,
     verifyOrder,
   },
@@ -71,6 +66,36 @@ describe('PaymentStatusPanel', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('hides payable controls immediately when active verification reports a hold', async () => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    verifyOrder.mockResolvedValue({ data: {
+      ...orderFactory('PENDING'), provider_key: 'easypay', confirmation_pending: true,
+    } })
+    const wrapper = mount(PaymentStatusPanel, {
+      props: { orderId: 42, qrCode: 'old-qr', payUrl: 'https://pay.example.com/42',
+        expiresAt: '2099-01-01T12:30:00Z', paymentType: 'alipay' },
+      global: { stubs: { Icon: true, RouterLink: true } },
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(wrapper.text()).toContain('payment.qr.confirmationPending')
+    expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(wrapper.emitted('confirmation-pending')).toEqual([[]])
+    wrapper.unmount()
+  })
+
+  it('stops polling when the authenticated order lookup denies access', async () => {
+    pollOrderStatus.mockRejectedValue({ status: 403 })
+    const wrapper = mount(PaymentStatusPanel, {
+      props: { orderId: 42, qrCode: '', expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay', confirmationPending: true },
+      global: { stubs: { Icon: true, RouterLink: true } },
+    })
+    await vi.advanceTimersByTimeAsync(9000)
+    expect(pollOrderStatus).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('unavailable')).toEqual([[]])
+    wrapper.unmount()
   })
 
   it('treats RECHARGING as a successful terminal state', async () => {
@@ -254,6 +279,109 @@ describe('PaymentStatusPanel', () => {
     await vi.advanceTimersByTimeAsync(3000)
     await flushPromises()
     expect(verifyOrder).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['QR', 'https://pay.example.com/qr/42', 'COMPLETED', 'success'],
+    ['redirect', '', 'EXPIRED', 'expired'],
+  ])('waits for authoritative EasyPay status after the %s countdown ends', async (_mode, qrCode, terminalStatus, outcome) => {
+    pollOrderStatus.mockResolvedValue(orderFactory('PENDING'))
+    verifyOrder.mockResolvedValue({ data: orderFactory('PENDING') })
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode,
+        expiresAt: new Date(Date.now() + 1000).toISOString(),
+        paymentType: 'alipay',
+        providerKey: 'easypay',
+        payUrl: 'https://pay.example.com/session/42',
+      },
+      global: { stubs: { Icon: true, RouterLink: true } },
+    })
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(wrapper.text()).toContain('payment.qr.confirmationPending')
+    expect(wrapper.text()).not.toContain('payment.qr.openPayWindow')
+    expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.emitted('confirmation-pending')).toBeUndefined()
+    expect(pollOrderStatus).toHaveBeenCalledTimes(1)
+    expect(verifyOrder).toHaveBeenCalledTimes(1)
+
+    pollOrderStatus.mockResolvedValue(orderFactory(terminalStatus))
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(wrapper.emitted('settled')).toEqual([[outcome]])
+    expect(verifyOrder).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('waits for an order without provider metadata when cancellation returns the typed confirmation hold', async () => {
+    cancelOrder.mockImplementation(() => new Promise((_resolve, reject) => {
+      setTimeout(() => reject({ status: 409, reason: 'PAYMENT_CONFIRMATION_PENDING' }), 2500)
+    }))
+    pollOrderStatus.mockResolvedValue(orderFactory('PAID'))
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: new Date(Date.now() + 2000).toISOString(),
+        paymentType: 'alipay',
+      },
+      global: { stubs: { Icon: true, RouterLink: true } },
+    })
+
+    await wrapper.get('button').trigger('click')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(wrapper.text()).toContain('payment.qr.confirmationPending')
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    expect(wrapper.emitted('confirmation-pending')).toEqual([[]])
+    expect(showError).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(wrapper.emitted('settled')).toEqual([['success']])
+    wrapper.unmount()
+  })
+
+  it('restores a typed hold before the payment deadline without reoffering payment', async () => {
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: 'https://pay.example.com/qr/42',
+        payUrl: 'https://pay.example.com/session/42',
+        expiresAt: '2099-01-01T12:30:00Z',
+        paymentType: 'alipay',
+        confirmationPending: true,
+      },
+      global: { stubs: { RouterLink: true } },
+    })
+
+    await flushPromises()
+    expect(wrapper.text()).toContain('payment.qr.confirmationPending')
+    expect(wrapper.find('canvas').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('payment.qr.openPayWindow')
+    expect(wrapper.emitted('settled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it.each([undefined, 'alipay'])('keeps the checkout timeout behavior for provider %s without a typed hold', async (providerKey) => {
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: new Date(Date.now() + 1000).toISOString(),
+        paymentType: 'alipay',
+        providerKey,
+      },
+      global: { stubs: { Icon: true } },
+    })
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(wrapper.text()).toContain('payment.qr.expired')
+    expect(wrapper.emitted('settled')).toEqual([['expired']])
+    expect(pollOrderStatus).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

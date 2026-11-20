@@ -44,6 +44,11 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
+		// 名称与描述的界面语言译文 (added by migration 249)
+		field.JSON("i18n", domain.GroupI18n{}).
+			Default(domain.GroupI18n{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("名称与描述的界面语言译文：语言代码 -> {name, description}；缺失的语言沿用 name/description"),
 		field.Float("rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
@@ -218,6 +223,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("force_openai_fast").
 			Default(false).
 			Comment("是否强制此 OpenAI 分组请求使用 service_tier=priority"),
+		field.Bool("force_openai_ultrafast").
+			Default(false).
+			Comment("是否对支持 Ultrafast 的模型强制使用 service_tier=ultrafast（优先于 force_openai_fast）"),
 		field.Bool("free_openai_fast").
 			Default(false).
 			Comment("是否让此 OpenAI 分组的 Fast 请求按 Standard 价格计费"),

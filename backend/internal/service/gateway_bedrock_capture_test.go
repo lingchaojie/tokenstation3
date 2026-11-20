@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -399,31 +400,46 @@ func TestGatewayService_BedrockProviderDeadlineAfterDisconnectAbortsTerminalDisa
 }
 
 func TestBedrockBoundedFailoverPreservesIncompleteTypedResponse(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	transport := &recordingCaptureTransport{}
-	pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	enableCaptureForTest(t, c)
-	cfg := captureEnabledConfigForTest(1 << 20)
-	svc := &GatewayService{cfg: cfg, capturePool: pool, rateLimitService: NewRateLimitService(nil, nil, cfg, nil, nil)}
-	account := &Account{ID: 813, Platform: PlatformAnthropic, Type: AccountTypeBedrock}
-	req := httptest.NewRequest(http.MethodPost, "https://bedrock-runtime.test/model/invoke", nil)
-	svc.captureOutboundRequest(c, account, req, []byte(`{"model":"bedrock"}`))
-	providerBody := bytes.Repeat([]byte("x"), int(gatewayUpstreamErrorBodyReadLimit)+1)
-	resp := &http.Response{
-		StatusCode: http.StatusServiceUnavailable,
-		Header:     http.Header{"Content-Type": {"application/json"}},
-		Body:       io.NopCloser(bytes.NewReader(providerBody)),
-		Request:    req,
-	}
-	beginCaptureResponse(c, resp, true, cfg.Gateway.Capture.MaxBodyBytes)
+	for _, tt := range []struct {
+		name       string
+		body       []byte
+		readErr    error
+		wantLength int
+	}{
+		{name: "limit", body: bytes.Repeat([]byte("x"), int(gatewayUpstreamErrorBodyReadLimit)+1), wantLength: int(gatewayUpstreamErrorBodyReadLimit)},
+		{name: "short read failure", body: []byte(`{"message":"incomplete"`), readErr: io.ErrUnexpectedEOF, wantLength: len(`{"message":"incomplete"`)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			transport := &recordingCaptureTransport{}
+			pool := newConversationCapturePoolForTransport(transport, func() bool { return true })
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			enableCaptureForTest(t, c)
+			cfg := captureEnabledConfigForTest(1 << 20)
+			svc := &GatewayService{cfg: cfg, capturePool: pool, rateLimitService: NewRateLimitService(nil, nil, cfg, nil, nil)}
+			account := &Account{ID: 813, Platform: PlatformAnthropic, Type: AccountTypeBedrock}
+			req := httptest.NewRequest(http.MethodPost, "https://bedrock-runtime.test/model/invoke", nil)
+			svc.captureOutboundRequest(c, account, req, []byte(`{"model":"bedrock"}`))
+			var providerBody io.Reader = bytes.NewReader(tt.body)
+			if tt.readErr != nil {
+				providerBody = io.MultiReader(providerBody, iotest.ErrReader(tt.readErr))
+			}
+			resp := &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(providerBody),
+				Request:    req,
+			}
+			beginCaptureResponse(c, resp, true, cfg.Gateway.Capture.MaxBodyBytes)
 
-	result, err := svc.handleBedrockUpstreamErrors(context.Background(), resp, c, account)
-	require.Nil(t, result)
-	var failure *UpstreamFailoverError
-	require.ErrorAs(t, err, &failure)
-	require.True(t, failure.CaptureResponseIncomplete)
-	require.Equal(t, providerBody[:gatewayUpstreamErrorBodyReadLimit], transport.Attempts()[0].ResponseBytes())
-	AbortCaptureAttempt(c)
+			result, err := svc.handleBedrockUpstreamErrors(context.Background(), resp, c, account, "")
+			require.Nil(t, result)
+			var failure *UpstreamFailoverError
+			require.ErrorAs(t, err, &failure)
+			require.True(t, failure.CaptureResponseIncomplete)
+			require.Equal(t, tt.body[:tt.wantLength], transport.Attempts()[0].ResponseBytes())
+			AbortCaptureAttempt(c)
+		})
+	}
 }

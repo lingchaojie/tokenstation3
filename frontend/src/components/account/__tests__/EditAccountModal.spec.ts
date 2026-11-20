@@ -455,6 +455,44 @@ describe('EditAccountModal', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it.each(['apikey', 'oauth'])('can opt a passthrough %s account into model filtering without changing groups', async (type) => {
+    const account = buildAccount()
+    account.type = type
+    account.extra = { openai_passthrough: true }
+    account.group_ids = [17]
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-openai-passthrough-model-filter"]').setValue(true)
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.extra.openai_passthrough).toBe(true)
+    expect(payload.extra.openai_passthrough_model_filter).toBe(true)
+    expect(payload.credentials.model_mapping).toEqual({ 'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11' })
+    expect(payload.group_ids).toEqual([17])
+    wrapper.unmount()
+  })
+
+  it('loads the saved model filter and removes it when passthrough is disabled', async () => {
+    const account = buildAccount()
+    account.extra = { openai_passthrough: true, openai_passthrough_model_filter: true }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-openai-passthrough-model-filter"]').element.checked).toBe(true)
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(true)
+    await wrapper.get('[data-testid="edit-openai-passthrough-toggle"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_passthrough_model_filter')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials.model_mapping).toEqual(account.credentials.model_mapping)
+    wrapper.unmount()
+  })
+
   it('passes existing non-identity mappings to the whitelist selector and preserves them on save', async () => {
     const account = buildAccount()
     account.credentials.model_mapping = { 'gpt-5.2': 'gpt-5.2', 'gpt-latest': 'deepseek-chat' }
@@ -1262,6 +1300,41 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('images_url_to_b64_json')
   })
 
+  it('writes restricted image size tiers into extra', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="openai-image-size-tier-1K"]').setValue(false)
+    await wrapper.get('[data-testid="openai-image-size-tier-2K"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_image_size_tiers).toEqual(['4K'])
+  })
+
+  it('removes image size tiers from extra when every tier is selected again', async () => {
+    const account = buildAccount()
+    account.extra = { openai_image_size_tiers: ['1K', '2K'] }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const tier4K = wrapper.get('[data-testid="openai-image-size-tier-4K"]')
+    expect((tier4K.element as HTMLInputElement).checked).toBe(false)
+    await tier4K.setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toBeDefined()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_image_size_tiers')
+  })
+
   it('hides the Codex namespace flatten toggle for non-OAuth OpenAI accounts', async () => {
     const account = buildAccount()
     const wrapper = mountModal(account)
@@ -1851,6 +1924,26 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
   })
 
+  it('shows quota limit card for Vertex SA account and keeps quota limits on save', async () => {
+    const account = buildVertexAccount()
+    account.extra = { quota_limit: 200, quota_daily_limit: 20, quota_used: 35.5 }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.findComponent({ name: 'QuotaLimitCard' }).exists()).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra?.quota_limit).toBe(200)
+    expect(extra?.quota_daily_limit).toBe(20)
+    expect(extra?.quota_weekly_limit).toBeUndefined()
+  })
+
   it('blocks Vertex SA save when neither credentials_status nor legacy json indicates existence', async () => {
     const account = buildVertexAccount()
     account.credentials = {
@@ -1866,6 +1959,62 @@ describe('EditAccountModal', () => {
 
     const wrapper = mountModal(account)
 
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the redacted Vertex API key when saving without entering a new one', async () => {
+    const account = buildVertexAccount()
+    account.credentials = {
+      auth_mode: 'apikey',
+      project_id: 'demo-project',
+      location: 'us-central1',
+      tier_id: 'vertex'
+    }
+    account.credentials_status = { has_api_key: true }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="edit-vertex-api-key-input"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="edit-vertex-api-key-project-id-input"]').setValue('')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).toMatchObject({ auth_mode: 'apikey', location: 'us-central1', tier_id: 'vertex' })
+    expect(credentials).not.toHaveProperty('api_key')
+    expect(credentials).not.toHaveProperty('project_id')
+  })
+
+  it('submits a rotated Vertex API key', async () => {
+    const account = buildVertexAccount()
+    account.credentials = { auth_mode: 'apikey', location: 'global', tier_id: 'vertex' }
+    account.credentials_status = { has_api_key: true }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-vertex-api-key-input"]').setValue(' rotated-key ')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_key).toBe('rotated-key')
+  })
+
+  it('blocks Vertex API key save when no key exists and none is entered', async () => {
+    const account = buildVertexAccount()
+    account.credentials = { auth_mode: 'apikey', location: 'global', tier_id: 'vertex' }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).not.toHaveBeenCalled()
@@ -2179,6 +2328,92 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
     await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue('0')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     expect(updateAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('EditAccountModal temp-unschedulable rule scope', () => {
+  function buildAccountWithTempUnschedRules(rules: Array<Record<string, unknown>>) {
+    const account = buildAccount()
+    return {
+      ...account,
+      credentials: {
+        ...account.credentials,
+        temp_unschedulable_enabled: true,
+        temp_unschedulable_rules: rules
+      }
+    } as any
+  }
+
+  const checkedScopes = (wrapper: ReturnType<typeof mountModal>) =>
+    wrapper
+      .findAll('[data-testid^="temp-unsched-scope-"][aria-checked="true"]')
+      .map((radio) => radio.attributes('data-testid'))
+
+  const savedRules = () =>
+    updateAccountMock.mock.calls[0]?.[1]?.credentials?.temp_unschedulable_rules
+
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+  })
+
+  it('shows the capacity retry hint only for OpenAI accounts', () => {
+    const openAI = mountModal(buildAccount())
+    expect(openAI.text()).toContain('admin.accounts.tempUnschedulable.openAICapacityHint')
+    openAI.unmount()
+
+    const anthropic = mountModal(buildAnthropicOAuthAccount())
+    expect(anthropic.text()).not.toContain('admin.accounts.tempUnschedulable.openAICapacityHint')
+    anthropic.unmount()
+  })
+
+  it('shows rules without scope the way the backend treats them and keeps that on save', async () => {
+    const account = buildAccountWithTempUnschedRules([
+      { error_code: 401, keywords: ['unauthorized'], duration_minutes: 10 },
+      { error_code: 503, keywords: ['unavailable'], duration_minutes: 30 }
+    ])
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    expect(checkedScopes(wrapper)).toEqual(['temp-unsched-scope-account', 'temp-unsched-scope-model'])
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(savedRules().map((rule: { scope: string }) => rule.scope)).toEqual(['account', 'model'])
+    wrapper.unmount()
+  })
+
+  it('respects an explicit scope and saves the card the operator picks', async () => {
+    const account = buildAccountWithTempUnschedRules([
+      { error_code: 401, keywords: ['unauthorized'], duration_minutes: 10, scope: 'model' },
+      { error_code: 503, keywords: ['unavailable'], duration_minutes: 30, scope: ' Account ' }
+    ])
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    expect(checkedScopes(wrapper)).toEqual(['temp-unsched-scope-model', 'temp-unsched-scope-account'])
+
+    await wrapper.findAll('[data-testid="temp-unsched-scope-model"]')[1].trigger('click')
+    expect(checkedScopes(wrapper)).toEqual(['temp-unsched-scope-model', 'temp-unsched-scope-model'])
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(savedRules().map((rule: { scope: string }) => rule.scope)).toEqual(['model', 'model'])
+    wrapper.unmount()
+  })
+
+  it('defaults a newly added rule to model scope', async () => {
+    const wrapper = mountModal(buildAccountWithTempUnschedRules([]))
+
+    const addRule = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('admin.accounts.tempUnschedulable.addRule'))
+    await addRule!.trigger('click')
+
+    expect(checkedScopes(wrapper)).toEqual(['temp-unsched-scope-model'])
     wrapper.unmount()
   })
 })

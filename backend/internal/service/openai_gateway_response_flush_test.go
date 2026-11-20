@@ -141,7 +141,7 @@ func TestOpenAIResponseFlush_SlowEventsFlushOnceAtBoundaries(t *testing.T) {
 		`data: {"type":"response.output_text.delta","delta":"a"}`,
 		`data: {"type":"response.output_text.delta","delta":"b"}`,
 		`data: {"type":"response.output_text.delta","delta":"c"}`,
-		`data: {"type":"response.completed","response":{"id":"resp_done","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"abc"}]}]}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_done","created_at":1700000000,"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"abc"}]}]}}`,
 	}
 	body := strings.Join(events, "\n\n") + "\n\n"
 	recorder := newOpenAIResponseFlushRecorder()
@@ -161,7 +161,7 @@ func TestOpenAIResponseFlush_SlowEventsFlushOnceAtBoundaries(t *testing.T) {
 func TestOpenAIResponseFlush_DataQueuedButBlankDrainsFlushesOnce(t *testing.T) {
 	first := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n"
 	second := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"second\"}\n\n"
-	terminal := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"firstsecond\"}]}]}}\n\n"
+	terminal := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"created_at\":1700000000,\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"firstsecond\"}]}]}}\n\n"
 	allowSecond := make(chan struct{})
 	allowTerminal := make(chan struct{})
 	secondWaiting := make(chan struct{})
@@ -200,7 +200,7 @@ func TestOpenAIResponseFlush_BurstRespectsSingleTokenBackpressureBoundaries(t *t
 	burstEvents := []string{
 		`data: {"type":"response.output_text.delta","delta":"second"}`,
 		`data: {"type":"response.output_text.delta","delta":"third"}`,
-		`data: {"type":"response.completed","response":{"id":"resp_done","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"firstsecondthird"}]}]}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_done","created_at":1700000000,"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"firstsecondthird"}]}]}}`,
 	}
 	burst := strings.Join(burstEvents, "\n\n") + "\n\n"
 	allowBurst := make(chan struct{})
@@ -251,7 +251,7 @@ func TestOpenAIResponseFlush_BurstRespectsSingleTokenBackpressureBoundaries(t *t
 func TestOpenAIResponseFlush_CommentAndEOFOnlyFlushCompleteResidual(t *testing.T) {
 	body := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n" +
 		": upstream-comment\n\n" +
-		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\"}]}]}}\n"
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"created_at\":1700000000,\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\"}]}]}}\n"
 	recorder := newOpenAIResponseFlushRecorder()
 
 	result, err := runOpenAIResponseFlushTest(recorder, io.NopCloser(strings.NewReader(body)), config.GatewayConfig{})
@@ -267,7 +267,7 @@ func TestOpenAIResponseFlush_CommentAndEOFOnlyFlushCompleteResidual(t *testing.T
 }
 
 func TestOpenAIResponseFlush_TerminalReadErrorFlushesResidual(t *testing.T) {
-	body := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n"
+	body := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"created_at\":1700000000,\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n"
 	recorder := newOpenAIResponseFlushRecorder()
 
 	result, err := runOpenAIResponseFlushTest(recorder, &openAIResponseFlushReadError{payload: []byte(body)}, config.GatewayConfig{})
@@ -295,7 +295,7 @@ func TestOpenAIResponseFlush_OutputWithoutTerminalFlushesResidual(t *testing.T) 
 }
 
 func TestOpenAIResponseFlush_PreambleWithoutTerminalFlushesResidual(t *testing.T) {
-	body := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n"
+	body := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"created_at\":1700000000}}\n"
 	recorder := newOpenAIResponseFlushRecorder()
 
 	result, err := runOpenAIResponseFlushTest(recorder, io.NopCloser(strings.NewReader(body)), config.GatewayConfig{})
@@ -350,7 +350,7 @@ func TestOpenAIResponseFlush_KeepaliveDoesNotSplitOpenEvent(t *testing.T) {
 	}
 	partialEvent := strings.Join(dataLines, "\n") + "\n"
 	completeEvent := partialEvent + "\n"
-	terminal := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"aaaaaaaaaaaaaaaaa\"}]}]}}\n\n"
+	terminal := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"created_at\":1700000000,\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"aaaaaaaaaaaaaaaaa\"}]}]}}\n\n"
 	allowBlank := make(chan struct{})
 	allowTerminal := make(chan struct{})
 	blankWaiting := make(chan struct{})
@@ -391,7 +391,7 @@ func TestOpenAIResponseFlush_KeepaliveDoesNotSplitOpenEvent(t *testing.T) {
 func TestOpenAIResponseFlush_FailedAndErrorEventsFlushAtBoundaries(t *testing.T) {
 	t.Run("failed at EOF", func(t *testing.T) {
 		body := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n" +
-			"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"safety_error\",\"message\":\"blocked\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n"
+			"data: {\"type\":\"response.failed\",\"response\":{\"created_at\":1700000000,\"error\":{\"code\":\"safety_error\",\"message\":\"blocked\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n"
 		recorder := newOpenAIResponseFlushRecorder()
 
 		result, err := runOpenAIResponseFlushTest(recorder, io.NopCloser(strings.NewReader(body)), config.GatewayConfig{})
@@ -402,7 +402,7 @@ func TestOpenAIResponseFlush_FailedAndErrorEventsFlushAtBoundaries(t *testing.T)
 		require.Equal(t, 3, result.usage.InputTokens)
 		gotBody, flushes := recorder.snapshot()
 		expectedBody := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n" +
-			"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"safety_error\",\"message\":\"blocked\"}}}\n"
+			"data: {\"type\":\"response.failed\",\"response\":{\"created_at\":1700000000,\"error\":{\"code\":\"safety_error\",\"message\":\"blocked\"}}}\n"
 		require.Equal(t, expectedBody, gotBody)
 		require.Len(t, flushes, 2)
 		require.Contains(t, flushes[1], "response.failed")
@@ -692,7 +692,7 @@ func (r *hangingOpenAISSEAfterTerminal) Close() error {
 }
 
 func TestOpenAIResponseFlush_TerminalEventEndsStreamWithoutEOF(t *testing.T) {
-	body := "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":7,\"output_tokens\":5}}}\n\n"
+	body := "data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1700000000,\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":7,\"output_tokens\":5}}}\n\n"
 	reader := &hangingOpenAISSEAfterTerminal{payload: []byte(body), release: make(chan struct{})}
 	recorder := newOpenAIResponseFlushRecorder()
 	resultCh, errCh := runOpenAIResponseFlushTestAsync(recorder, reader, config.GatewayConfig{StreamKeepaliveInterval: 1, StreamDataIntervalTimeout: 30})

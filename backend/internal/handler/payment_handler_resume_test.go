@@ -92,7 +92,7 @@ func TestSanitizePaymentOrderForResponseIncludesResumeFieldsForPendingUnexpiredO
 		QrCode:      &qrCode,
 		ExpiresAt:   time.Now().Add(time.Hour),
 		CreatedAt:   time.Now(),
-	})
+	}, false)
 
 	require.NotNil(t, result)
 	require.Equal(t, &payURL, result.PayURL)
@@ -125,7 +125,7 @@ func TestSanitizePaymentOrderForResponseOmitsResumeFieldsForNonPayableOrders(t *
 				QrCode:      &qrCode,
 				ExpiresAt:   tc.expiresAt,
 				CreatedAt:   time.Now(),
-			})
+			}, false)
 
 			require.NotNil(t, result)
 			require.Nil(t, result.PayURL)

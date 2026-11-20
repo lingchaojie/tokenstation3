@@ -49,11 +49,11 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	// Read request body
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
-		if maxErr, ok := extractMaxBytesError(err); ok {
-			h.chatCompletionsErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
+		if handleRequestBodyReadError(c, reqLog, err) {
 			return
 		}
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		status, message := requestBodyReadFailure(reqLog, c.Request, err)
+		h.chatCompletionsErrorResponse(c, status, "invalid_request_error", message)
 		return
 	}
 
@@ -82,6 +82,12 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	bindRequestedReasoningEffort(c, body, reqModel)
 	if rejectSystemOneOnlyPlatform(c, apiKey, h.chatCompletionsErrorResponse) {
 		return
+	}
+	if cappedBody, changed, err := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, body); err != nil {
+		respondOpenAIReasoningEffortPolicyError(c, err, h.chatCompletionsErrorResponse)
+		return
+	} else if changed {
+		body = cappedBody
 	}
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
@@ -317,6 +323,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			accountReleaseFunc()
 		}
 
+		stampForwardRequestedReasoningEffort(result, service.RequestedReasoningEffortFromContext(c.Request.Context()))
 		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		submitForwardCapture := func(result *service.ForwardResult) {
 			h.submitGatewayResultCaptureForRequest(c, result, account, forwardBody, upstreamEndpoint)
@@ -391,6 +398,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				zap.Bool("upstream_error_response_already_written", upstreamErrorAlreadyCommunicated),
 				zap.Error(err),
 			)
+			h.gatewayService.ReleaseStickySessionAfterCommittedNoContent(context.WithoutCancel(c.Request.Context()), apiKey.GroupID, selectionSessionHash, account.ID, err)
 			return
 		}
 

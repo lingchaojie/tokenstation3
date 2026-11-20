@@ -53,6 +53,37 @@ func (s *GatewayService) shouldFailoverUpstreamError(statusCode int) bool {
 	}
 }
 
+// rotatedClaudeAccessToken recovers a token rotated while this request was in
+// flight. Compare against the token actually sent, which may have come from the
+// cache rather than the account snapshot. Never refresh or persist credentials
+// here: an unchanged token must retain the normal 401 policy.
+func (s *GatewayService) rotatedClaudeAccessToken(ctx context.Context, account *Account, rejectedToken string) string {
+	if account == nil || account.Platform != PlatformAnthropic || account.Type != AccountTypeOAuth ||
+		s.accountRepo == nil || rejectedToken == "" || ctx.Err() != nil {
+		return ""
+	}
+	latest, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil {
+		slog.Warn("claude_oauth_401_reload_failed", "account_id", account.ID, "error", err)
+		return ""
+	}
+	if latest == nil || latest.Platform != PlatformAnthropic || latest.Type != AccountTypeOAuth ||
+		latest.Status != StatusActive || !latest.Schedulable {
+		return ""
+	}
+	token := strings.TrimSpace(latest.GetCredential("access_token"))
+	if token == "" || token == rejectedToken {
+		return ""
+	}
+	if p := s.claudeTokenProvider; p != nil && p.tokenCache != nil {
+		if err := p.tokenCache.DeleteAccessToken(ctx, ClaudeTokenCacheKey(latest)); err != nil {
+			slog.Warn("claude_oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+	slog.Info("claude_oauth_rotated_token_retry", "account_id", account.ID)
+	return token
+}
+
 func retryBackoffDelay(attempt int) time.Duration {
 	// attempt 从 1 开始，表示第 attempt 次请求刚失败，需要等待后进行第 attempt+1 次请求。
 	if attempt <= 0 {
@@ -409,6 +440,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var resp *http.Response
 	lastWireBody := body
 	retryStart := time.Now()
+	retriedRotatedToken := false
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
 		// 构建上游请求（每次重试需要重新构建，因为请求体需要重新读取）
 		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
@@ -432,6 +464,16 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
 				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
 			})
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken &&
+			attempt < maxRetryAttempts && time.Since(retryStart) < maxRetryElapsed {
+			if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
+				_ = resp.Body.Close()
+				token = rotatedToken
+				retriedRotatedToken = true
+				continue
+			}
 		}
 
 		// 优先检测thinking block签名错误（400）并重试一次
@@ -736,7 +778,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-			s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			s.handleRetryExhaustedSideEffects(ctx, resp, account, reqModel)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				ProxyID:            opsUpstreamProxyID(account),
 				ProxyName:          opsUpstreamProxyName(account),
@@ -765,7 +807,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				CaptureResponseIncomplete: !boundedUpstreamErrorResponseComplete(respBody, readErr, s.upstreamErrorBodyReadLimit()),
 			}
 		}
-		return s.handleRetryExhaustedError(ctx, resp, c, account)
+		return s.handleRetryExhaustedError(ctx, resp, c, account, reqModel)
 	}
 
 	// 处理可切换账号的错误
@@ -1003,7 +1045,7 @@ func anthropicSpeedModel(parsed *ParsedRequest, result *ForwardResult) string {
 
 // anthropicSpeedServiceTier 把 Anthropic 的 speed=fast 归一成可计费的 "fast" tier。
 //
-// Fast mode 目前只在 Claude Opus 5 / Opus 4.8 上存在，且不支持 Bedrock 等第三方
+// Fast mode 支持 Claude Fable/Mythos 5.2、Opus 5 / Opus 4.8，且不支持 Bedrock 等第三方
 // 承载（Opus 4.7 的 fast mode 已被移除，传 speed=fast 会直接报错）。这里按模型和
 // 平台收紧，避免上游根本没跑 fast 时仍然按 2x 计费——宁可漏收也不能多收。
 //
@@ -1021,8 +1063,11 @@ func anthropicSpeedServiceTier(account *Account, speed, model string) *string {
 	return &tier
 }
 
-// modelSupportsAnthropicFastMode 判断模型是否属于支持 fast mode 的 Opus 5 / Opus 4.8。
+// modelSupportsAnthropicFastMode 判断模型是否支持 Anthropic fast mode。
 func modelSupportsAnthropicFastMode(model string) bool {
+	if claude.IsFable52(model) || claude.IsMythos52(model) {
+		return true
+	}
 	modelLower := strings.ToLower(strings.TrimSpace(model))
 	if !strings.Contains(modelLower, "opus") {
 		return false
@@ -1142,4 +1187,60 @@ func (s *GatewayService) isStickyAccountUpstreamRestricted(ctx context.Context, 
 		return false
 	}
 	return s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel)
+}
+
+// sseStreamErrorEventFailover 把上游 HTTP 200 + SSE 流体内的 event:error 帧转为
+// UpstreamFailoverError：尚未向客户端写出内容且错误类型为 overloaded_error 时按 529
+// 处理并触发账号侧副作用，其余按 403；同时登记 stream_error 运维记录。
+func (s *GatewayService) sseStreamErrorEventFailover(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, rawData, model string, outputStarted bool) *UpstreamFailoverError {
+	body := []byte(rawData)
+	semanticStatus := http.StatusForbidden
+	if !outputStarted && gjson.GetBytes(body, "error.type").String() == "overloaded_error" {
+		semanticStatus = 529
+		syntheticResp := &http.Response{
+			StatusCode: semanticStatus,
+			Header:     resp.Header.Clone(),
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}
+		if s.rateLimitService != nil {
+			s.handleFailoverSideEffects(ctx, syntheticResp, account, model)
+		}
+	}
+
+	upstreamMsg := sanitizeUpstreamErrorMessage(
+		strings.TrimSpace(extractUpstreamErrorMessage(body)),
+	)
+
+	upstreamDetail := ""
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 2048
+		}
+		upstreamDetail = truncateString(rawData, maxBytes)
+	}
+
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: semanticStatus,
+		UpstreamRequestID:  resp.Header.Get("x-request-id"),
+		Kind:               "stream_error",
+		Message:            upstreamMsg,
+		Detail:             upstreamDetail,
+	})
+
+	logger.LegacyPrintf("service.gateway",
+		"[Forward] SSE error event in stream: Account=%d(%s) RequestID=%s Body=%s",
+		account.ID, account.Name, resp.Header.Get("x-request-id"),
+		truncateString(rawData, 1000),
+	)
+
+	return &UpstreamFailoverError{
+		StatusCode:   semanticStatus,
+		ResponseBody: body,
+	}
 }

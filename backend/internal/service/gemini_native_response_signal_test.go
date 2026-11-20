@@ -65,9 +65,9 @@ func newGeminiSignalService(contentType string, body string) *GeminiMessagesComp
 	}
 }
 
-func collectGeminiSSEObserved(body io.Reader, isOAuth bool, observe func(rawBytes []byte)) (map[string]any, *ClaudeUsage, geminiSSECollectStats, error) {
+func collectGeminiSSEObserved(cfg *config.Config, body io.Reader, isOAuth bool, observe func(rawBytes []byte)) (map[string]any, *ClaudeUsage, geminiSSECollectStats, error) {
 	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body), Header: make(http.Header)}
-	collected, usage, _, stats, err := collectGeminiSSEResponseObserved(resp, isOAuth, nil, observe)
+	collected, usage, _, stats, err := collectGeminiSSEResponseObserved(resp, isOAuth, cfg, observe)
 	return collected, usage, stats, err
 }
 
@@ -184,6 +184,29 @@ func TestGeminiForwardNative_StreamPromptBlockedMarksContentPolicy(t *testing.T)
 	require.Contains(t, streamErrs[0].Message, "blockReason=SAFETY")
 	require.False(t, streamErrs[0].CountTowardsSLA)
 	require.Empty(t, upstreamErrorEventsFromContext(t, c))
+}
+
+// Vertex 拦截 prompt 时 usageMetadata 可能只带 cachedContentTokenCount、缺 promptTokenCount：
+// input 下限为 0，缓存命中照上游所报计入 cache_read。
+func TestGeminiForwardNative_StreamPromptBlockedWithOnlyCachedTokensKeepsInputNonNegative(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := `data: {"promptFeedback":{"blockReason":"PROHIBITED_CONTENT"},"usageMetadata":{"cachedContentTokenCount":12980,"totalTokenCount":0,"trafficType":"ON_DEMAND"},"modelVersion":"gemini-3.5-flash-lite"}
+
+`
+	svc := newGeminiSignalService("text/event-stream", body)
+	c, rec := newGeminiNativeTestContext(t)
+
+	result, err := svc.ForwardNative(context.Background(), c, geminiSignalTestAccount(),
+		"gemini-3.5-flash-lite", "streamGenerateContent", true, geminiSignalTestRequest())
+	require.NoError(t, err)
+	require.Equal(t, body, rec.Body.String())
+	require.Equal(t, 0, result.Usage.InputTokens)
+	require.Equal(t, 12980, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 0, result.Usage.OutputTokens)
+
+	streamErrs := GetOpsStreamErrors(c)
+	require.Len(t, streamErrs, 1)
+	require.Equal(t, "PROHIBITED_CONTENT", streamErrs[0].Code)
 }
 
 func TestGeminiForwardNative_EmptyStreamMarksUpstreamFailure(t *testing.T) {
@@ -492,7 +515,7 @@ func TestGeminiForwardNative_CountTokensBodyLeavesNoMark(t *testing.T) {
 
 func TestCollectGeminiSSEObserved_SeesTerminalChunkEvenWhenAggregateDropsIt(t *testing.T) {
 	var observed []string
-	collected, usage, stats, err := collectGeminiSSEObserved(strings.NewReader(geminiSignalTestProhibitedSSE), false, func(raw []byte) {
+	collected, usage, stats, err := collectGeminiSSEObserved(nil, strings.NewReader(geminiSignalTestProhibitedSSE), false, func(raw []byte) {
 		observed = append(observed, string(raw))
 	})
 	require.NoError(t, err)

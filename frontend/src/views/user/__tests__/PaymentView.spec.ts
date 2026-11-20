@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
-import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
+import { PAYMENT_RECOVERY_STORAGE_KEY, readStripePaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
@@ -39,6 +39,7 @@ const showError = vi.hoisted(() => vi.fn())
 const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
+const getOrder = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
 const translate = vi.hoisted(() => vi.fn((key: string, params?: Record<string, unknown>) => {
   if (key === 'dashboard.pendingSubscriptionChange') {
@@ -121,6 +122,7 @@ vi.mock('@/stores', async () => {
 vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getCheckoutInfo,
+    getOrder,
   },
 }))
 
@@ -411,6 +413,31 @@ describe('PaymentView recharge campaigns', () => {
     }
   })
 
+  it('stores a Stripe client secret with its order and excludes it from the checkout route', async () => {
+    const wrapper = await mountRecharge({ methods: { stripe: checkoutInfoFixture().data.methods.wxpay! } })
+    routerResolve.mockReturnValueOnce({ href: '#stripe-checkout' })
+    createOrder.mockResolvedValueOnce({
+      order_id: 432,
+      amount: 88,
+      pay_amount: 88,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      client_secret: 'pi_secret_432',
+      resume_token: 'resume-432',
+    })
+    wrapper.getComponent(AmountInput).vm.$emit('update:modelValue', 88)
+    await flushPromises()
+    const checkoutButton = wrapper.findAll('button').find((button) => button.text().includes('payment.createOrder'))!
+    await checkoutButton.trigger('click')
+    await flushPromises()
+
+    expect(routerResolve).toHaveBeenLastCalledWith({
+      path: '/payment/stripe',
+      query: { order_id: '432', method: undefined, resume_token: 'resume-432' },
+    })
+    window.localStorage.removeItem(PAYMENT_RECOVERY_STORAGE_KEY)
+    expect(readStripePaymentRecoverySnapshot(window.localStorage, 432, 'resume-432')?.clientSecret).toBe('pi_secret_432')
+  })
+
   it('quotes each method in its own currency before switching and rounds fees to that currency', async () => {
     const limit = checkoutInfoFixture().data.methods.wxpay!
     const wrapper = await mountRecharge({
@@ -656,6 +683,11 @@ describe('PaymentView payment recovery', () => {
     showWarning.mockReset()
     bridgeInvoke.mockReset()
     window.localStorage.clear()
+    authState.user.id = 77
+    window.localStorage.setItem('auth_user', JSON.stringify({ id: 77 }))
+    getOrder.mockReset().mockResolvedValue({ data: {
+      id: 888, user_id: 77, status: 'PENDING', out_trade_no: 'sub2_ldc_888',
+    } })
     ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = undefined
   })
 
@@ -720,6 +752,131 @@ describe('PaymentView payment recovery', () => {
 
     expect(wrapper.find('[data-test="method-selector"]').text()).toBe('ldc')
   })
+
+  it('preserves an authenticated confirmation hold when the same checkout reloads after its deadline', async () => {
+    const snapshot = {
+      orderId: 888,
+      amount: 66,
+      qrCode: 'ldc-qr',
+      expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'ldc',
+      payUrl: 'https://pay.example.com/ldc',
+      outTradeNo: 'sub2_ldc_888',
+      clientSecret: '',
+      payAmount: 66,
+      orderType: 'balance',
+      paymentMode: 'popup',
+      resumeToken: '',
+      createdAt: Date.now(),
+    }
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify(snapshot))
+
+    const mountCheckout = () => shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          PaymentStatusPanel: {
+            props: ['orderId', 'confirmationPending'],
+            template: `<button data-test="payment-panel" :data-order-id="orderId" :data-held="confirmationPending"
+              @click="$emit('confirmation-pending')" />`,
+          },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+
+    const initial = mountCheckout()
+    await flushPromises()
+    await initial.get('[data-test="payment-panel"]').trigger('click')
+    const stored = JSON.parse(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY) || '{}')
+    expect(stored).toMatchObject({ orderId: 888, confirmationPending: true })
+    initial.unmount()
+
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+      ...stored,
+      expiresAt: '2024-01-01T00:10:00.000Z',
+    }))
+
+    const reloaded = mountCheckout()
+    await flushPromises()
+    const panel = reloaded.get('[data-test="payment-panel"]')
+    expect(panel.attributes('data-order-id')).toBe('888')
+    expect(panel.attributes('data-held')).toBe('true')
+    reloaded.unmount()
+  })
+
+  it.each([77, undefined])('does not restore an expired EasyPay order owned by a different user (%s)', async (ownerId) => {
+    localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+      ownerId, orderId: 888, amount: 66, qrCode: 'old-qr', expiresAt: '2024-01-01T00:10:00.000Z',
+      paymentType: 'alipay', providerKey: 'easypay', payUrl: 'https://pay.example.com/old-order',
+      outTradeNo: 'sub2_ldc_888', clientSecret: '', payAmount: 66, orderType: 'balance',
+      paymentMode: 'popup', resumeToken: '', createdAt: Date.now(),
+    }))
+    authState.user.id = 88
+    localStorage.setItem('auth_user', JSON.stringify({ id: 88 }))
+    getOrder.mockRejectedValue({ status: 403 })
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture())
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, PaymentStatusPanel: true } },
+    })
+    await flushPromises()
+    expect(wrapper.find('payment-status-panel-stub').exists()).toBe(false)
+    expect(getOrder).toHaveBeenCalledTimes(ownerId ? 0 : 1)
+    wrapper.unmount()
+  })
+
+  it('ignores an owned lookup when the browser changes users in flight', async () => {
+    const raw = JSON.stringify({
+      orderId: 888, amount: 66, qrCode: 'old-qr', expiresAt: '2024-01-01T00:10:00.000Z',
+      paymentType: 'alipay', providerKey: 'easypay', payUrl: '',
+      outTradeNo: 'sub2_ldc_888', clientSecret: '', payAmount: 66, orderType: 'balance',
+      paymentMode: 'popup', resumeToken: '', createdAt: Date.now(),
+    })
+    localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, raw)
+    let resolveOrder!: (value: unknown) => void
+    getOrder.mockReturnValueOnce(new Promise(resolve => { resolveOrder = resolve }))
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture())
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, PaymentStatusPanel: true } },
+    })
+    await flushPromises()
+    localStorage.setItem('auth_user', JSON.stringify({ id: 88 }))
+    resolveOrder({ data: { id: 888, user_id: 77, status: 'PENDING', out_trade_no: 'sub2_ldc_888', confirmation_pending: true } })
+    await flushPromises()
+    expect(wrapper.find('payment-status-panel-stub').exists()).toBe(false)
+    expect(localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBe(raw)
+    wrapper.unmount()
+  })
+
+  it('restores the exact held order chosen from Orders while preserving another active checkout', async () => {
+    routeState.query = { order_id: '888' }
+    const otherRaw = JSON.stringify({
+      ownerId: 77, orderId: 999, amount: 25, qrCode: 'newer-qr', expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'alipay', providerKey: 'easypay', payUrl: '', outTradeNo: 'newer-ref',
+      clientSecret: '', payAmount: 25, orderType: 'balance', paymentMode: 'qrcode', resumeToken: '', createdAt: Date.now(),
+    })
+    localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, otherRaw)
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture())
+    getOrder.mockResolvedValueOnce({ data: {
+      id: 888, user_id: 77, status: 'PENDING', out_trade_no: 'sub2_ldc_888',
+      provider_key: 'easypay', confirmation_pending: true, expires_at: '2025-01-01T00:00:00.000Z',
+    } })
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, PaymentStatusPanel: {
+        props: ['orderId', 'confirmationPending', 'payUrl', 'qrCode'],
+        template: '<div data-test="payment-panel" :data-order="orderId" :data-held="confirmationPending" :data-qr="qrCode" :data-url="payUrl" />',
+      } } },
+    })
+    await flushPromises()
+    expect(getOrder).toHaveBeenCalledTimes(1)
+    expect(getOrder).toHaveBeenCalledWith(888)
+    expect(wrapper.get('[data-test="payment-panel"]').attributes()).toMatchObject({
+      'data-order': '888', 'data-held': 'true', 'data-qr': '', 'data-url': '',
+    })
+    expect(localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBe(otherRaw)
+    wrapper.unmount()
+  })
 })
 
 describe('PaymentView WeChat JSAPI flow', () => {
@@ -741,6 +898,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
     getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
     mockUpdateProfile.mockReset()
     authState.user = {
+      id: 77,
       username: 'demo-user',
       balance: 0,
       subscription_balance_fallback_enabled: false,
@@ -824,6 +982,9 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
   it('clears a stale recovery snapshot before handling wechat resume callback params', async () => {
     createOrder.mockRejectedValueOnce(new Error('resume failed'))
+    getOrder.mockReset().mockResolvedValue({ data: {
+      id: 999, user_id: 77, out_trade_no: 'stale-out-trade-no', status: 'PENDING',
+    } })
     window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
       orderId: 999,
       amount: 66,

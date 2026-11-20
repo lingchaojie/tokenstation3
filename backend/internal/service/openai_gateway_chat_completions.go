@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,7 +184,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// derive a stable seed from the final upstream model family.
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
-	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
+	if err := validateGPT61CompatRequest(body, upstreamModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -260,7 +262,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		// Normal path: convert Chat Completions → Responses.
 		// ChatCompletionsToResponses always sets Stream=true (upstream always streams).
 		chatReq.Model = upstreamModel
-		responsesReq, err = apicompat.ChatCompletionsToResponses(&chatReq)
+		responsesReq, err = chatCompletionsToResponses(s.cfg, &chatReq)
 		if err != nil {
 			return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 		}
@@ -328,7 +330,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		if hasOpenAIImageGenerationTool(reqBody) && applyCodexImageGenerationBridgeInstructions(reqBody) {
 			codexResult.Modified = true
 		}
-		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), codexClientSessionID(c))
 		responsesBody, err = json.Marshal(reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
@@ -420,7 +422,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		responsesMode, _ := account.Extra[openai_compat.ExtraKeyResponsesMode].(string)
+		mayRetryStructuredInput := resp.StatusCode == http.StatusBadRequest && account.IsOpenAIApiKey() &&
+			openai_compat.NormalizeResponsesSupportMode(responsesMode) == openai_compat.ResponsesSupportModeAuto &&
+			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportYes && !isResponsesShape
+		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp, mayRetryStructuredInput)
 		finishOpenAIHTTPCapture(resp)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
@@ -438,7 +444,20 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 				zap.Int("upstream_status", resp.StatusCode),
 				zap.String("upstream_message", upstreamMsg),
 			)
-			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+			return s.forwardAsRawChatCompletionsWithStartTime(ctx, c, account, body, defaultMappedModel, startTime)
+		}
+		if mayRetryStructuredInput &&
+			(ctx == nil || ctx.Err() == nil) &&
+			(c.Request == nil || c.Request.Context().Err() == nil) &&
+			!IsResponseCommitted(c) &&
+			!c.Writer.Written() &&
+			completeErrorBody &&
+			isConvertedResponsesInputStringRejection(resp.StatusCode, respBody) {
+			logger.L().Info("openai chat_completions: structured Responses input rejected, falling back to raw chat completions",
+				zap.Int64("account_id", account.ID),
+				zap.Int("upstream_status", resp.StatusCode),
+			)
+			return s.forwardAsRawChatCompletionsWithStartTime(ctx, c, account, body, defaultMappedModel, startTime)
 		}
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr
@@ -510,6 +529,155 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 
 	return result, handleErr
+}
+
+var responsesInputStringValidationError = regexp.MustCompile(`^['"]loc['"]\s*:\s*\(\s*['"]body['"]\s*,\s*['"]input['"]\s*,\s*['"]str['"]\s*\)$`)
+var responsesStringValidationMessage = regexp.MustCompile(`^['"]msg['"]\s*:\s*['"]Input should be a valid string['"]$`)
+var responsesStringValidationType = regexp.MustCompile(`^['"]type['"]\s*:\s*['"]string_type['"]$`)
+var responsesValidationErrors = regexp.MustCompile(`(?s)^([1-9][0-9]*) validation errors?(?: for [^\r\n:]+)?:\s*(\[.*\])$`)
+var responsesInvalidInputTypeMessage = regexp.MustCompile(`(?i)^(?:Invalid type for ['"]input['"]:\s*)?Expected a string(?: for input)?, but got an (?:array|object) instead\.?$`)
+
+func isResponsesInputStringValidationMessage(message string) bool {
+	match := responsesValidationErrors.FindStringSubmatch(strings.TrimSpace(message))
+	if match == nil {
+		return false
+	}
+	entries, ok := splitResponsesValidationFields(match[2][1 : len(match[2])-1])
+	count, err := strconv.Atoi(match[1])
+	if !ok || err != nil || count != len(entries) {
+		return false
+	}
+	matched := false
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry, "{") || !strings.HasSuffix(entry, "}") {
+			return false
+		}
+		fields, ok := splitResponsesValidationFields(entry[1 : len(entry)-1])
+		if !ok {
+			return false
+		}
+		location, message, stringType := false, false, false
+		keys := make(map[string]bool, len(fields))
+		for _, field := range fields {
+			key, value, found := strings.Cut(field, ":")
+			key = strings.TrimSpace(key)
+			if !found || len(key) < 3 || (key[0] != '\'' && key[0] != '"') || key[len(key)-1] != key[0] || strings.TrimSpace(value) == "" || keys[key[1:len(key)-1]] {
+				return false
+			}
+			keys[key[1:len(key)-1]] = true
+			location = location || responsesInputStringValidationError.MatchString(field)
+			message = message || responsesStringValidationMessage.MatchString(field)
+			stringType = stringType || responsesStringValidationType.MatchString(field)
+		}
+		matched = matched || (location && message && stringType)
+	}
+	return matched
+}
+
+func splitResponsesValidationFields(value string) ([]string, bool) {
+	var fields []string
+	var brackets []byte
+	var quote byte
+	escaped := false
+	start := 0
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case '{', '[', '(':
+			brackets = append(brackets, character)
+		case '}', ']', ')':
+			if len(brackets) == 0 {
+				return nil, false
+			}
+			opening := brackets[len(brackets)-1]
+			if (character == '}' && opening != '{') || (character == ']' && opening != '[') || (character == ')' && opening != '(') {
+				return nil, false
+			}
+			brackets = brackets[:len(brackets)-1]
+		case ',':
+			if len(brackets) == 0 {
+				field := strings.TrimSpace(value[start:index])
+				if field == "" {
+					return nil, false
+				}
+				fields = append(fields, field)
+				start = index + 1
+			}
+		}
+	}
+	if quote != 0 || len(brackets) != 0 {
+		return nil, false
+	}
+	if field := strings.TrimSpace(value[start:]); field != "" {
+		fields = append(fields, field)
+	}
+	return fields, len(fields) > 0
+}
+
+func isConvertedResponsesInputStringRejection(status int, responseBody []byte) bool {
+	if status != http.StatusBadRequest || !json.Valid(responseBody) {
+		return false
+	}
+	envelope := gjson.ParseBytes(responseBody)
+	for _, object := range []gjson.Result{envelope, envelope.Get("error")} {
+		if !object.IsObject() {
+			return false
+		}
+		keys := make(map[string]bool)
+		unambiguous := true
+		object.ForEach(func(key, value gjson.Result) bool {
+			name := key.String()
+			if keys[name] {
+				unambiguous = false
+				return false
+			}
+			keys[name] = true
+			switch name {
+			case "usage", "output", "output_text", "choices", "tool_calls", "response", "status", "incomplete_details":
+				unambiguous = false
+			case "code":
+				code := strings.ToLower(strings.TrimSpace(value.String()))
+				unambiguous = code == "" || code == "invalid_type" || code == "invalid_request_error"
+			case "param":
+				param := strings.ToLower(strings.TrimSpace(value.String()))
+				unambiguous = param == "" || param == "input"
+			case "type":
+				errorType := strings.ToLower(strings.TrimSpace(value.String()))
+				unambiguous = errorType == "" || errorType == "invalid_type" || errorType == "invalid_request_error"
+			}
+			return unambiguous
+		})
+		if !unambiguous {
+			return false
+		}
+	}
+	message := gjson.GetBytes(responseBody, "error.message").String()
+	if isResponsesInputStringValidationMessage(message) {
+		return true
+	}
+	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.code").String()))
+	typ := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.type").String()))
+	if code != "invalid_type" && typ != "invalid_type" {
+		return false
+	}
+	param := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.param").String()))
+	if param != "input" {
+		return false
+	}
+	message = strings.ToLower(strings.TrimSpace(message))
+	return responsesInvalidInputTypeMessage.MatchString(message)
 }
 
 func normalizeResponsesRequestServiceTier(req *apicompat.ResponsesRequest) {
@@ -617,7 +785,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, imageResults, err := s.readOpenAICompatBufferedTerminal(resp, c, "openai chat_completions buffered", requestID)
+	finalResponse, usage, acc, imageResults, priorModels, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai chat_completions buffered", requestID)
 	if err != nil {
 		return nil, s.newOpenAIStreamFailoverErrorFromResponse(c, account, false, requestID, nil, "upstream stream failed before a valid terminal event: "+sanitizeStreamError(err), resp)
 	}
@@ -630,6 +798,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
+	priorModels.apply(observer)
 	observer.Observe(finalResponse.Model, true)
 	observer.ObserveServiceTier(finalResponse.ServiceTier, true)
 	responseStatus := strings.ToLower(strings.TrimSpace(finalResponse.Status))
@@ -735,6 +904,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	state := apicompat.NewResponsesEventToChatState()
 	state.Model = originalModel
+	state.XAIServerSideSearch = account != nil && account.IsGrok()
 	// 网关作为计费链路的一环，不能把下游 usage 输出绑定到客户端是否显式请求。
 	// raw Chat Completions 直转路径已经强制透出 usage，这里保持同样行为，避免级联代理计费为 0。
 	state.IncludeUsage = true
@@ -912,6 +1082,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				streamFailoverErr = s.newOpenAIStreamFailoverErrorFromResponseWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp)
 				return true
 			}
+			s.handleOpenAIStreamTerminalAccountSideEffects(c, account, payloadBytes, message, resp.Header, upstreamModel)
 			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 			defaultStatus, defaultErrType, defaultMsg := http.StatusBadGateway, "upstream_error", message
 			// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
@@ -1193,11 +1364,16 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	events := make(chan scanEvent, openAIDefaultStreamQueueSize)
 	done := make(chan struct{})
 	scanDone := make(chan struct{})
+	queueBudget := newSSEQueueBudget(s.cfg)
 	sendEvent := func(ev scanEvent) bool {
+		if !queueBudget.acquire(len(ev.line), done) {
+			return false
+		}
 		select {
 		case events <- ev:
 			return true
 		case <-done:
+			queueBudget.release(len(ev.line))
 			return false
 		}
 	}
@@ -1218,7 +1394,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if !providerScanFinished {
 			drainCaptureScannerOnParserFailure(
 				ctx, resp, events, scanDone, &readActivity.lastRead,
-				streamInterval, nil, func() { close(done) },
+				streamInterval, func(ev scanEvent) { queueBudget.release(len(ev.line)) }, func() { close(done) },
 			)
 			return
 		}
@@ -1256,6 +1432,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	for {
 		select {
 		case ev, ok := <-events:
+			if ok {
+				queueBudget.release(len(ev.line))
+			}
 			if !ok {
 				providerScanFinished = true
 				hadPendingProviderData := parser.HasPendingProviderData()

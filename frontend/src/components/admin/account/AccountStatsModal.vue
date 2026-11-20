@@ -409,17 +409,22 @@
         </div>
 
         <!-- Model Distribution -->
-        <ModelDistributionChart :model-stats="stats.models" :loading="false" />
+        <ModelDistributionChart
+          v-bind="breakdown"
+          :model-stats="stats.models"
+        />
 
         <EndpointDistributionChart
+          v-bind="breakdown"
           :endpoint-stats="stats.endpoints || []"
-          :loading="false"
           :title="t('usage.inboundEndpoint')"
         />
 
         <EndpointDistributionChart
-          :endpoint-stats="stats.upstream_endpoints || []"
-          :loading="false"
+          v-bind="breakdown"
+          source="upstream"
+          :endpoint-stats="[]"
+          :upstream-endpoint-stats="stats.upstream_endpoints || []"
           :title="t('usage.upstreamEndpoint')"
         />
       </template>
@@ -448,7 +453,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Chart as ChartJS,
@@ -467,8 +472,8 @@ import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageStatsResponse } from '@/types'
+import { useAccountUsageStats } from '@/composables/useAccountUsageStats'
+import type { Account } from '@/types'
 
 ChartJS.register(
   CategoryScale,
@@ -492,8 +497,7 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-const loading = ref(false)
-const stats = ref<AccountUsageStatsResponse | null>(null)
+const { stats, loading, breakdown } = useAccountUsageStats(() => props.show, () => props.account?.id)
 
 // Dark mode detection
 const isDarkMode = computed(() => {
@@ -641,32 +645,6 @@ const lineChartOptions = computed(() => ({
     }
   }
 }))
-
-// Load stats when modal opens
-watch(
-  () => props.show,
-  async (newVal) => {
-    if (newVal && props.account) {
-      await loadStats()
-    } else {
-      stats.value = null
-    }
-  }
-)
-
-const loadStats = async () => {
-  if (!props.account) return
-
-  loading.value = true
-  try {
-    stats.value = await adminAPI.accounts.getStats(props.account.id, 30)
-  } catch (error) {
-    console.error('Failed to load account stats:', error)
-    stats.value = null
-  } finally {
-    loading.value = false
-  }
-}
 
 const handleClose = () => {
   emit('close')

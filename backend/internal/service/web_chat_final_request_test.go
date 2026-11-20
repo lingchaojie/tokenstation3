@@ -116,7 +116,11 @@ func TestWebChatGeminiRetryArchivesOnlyFinalProviderHTTPError(t *testing.T) {
 	}}
 	writer := &webChatCaptureRecords{records: make(chan *CaptureRecord, 3)}
 	pool := newConversationCapturePoolForRecords(writer.records)
-	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, Capture: config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20}}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize:                 defaultMaxLineSize,
+		MaxSameAccountRetriesGemini: geminiDefaultSameAccountRetries,
+		Capture:                     config.GatewayCaptureConfig{Enabled: true, MaxBodyBytes: 8 << 20},
+	}}
 	gateway := &GatewayService{cfg: cfg, capturePool: pool}
 	gemini := &GeminiMessagesCompatService{httpUpstream: recorder, cfg: cfg}
 	account := &Account{ID: 707, Platform: PlatformGemini, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{"api_key": "secret"}}

@@ -56,7 +56,9 @@ apiClient.interceptors.request.use(
       if (!config.params) {
         config.params = {}
       }
-      config.params.timezone = getUserTimezone()
+      if (config.params.timezone === undefined) {
+        config.params.timezone = getUserTimezone()
+      }
     }
 
     if (config.headers) {
@@ -77,6 +79,13 @@ apiClient.interceptors.request.use(
 )
 
 // ==================== Response Interceptor ====================
+
+// Retry-After 只接受整数秒；跨域部署未暴露该头或为 HTTP-date 形式时返回 undefined。
+const parseRetryAfterSeconds = (headers: unknown): number | undefined => {
+  const raw = (headers as Record<string, unknown> | undefined)?.['retry-after']
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw.trim())) return undefined
+  return Number(raw.trim())
+}
 
 apiClient.interceptors.response.use(
   (response: AxiosResponse) => {
@@ -262,6 +271,7 @@ apiClient.interceptors.response.use(
         error: apiData.error,
         message: apiData.message || apiData.detail || error.message,
         metadata: apiData.metadata,
+        retry_after_seconds: parseRetryAfterSeconds(error.response.headers),
       })
     }
 

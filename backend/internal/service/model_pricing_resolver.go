@@ -31,6 +31,7 @@ type PricingBucketProvenance struct {
 	CacheWrite1hPriority            string
 	CacheRead                       string
 	CacheReadPriority               string
+	ImageCacheRead                  string
 	ImageInput                      string
 	ImageOutput                     string
 	PerRequest                      string
@@ -355,6 +356,9 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 	}
 	resolved.BasePricing.FastMultiplier = chPricing.FastMultiplier
 	resolved.BasePricing.FlexMultiplier = chPricing.FlexMultiplier
+	if resolved.Source == PricingSourceChannel {
+		resolved.BasePricing.UltrafastMultiplierOverride = chPricing.UltrafastMultiplier
+	}
 	resolved.BasePricing.ReasoningEffortMultipliers = maps.Clone(chPricing.ReasoningEffortMultipliers)
 	applyChannelImagePriceOverrides(chPricing, resolved.BasePricing)
 	if chPricing.ImageOutputPrice != nil {

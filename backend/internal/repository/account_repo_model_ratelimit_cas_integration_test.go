@@ -133,3 +133,59 @@ func TestAccountRepositoryModelRateLimitCAS(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountRepositoryClearsOnlyObservedModelRateLimit(t *testing.T) {
+	const scope = "claude-fable-5"
+	const otherScope = "claude-sonnet-4-5"
+	window := map[string]any{
+		"reason": "anthropic_7d_oi_window_exhausted", "rate_limited_at": "2026-11-19T00:00:00Z",
+		"rate_limit_reset_at": "2026-11-26T00:00:00Z",
+	}
+	other := map[string]any{"reason": "manual", "rate_limit_reset_at": "2026-11-25T00:00:00Z"}
+	observed, err := json.Marshal(window)
+	require.NoError(t, err)
+
+	for _, tc := range []struct{ name, field, value string }{
+		{name: "observed window"},
+		{name: "credits required replacement", field: "reason", value: "anthropic_fable_credits_required"},
+		{name: "later window", field: "rate_limit_reset_at", value: "2026-12-03T00:00:00Z"},
+		{name: "re-armed same window", field: "rate_limited_at", value: "2026-11-19T01:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			tx := testEntTx(t)
+			cache := &schedulerCacheRecorder{}
+			repo := newAccountRepositoryWithSQL(tx.Client(), tx, cache)
+			account := mustCreateAccount(t, tx.Client(), &service.Account{
+				Name: "fable-limit-cas", Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth,
+				Extra: map[string]any{"model_rate_limits": map[string]any{scope: window, otherScope: other}},
+			})
+			if tc.field != "" {
+				_, err := tx.ExecContext(ctx, `UPDATE accounts SET extra = jsonb_set(extra, ARRAY['model_rate_limits', $1, $2]::text[], to_jsonb($3::text)) WHERE id = $4`, scope, tc.field, tc.value, account.ID)
+				require.NoError(t, err)
+			}
+			var beforeEvents int
+			require.NoError(t, scanSingleRow(ctx, tx, "SELECT COUNT(*) FROM scheduler_outbox WHERE account_id = $1", []any{account.ID}, &beforeEvents))
+
+			applied, err := repo.SetModelRateLimitIfUnchanged(ctx, account.ID, scope, observed, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.field == "", applied)
+			got, err := repo.GetByID(ctx, account.ID)
+			require.NoError(t, err)
+			limits := got.Extra["model_rate_limits"].(map[string]any)
+			require.Equal(t, other, limits[otherScope])
+			if applied {
+				require.NotContains(t, limits, scope)
+				beforeEvents++
+			} else {
+				require.Equal(t, tc.value, limits[scope].(map[string]any)[tc.field])
+			}
+			var afterEvents int
+			require.NoError(t, scanSingleRow(ctx, tx, "SELECT COUNT(*) FROM scheduler_outbox WHERE account_id = $1", []any{account.ID}, &afterEvents))
+			require.Equal(t, beforeEvents, afterEvents)
+			cached, err := cache.GetAccount(ctx, account.ID)
+			require.NoError(t, err)
+			require.Equal(t, limits, cached.Extra["model_rate_limits"])
+		})
+	}
+}

@@ -33,7 +33,7 @@ interface AuthSnapshot {
 
 let inFlightRefresh: Promise<RefreshTokenResponse> | null = null
 
-function getStoredUserID(): number | null {
+export function getStoredUserID(): number | null {
   const rawUser = localStorage.getItem(AUTH_USER_KEY)
   if (!rawUser) {
     return null
@@ -45,6 +45,15 @@ function getStoredUserID(): number | null {
   } catch {
     return null
   }
+}
+
+// Capture the current user and return a check that tolerates profile updates.
+export function captureStoredUserIdentity(): () => boolean {
+  const rawUser = localStorage.getItem(AUTH_USER_KEY)
+  const userID = getStoredUserID()
+  return () => userID === null
+    ? localStorage.getItem(AUTH_USER_KEY) === rawUser
+    : getStoredUserID() === userID
 }
 
 function readAuthSnapshot(): AuthSnapshot {

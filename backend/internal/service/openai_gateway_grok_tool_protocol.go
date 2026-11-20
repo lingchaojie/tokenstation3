@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -197,12 +198,13 @@ func newGrokResponsesClientToolStreamBody(
 	source io.ReadCloser,
 	mapping apicompat.ResponsesClientToolMapping,
 	maxLineSize int,
+	cfg *config.Config,
 ) io.ReadCloser {
 	reader, writer := io.Pipe()
 	body := &grokResponsesClientToolStreamBody{PipeReader: reader, source: source, done: make(chan struct{})}
 	go func() {
 		defer close(body.done)
-		transformGrokResponsesClientToolStream(source, writer, mapping, maxLineSize)
+		transformGrokResponsesClientToolStream(source, writer, mapping, maxLineSize, cfg)
 	}()
 	return body
 }
@@ -213,8 +215,9 @@ func newResponsesClientToolStreamBody(
 	source io.ReadCloser,
 	mapping apicompat.ResponsesClientToolMapping,
 	maxLineSize int,
+	cfg *config.Config,
 ) io.ReadCloser {
-	return newGrokResponsesClientToolStreamBody(source, mapping, maxLineSize)
+	return newGrokResponsesClientToolStreamBody(source, mapping, maxLineSize, cfg)
 }
 
 func transformGrokResponsesClientToolStream(
@@ -222,6 +225,7 @@ func transformGrokResponsesClientToolStream(
 	destination *io.PipeWriter,
 	mapping apicompat.ResponsesClientToolMapping,
 	maxLineSize int,
+	cfg *config.Config,
 ) {
 	defer func() { _ = source.Close() }()
 	if maxLineSize <= 0 {
@@ -232,11 +236,21 @@ func transformGrokResponsesClientToolStream(
 	scanBuf := getSSEScannerBuf64K()
 	defer putSSEScannerBuf64K(scanBuf)
 	scanner.Buffer(scanBuf[:0], maxLineSize)
+	scanner.Split(newBoundedSSESplit(cfg, maxLineSize, nil))
 	documents := newOpenAISSEJSONDocumentScanner(scanner)
 	restorer := apicompat.NewResponsesClientToolStreamRestorer(mapping)
 	buffered := bufio.NewWriterSize(destination, 4*1024)
 	pendingFields := make([]string, 0, 2)
-	pendingFieldBytes := 0
+	pendingFieldBytes := int64(0)
+	maxPendingFields, maxPendingBytes := maxGrokPendingSSEFields, int64(maxGrokPendingSSEFieldBytes)
+	if cfg != nil {
+		if cfg.Gateway.SSEEventMaxLines > 0 {
+			maxPendingFields = cfg.Gateway.SSEEventMaxLines
+		}
+		if cfg.Gateway.SSEEventMaxBytes > 0 {
+			maxPendingBytes = cfg.Gateway.SSEEventMaxBytes
+		}
+	}
 	frameHadEventField := false
 	frameEmitted := false
 	fail := func(err error) {
@@ -349,8 +363,8 @@ func transformGrokResponsesClientToolStream(
 		if _, isEvent := extractOpenAISSEEventLine(line); isEvent {
 			frameHadEventField = true
 		}
-		lineBytes := len(line) + 1
-		if len(pendingFields) >= maxGrokPendingSSEFields || lineBytes > maxGrokPendingSSEFieldBytes-pendingFieldBytes {
+		lineBytes := int64(len(line) + 1)
+		if len(pendingFields) >= maxPendingFields || lineBytes > maxPendingBytes-pendingFieldBytes {
 			fail(fmt.Errorf("Grok Responses pending SSE fields exceeded limit: fields=%d bytes=%d", len(pendingFields)+1, pendingFieldBytes+lineBytes)) //nolint:staticcheck // Protocol name is intentionally capitalized.
 			return
 		}

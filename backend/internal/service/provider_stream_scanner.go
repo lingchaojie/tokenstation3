@@ -23,15 +23,24 @@ type providerLineScanEvent struct {
 }
 
 type providerLineReader struct {
-	resp     *http.Response
-	events   <-chan providerLineScanEvent
-	stop     chan struct{}
-	done     <-chan struct{}
-	stopOnce sync.Once
-	timer    *time.Timer
-	timeout  time.Duration
-	timerCh  <-chan time.Time
-	lastRead *atomic.Int64
+	resp        *http.Response
+	events      <-chan providerLineScanEvent
+	stop        chan struct{}
+	done        <-chan struct{}
+	stopOnce    sync.Once
+	timer       *time.Timer
+	timeout     time.Duration
+	timerCh     <-chan time.Time
+	lastRead    *atomic.Int64
+	queueBudget *sseQueueBudget
+}
+
+func newGeminiProviderSSEScanner(reader io.Reader, cfg *config.Config) *bufio.Scanner {
+	maxLineSize := int(resolveUpstreamSSEEventLimit(cfg))
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, min(64*1024, maxLineSize)), maxLineSize)
+	scanner.Split(newBoundedSSESplit(cfg, maxLineSize, nil))
+	return scanner
 }
 
 func newBufferedProviderSSEScanner(reader io.Reader, cfg *config.Config) *bufio.Scanner {
@@ -48,7 +57,7 @@ func newBufferedProviderSSEScanner(reader io.Reader, cfg *config.Config) *bufio.
 	scannerBufferSize := maxLineSize + 2 // one-byte probe plus a possible CRLF delimiter
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, initialSize), scannerBufferSize)
-	scanner.Split(boundedTotalStreamScanLines(maxLineSize, limit, ErrUpstreamResponseBodyTooLarge))
+	scanner.Split(newBoundedSSESplit(cfg, maxLineSize, boundedTotalStreamScanLines(maxLineSize, limit, errors.Join(ErrUpstreamResponseBodyTooLarge, bufio.ErrTooLong))))
 	return scanner
 }
 
@@ -71,7 +80,7 @@ func boundedTotalStreamScanLines(lineLimit int, totalLimit int64, limitErr error
 		// Unlike the generic streaming guard, this scanner owns a total-limit
 		// reader with one probe byte. Let an exact-limit unterminated line ask
 		// for that probe so N bytes remain valid and N+1 fails deterministically.
-		if token == nil && len(data) > lineLimit {
+		if token == nil && (len(data) > lineLimit || totalLimit > 0 && int64(len(data)) > totalLimit-observed) {
 			return 0, nil, limitErr
 		}
 		if advance <= 0 || totalLimit <= 0 {
@@ -102,17 +111,22 @@ func newProviderLineReader(
 	events := make(chan providerLineScanEvent, openAIFirstOutputGuardQueueSize)
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	queueBudget := newSSEQueueBudget(cfg)
 	send := func(event providerLineScanEvent) bool {
+		if !queueBudget.acquire(len(event.line), stop) {
+			return false
+		}
 		select {
 		case events <- event:
 			return true
 		case <-stop:
+			queueBudget.release(len(event.line))
 			return false
 		}
 	}
 	reader := &providerLineReader{
 		resp: resp, events: events, stop: stop, done: done,
-		lastRead: &activity.lastRead,
+		lastRead: &activity.lastRead, queueBudget: queueBudget,
 	}
 	go func() {
 		defer close(done)
@@ -206,6 +220,7 @@ func (r *providerLineReader) consumeEvent(event providerLineScanEvent, ok bool) 
 	if !ok {
 		return "", false, nil
 	}
+	r.queueBudget.release(len(event.line))
 	if event.err != nil {
 		r.waitScannerAndDrainCapture()
 		return "", false, event.err
@@ -223,6 +238,8 @@ func (r *providerLineReader) waitScannerAndDrainCapture() {
 		case event, ok := <-r.events:
 			if !ok {
 				scannerDone = true
+			} else {
+				r.queueBudget.release(len(event.line))
 			}
 			if event.err != nil {
 				<-r.done
@@ -293,7 +310,7 @@ func (r *providerLineReader) DrainCaptureOnParserFailure(ctx context.Context) {
 		r.timer.Stop()
 	}
 	r.stopOnce.Do(func() {
-		drainCaptureScannerOnParserFailure(ctx, r.resp, r.events, r.done, r.lastRead, r.timeout, nil, func() {
+		drainCaptureScannerOnParserFailure(ctx, r.resp, r.events, r.done, r.lastRead, r.timeout, func(event providerLineScanEvent) { r.queueBudget.release(len(event.line)) }, func() {
 			close(r.stop)
 		})
 	})
@@ -412,6 +429,7 @@ func (r *providerLineReader) CloseAndCollectBufferedTail() ([]string, error) {
 	r.stopOnce.Do(func() {
 		closeCaptureResponseUnderlying(r.resp)
 		for event := range r.events {
+			r.queueBudget.release(len(event.line))
 			if event.err != nil {
 				if !providerScannerCloseError(event.err) && scanErr == nil {
 					scanErr = event.err

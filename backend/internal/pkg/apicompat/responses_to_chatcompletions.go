@@ -61,6 +61,9 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 				},
 			})
 		case "custom_tool_call":
+			if item.serverSideSearch {
+				continue
+			}
 			toolCalls = append(toolCalls, ChatToolCall{
 				ID:   item.CallID,
 				Type: "function",
@@ -70,16 +73,7 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 				},
 			})
 		case "reasoning":
-			for _, s := range item.Summary {
-				if s.Type == "summary_text" && s.Text != "" {
-					_, _ = reasoningText.WriteString(s.Text)
-				}
-			}
-			for _, part := range item.Content {
-				if part.Type == "reasoning_text" && part.Text != "" {
-					_, _ = reasoningText.WriteString(part.Text)
-				}
-			}
+			_, _ = reasoningText.WriteString(responsesReasoningText(item))
 		case "web_search_call":
 			// silently consumed — results already incorporated into text output
 		}
@@ -153,11 +147,19 @@ type ResponsesEventToChatState struct {
 	Finalized              bool        // true after finish chunk has been emitted
 	NextToolCallIndex      int         // next sequential tool_call index to assign
 	OutputIndexToToolIndex map[int]int // Responses output_index → Chat tool_calls index
-	ToolInputHadDelta      map[int]bool
+	OutputIndexToArguments map[int]string
+	argumentBuffers        map[int]*strings.Builder
+	argumentBytes          int
+	untrackedArguments     map[int]bool
 	TextualOutputHadDelta  map[responsesTextStreamKey]bool
 	OutputIndexHadSemantic map[int]bool
 	IncludeUsage           bool
 	Usage                  *ChatUsage
+
+	// XAIServerSideSearch is set by callers whose upstream is xAI. A
+	// custom_tool_call that IsServerSideSearchCall then never becomes a tool
+	// call, because xAI runs it itself.
+	XAIServerSideSearch bool
 }
 
 // NewResponsesEventToChatState returns an initialised stream state.
@@ -166,7 +168,7 @@ func NewResponsesEventToChatState() *ResponsesEventToChatState {
 		ID:                     generateChatCmplID(),
 		Created:                time.Now().Unix(),
 		OutputIndexToToolIndex: make(map[int]int),
-		ToolInputHadDelta:      make(map[int]bool),
+		OutputIndexToArguments: make(map[int]string),
 		TextualOutputHadDelta:  make(map[responsesTextStreamKey]bool),
 		OutputIndexHadSemantic: make(map[int]bool),
 	}
@@ -320,6 +322,9 @@ func resToChatHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 	if evt.Item == nil || (evt.Item.Type != "function_call" && evt.Item.Type != "custom_tool_call") {
 		return nil
 	}
+	if state.XAIServerSideSearch && IsServerSideSearchCall(evt.Item.Type, evt.Item.CallID) {
+		return nil
+	}
 
 	state.SawToolCall = true
 	idx := state.NextToolCallIndex
@@ -411,7 +416,21 @@ func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	if !ok {
 		return nil
 	}
-	state.ToolInputHadDelta[evt.OutputIndex] = true
+	index := evt.OutputIndex
+	if !state.untrackedArguments[index] {
+		if len(evt.Delta) <= maxBufferedResponsesRetainedOutputBytes-state.argumentBytes {
+			state.OutputIndexToArguments[index] = appendIndexedStreamString(&state.argumentBuffers, index, state.OutputIndexToArguments[index], evt.Delta)
+			state.argumentBytes += len(evt.Delta)
+		} else {
+			state.argumentBytes -= len(state.OutputIndexToArguments[index])
+			delete(state.OutputIndexToArguments, index)
+			delete(state.argumentBuffers, index)
+			if state.untrackedArguments == nil {
+				state.untrackedArguments = make(map[int]bool)
+			}
+			state.untrackedArguments[index] = true
+		}
+	}
 	state.OutputIndexHadSemantic[evt.OutputIndex] = true
 
 	return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{
@@ -425,18 +444,19 @@ func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 }
 
 func resToChatHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
-	if state.ToolInputHadDelta[evt.OutputIndex] {
+	if state.untrackedArguments[evt.OutputIndex] {
 		return nil
 	}
 	arguments := evt.Arguments
 	if evt.Type == "response.custom_tool_call_input.done" {
 		arguments = evt.Input
 	}
-	if arguments == "" {
+	current := state.OutputIndexToArguments[evt.OutputIndex]
+	if arguments == current || !strings.HasPrefix(arguments, current) {
 		return nil
 	}
 	copyEvent := *evt
-	copyEvent.Delta = arguments
+	copyEvent.Delta = arguments[len(current):]
 	return resToChatHandleFuncArgsDelta(&copyEvent, state)
 }
 
@@ -607,12 +627,15 @@ func generateChatCmplID() string {
 // ---------------------------------------------------------------------------
 
 type bufferedFuncCall struct {
-	OutputIndex int
-	Type        string
-	CallID      string
-	Name        string
-	Args        strings.Builder
-	HadDelta    bool
+	OutputIndex           int
+	Type                  string
+	CallID                string
+	Name                  string
+	Args                  strings.Builder
+	HadDelta              bool
+	Namespace             string
+	EncryptedFunctionArgs json.RawMessage
+	EncryptedContent      string
 }
 
 type responsesTextStreamKey struct {
@@ -650,6 +673,7 @@ type BufferedResponseAccumulator struct {
 	textualOutputHadDelta map[responsesTextStreamKey]bool
 	trackedOutputIndexes  map[int]bool
 	err                   error
+	XAIServerSideSearch   bool
 }
 
 // NewBufferedResponseAccumulator returns an initialised accumulator.
@@ -717,13 +741,24 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 				a.err = fmt.Errorf("responses buffered output repeated function-call index %d", event.OutputIndex)
 				break
 			}
+			metadataBytes := len(event.Item.Namespace) + len(event.Item.EncryptedFunctionArgs) + len(event.Item.EncryptedContent)
+			if metadataBytes > maxBufferedResponsesRetainedOutputBytes {
+				a.err = fmt.Errorf("responses buffered function-call metadata exceeds %d-byte retained-state limit", maxBufferedResponsesRetainedOutputBytes)
+				break
+			}
+			if metadataBytes > 0 && a.retainOutput(metadataBytes, 0) != nil {
+				break
+			}
 			idx := len(a.funcCalls)
 			a.outputIndexToFuncIdx[event.OutputIndex] = idx
 			a.funcCalls = append(a.funcCalls, bufferedFuncCall{
-				OutputIndex: event.OutputIndex,
-				Type:        event.Item.Type,
-				CallID:      event.Item.CallID,
-				Name:        event.Item.Name,
+				OutputIndex:           event.OutputIndex,
+				Type:                  event.Item.Type,
+				CallID:                event.Item.CallID,
+				Name:                  event.Item.Name,
+				Namespace:             event.Item.Namespace,
+				EncryptedFunctionArgs: event.Item.EncryptedFunctionArgs,
+				EncryptedContent:      event.Item.EncryptedContent,
 			})
 		}
 	case "response.output_item.done":
@@ -929,11 +964,15 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 
 	for i := range a.funcCalls {
 		item := ResponsesOutput{
-			Type:   a.funcCalls[i].Type,
-			CallID: a.funcCalls[i].CallID,
-			Name:   a.funcCalls[i].Name,
+			Type:                  a.funcCalls[i].Type,
+			CallID:                a.funcCalls[i].CallID,
+			Name:                  a.funcCalls[i].Name,
+			Namespace:             a.funcCalls[i].Namespace,
+			EncryptedFunctionArgs: a.funcCalls[i].EncryptedFunctionArgs,
+			EncryptedContent:      a.funcCalls[i].EncryptedContent,
 		}
 		if item.Type == "custom_tool_call" {
+			item.serverSideSearch = a.XAIServerSideSearch && IsServerSideSearchCall(item.Type, item.CallID)
 			item.Input = a.funcCalls[i].Args.String()
 		} else {
 			item.Arguments = a.funcCalls[i].Args.String()
@@ -977,6 +1016,7 @@ func (a *BufferedResponseAccumulator) SupplementResponseOutput(resp *ResponsesRe
 
 	for outputIndex := range resp.Output {
 		item := &resp.Output[outputIndex]
+		item.serverSideSearch = a.XAIServerSideSearch && IsServerSideSearchCall(item.Type, item.CallID)
 		if item.Type != "function_call" || item.Arguments != "" {
 			continue
 		}

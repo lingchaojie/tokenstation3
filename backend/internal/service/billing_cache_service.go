@@ -666,6 +666,11 @@ func (s *BillingCacheService) InvalidateAPIKeyRateLimit(ctx context.Context, key
 // resets expired windows in-memory and triggers async DB reset,
 // and returns an error if any window limit is exceeded.
 func (s *BillingCacheService) checkAPIKeyRateLimits(ctx context.Context, apiKey *APIKey) error {
+	return s.checkAPIKeyRateLimitsWithPending(ctx, apiKey, 0)
+}
+
+// checkAPIKeyRateLimitsWithPending 在窗口用量上叠加 pending（即将扣除的金额）后检查限速窗口。
+func (s *BillingCacheService) checkAPIKeyRateLimitsWithPending(ctx context.Context, apiKey *APIKey, pending float64) error {
 	if s.cache == nil {
 		// No cache: fall back to reading from DB directly
 		if s.apiKeyRateLimitLoader == nil {
@@ -676,7 +681,7 @@ func (s *BillingCacheService) checkAPIKeyRateLimits(ctx context.Context, apiKey 
 			return nil // Don't block requests on DB errors
 		}
 		return s.evaluateRateLimits(ctx, apiKey, data.Usage5h, data.Usage1d, data.Usage7d,
-			data.Window5hStart, data.Window1dStart, data.Window7dStart)
+			data.Window5hStart, data.Window1dStart, data.Window7dStart, pending)
 	}
 
 	cacheData, err := s.cache.GetAPIKeyRateLimit(ctx, apiKey.ID)
@@ -721,11 +726,11 @@ func (s *BillingCacheService) checkAPIKeyRateLimits(ctx context.Context, apiKey 
 		t := time.Unix(cacheData.Window7d, 0)
 		w7d = &t
 	}
-	return s.evaluateRateLimits(ctx, apiKey, cacheData.Usage5h, cacheData.Usage1d, cacheData.Usage7d, w5h, w1d, w7d)
+	return s.evaluateRateLimits(ctx, apiKey, cacheData.Usage5h, cacheData.Usage1d, cacheData.Usage7d, w5h, w1d, w7d, pending)
 }
 
-// evaluateRateLimits checks usage against limits, triggering async resets for expired windows.
-func (s *BillingCacheService) evaluateRateLimits(ctx context.Context, apiKey *APIKey, usage5h, usage1d, usage7d float64, w5h, w1d, w7d *time.Time) error {
+// evaluateRateLimits checks usage (plus pending) against limits, triggering async resets for expired windows.
+func (s *BillingCacheService) evaluateRateLimits(ctx context.Context, apiKey *APIKey, usage5h, usage1d, usage7d float64, w5h, w1d, w7d *time.Time, pending float64) error {
 	needsReset := false
 
 	// Reset expired windows in-memory for check purposes
@@ -768,13 +773,16 @@ func (s *BillingCacheService) evaluateRateLimits(ctx context.Context, apiKey *AP
 	}
 
 	// Check limits
-	if apiKey.RateLimit5h > 0 && usage5h >= apiKey.RateLimit5h {
+	exceeds := func(usage, limit float64) bool {
+		return limit > 0 && (usage >= limit || usage+pending > limit)
+	}
+	if exceeds(usage5h, apiKey.RateLimit5h) {
 		return ErrAPIKeyRateLimit5hExceeded
 	}
-	if apiKey.RateLimit1d > 0 && usage1d >= apiKey.RateLimit1d {
+	if exceeds(usage1d, apiKey.RateLimit1d) {
 		return ErrAPIKeyRateLimit1dExceeded
 	}
-	if apiKey.RateLimit7d > 0 && usage7d >= apiKey.RateLimit7d {
+	if exceeds(usage7d, apiKey.RateLimit7d) {
 		return ErrAPIKeyRateLimit7dExceeded
 	}
 	return nil
@@ -798,7 +806,7 @@ func (s *BillingCacheService) QueueUpdateAPIKeyRateLimitUsage(apiKeyID int64, co
 // 把 TOCTOU 超支窗口限制在并发 in-flight 请求数量内（而非随时间无限累积）。
 // 写延迟通常 < 1ms（本地 Redis），换取 quota 视图实时性的取舍合理。
 //
-// Redis 写失败用 ALERT 级 log；DB 持久化由 caller 单独 goroutine 兜底（gateway_service.go）。
+// Redis 写失败用 ALERT 级 log；DB 持久化由计费 worker 内同步执行或批量 flusher 处理。
 func (s *BillingCacheService) IncrementUserPlatformQuotaUsage(userID int64, platform string, cost float64) {
 	if s.cache == nil {
 		return
@@ -899,11 +907,6 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	return nil
 }
 
-// checkSimpleModeAPIKeyRateLimits is deliberately DB-authoritative. Redis
-// updates are asynchronous and can be dropped or missed after a committed
-// transaction, so using the cache here could let a limited simple-mode key
-// continue past its configured window. A read failure fails closed because
-// the operator explicitly opted into enforcement.
 func (s *BillingCacheService) checkSimpleModeAPIKeyRateLimits(ctx context.Context, apiKey *APIKey) error {
 	if apiKey == nil || !apiKey.HasRateLimits() {
 		return nil
@@ -943,9 +946,9 @@ func (s *BillingCacheService) checkRPM(ctx context.Context, user *User, group *G
 
 	// ── 第一层：分组级检查（override 或 group.rpm_limit） ──
 	if group != nil {
-		// 解析 override：优先从 auth cache snapshot，nil 时回退 DB。
+		// 解析 override：优先从 auth cache snapshot；snapshot 未确认该分组时回退 DB。
 		var override *int
-		if user.UserGroupRPMOverride != nil {
+		if user.UserGroupRPMOverrideGroupID == group.ID {
 			override = user.UserGroupRPMOverride
 		} else if s.userGroupRateRepo != nil {
 			dbOverride, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, user.ID, group.ID)

@@ -98,6 +98,12 @@ func (_u *GroupUpdate) ClearDescription() *GroupUpdate {
 	return _u
 }
 
+// SetI18n sets the "i18n" field.
+func (_u *GroupUpdate) SetI18n(v domain.GroupI18n) *GroupUpdate {
+	_u.mutation.SetI18n(v)
+	return _u
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (_u *GroupUpdate) SetRateMultiplier(v float64) *GroupUpdate {
 	_u.mutation.ResetRateMultiplier()
@@ -896,6 +902,20 @@ func (_u *GroupUpdate) SetNillableForceOpenaiFast(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetForceOpenaiUltrafast sets the "force_openai_ultrafast" field.
+func (_u *GroupUpdate) SetForceOpenaiUltrafast(v bool) *GroupUpdate {
+	_u.mutation.SetForceOpenaiUltrafast(v)
+	return _u
+}
+
+// SetNillableForceOpenaiUltrafast sets the "force_openai_ultrafast" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableForceOpenaiUltrafast(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetForceOpenaiUltrafast(*v)
+	}
+	return _u
+}
+
 // SetFreeOpenaiFast sets the "free_openai_fast" field.
 func (_u *GroupUpdate) SetFreeOpenaiFast(v bool) *GroupUpdate {
 	_u.mutation.SetFreeOpenaiFast(v)
@@ -1579,6 +1599,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.DescriptionCleared() {
 		_spec.ClearField(group.FieldDescription, field.TypeString)
 	}
+	if value, ok := _u.mutation.I18n(); ok {
+		_spec.SetField(group.FieldI18n, field.TypeJSON, value)
+	}
 	if value, ok := _u.mutation.RateMultiplier(); ok {
 		_spec.SetField(group.FieldRateMultiplier, field.TypeFloat64, value)
 	}
@@ -1822,6 +1845,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.ForceOpenaiFast(); ok {
 		_spec.SetField(group.FieldForceOpenaiFast, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ForceOpenaiUltrafast(); ok {
+		_spec.SetField(group.FieldForceOpenaiUltrafast, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.FreeOpenaiFast(); ok {
 		_spec.SetField(group.FieldFreeOpenaiFast, field.TypeBool, value)
@@ -2316,6 +2342,12 @@ func (_u *GroupUpdateOne) SetNillableDescription(v *string) *GroupUpdateOne {
 // ClearDescription clears the value of the "description" field.
 func (_u *GroupUpdateOne) ClearDescription() *GroupUpdateOne {
 	_u.mutation.ClearDescription()
+	return _u
+}
+
+// SetI18n sets the "i18n" field.
+func (_u *GroupUpdateOne) SetI18n(v domain.GroupI18n) *GroupUpdateOne {
+	_u.mutation.SetI18n(v)
 	return _u
 }
 
@@ -3117,6 +3149,20 @@ func (_u *GroupUpdateOne) SetNillableForceOpenaiFast(v *bool) *GroupUpdateOne {
 	return _u
 }
 
+// SetForceOpenaiUltrafast sets the "force_openai_ultrafast" field.
+func (_u *GroupUpdateOne) SetForceOpenaiUltrafast(v bool) *GroupUpdateOne {
+	_u.mutation.SetForceOpenaiUltrafast(v)
+	return _u
+}
+
+// SetNillableForceOpenaiUltrafast sets the "force_openai_ultrafast" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableForceOpenaiUltrafast(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetForceOpenaiUltrafast(*v)
+	}
+	return _u
+}
+
 // SetFreeOpenaiFast sets the "free_openai_fast" field.
 func (_u *GroupUpdateOne) SetFreeOpenaiFast(v bool) *GroupUpdateOne {
 	_u.mutation.SetFreeOpenaiFast(v)
@@ -3830,6 +3876,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if _u.mutation.DescriptionCleared() {
 		_spec.ClearField(group.FieldDescription, field.TypeString)
 	}
+	if value, ok := _u.mutation.I18n(); ok {
+		_spec.SetField(group.FieldI18n, field.TypeJSON, value)
+	}
 	if value, ok := _u.mutation.RateMultiplier(); ok {
 		_spec.SetField(group.FieldRateMultiplier, field.TypeFloat64, value)
 	}
@@ -4073,6 +4122,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.ForceOpenaiFast(); ok {
 		_spec.SetField(group.FieldForceOpenaiFast, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ForceOpenaiUltrafast(); ok {
+		_spec.SetField(group.FieldForceOpenaiUltrafast, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.FreeOpenaiFast(); ok {
 		_spec.SetField(group.FieldFreeOpenaiFast, field.TypeBool, value)

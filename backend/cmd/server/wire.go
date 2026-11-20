@@ -98,6 +98,8 @@ func provideCleanup(
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
+	balanceNotify *service.BalanceNotifyService,
+	digestSessions *service.DigestSessionStore,
 	conversationCapturePool *service.ConversationCapturePool,
 	captureSidecarSupervisor *service.CaptureSidecarSupervisor,
 	subscriptionService *service.SubscriptionService,
@@ -132,6 +134,18 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"DigestSessionStore", func() error {
+				if digestSessions != nil {
+					digestSessions.Close()
+				}
+				return nil
+			}},
+			{"BalanceNotifyService", func() error {
+				if balanceNotify != nil {
+					balanceNotify.Stop()
+				}
+				return nil
+			}},
 			{"CaptureSidecarSupervisor", func() error {
 				if captureSidecarSupervisor != nil {
 					captureSidecarSupervisor.Stop()

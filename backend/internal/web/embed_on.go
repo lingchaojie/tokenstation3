@@ -171,7 +171,8 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	}
 
 	// Check If-None-Match only after confirming the cache matches current settings.
-	if match := c.GetHeader("If-None-Match"); match == cached.ETag {
+	if match := c.GetHeader("If-None-Match"); nonce == "" && match == cached.ETag {
+		applyHTMLNoCacheHeaders(c.Writer.Header())
 		c.Status(http.StatusNotModified)
 		c.Abort()
 		return
@@ -181,14 +182,14 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	content := replaceNoncePlaceholder(cached.Content, nonce)
 
 	c.Header("ETag", cached.ETag)
-	c.Header("Cache-Control", "no-cache") // Must revalidate
+	applyHTMLNoCacheHeaders(c.Writer.Header())
 	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	c.Abort()
 }
 
 func (s *FrontendServer) serveBaseIndexHTML(c *gin.Context, nonce string) {
 	content := replaceNoncePlaceholder(s.baseHTML, nonce)
-	c.Header("Cache-Control", "no-cache")
+	applyHTMLNoCacheHeaders(c.Writer.Header())
 	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	c.Abort()
 }
@@ -347,6 +348,9 @@ func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
 func shouldBypassEmbeddedFrontend(path string) bool {
 	trimmed := strings.TrimSpace(path)
 	return strings.HasPrefix(trimmed, "/api/") ||
+		trimmed == "/.well-known/oauth-protected-resource" ||
+		trimmed == "/.well-known/oauth-protected-resource/api/v1/mcp" ||
+		trimmed == "/.well-known/oauth-authorization-server" ||
 		strings.HasPrefix(trimmed, "/v1/") ||
 		strings.HasPrefix(trimmed, "/v1beta/") ||
 		strings.HasPrefix(trimmed, "/backend-api/") ||

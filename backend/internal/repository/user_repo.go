@@ -355,6 +355,13 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 			return err
 		}
 	}
+	// Save above holds the user row lock. Issuance and use share-lock this
+	// row, so permanent revocation cannot race with new eligible credentials.
+	if (fields.Status && updated.Status != service.StatusActive) || (fields.Role && updated.Role != service.RoleAdmin) {
+		if err := revokeScopedKeysByCreator(txCtx, txAwareSQLExecutor(txCtx, r.sql, txClient), []int64{updated.ID}, time.Now().UTC()); err != nil {
+			return fmt.Errorf("revoke scoped administrator keys: %w", err)
+		}
+	}
 	// 始终以库中的邮箱为准补齐 email 身份：未改邮箱时 updated.Email == oldEmail，
 	// 这里退化为幂等的身份补写，与改邮箱前的行为一致。
 	if err := replaceEmailAuthIdentityWithClient(txCtx, txClient, updated.ID, oldEmail, updated.Email, "user_repo_update"); err != nil {

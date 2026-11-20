@@ -1008,3 +1008,31 @@ func TestPaymentConfigServicePlanSevenDayQuotaRejectsInvalidValues(t *testing.T)
 		t.Fatalf("reloaded.SevenDayQuotaUsd = %v, want 25", reloaded.SevenDayQuotaUsd)
 	}
 }
+
+func TestUpdatePaymentConfig_RoundsBalanceRechargeMultiplierToTwoDecimals(t *testing.T) {
+	tests := []struct {
+		name       string
+		multiplier float64
+		want       string
+	}{
+		{"more decimal places", 0.1408454, "0.14"},
+		{"rounds up", 0.149, "0.15"},
+		{"integer", 1, "1.00"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := &paymentConfigSettingRepoStub{}
+			svc := &PaymentConfigService{settingRepo: repo}
+			multiplier := test.multiplier
+			if err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+				BalanceRechargeMultiplier: &multiplier,
+			}); err != nil {
+				t.Fatalf("UpdatePaymentConfig returned error: %v", err)
+			}
+			if got := repo.updates[SettingBalanceRechargeMult]; got != test.want {
+				t.Fatalf("stored multiplier = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

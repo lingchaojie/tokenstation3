@@ -19,7 +19,7 @@ type UserSubscriptionRepository interface {
 	GetActivePlanBackedByUserID(ctx context.Context, userID int64) (*UserSubscription, error)
 	Update(ctx context.Context, sub *UserSubscription) error
 	Delete(ctx context.Context, id int64) error
-	Restore(ctx context.Context, subscriptionID int64, restoredStatus string) (*UserSubscription, error)
+	Restore(ctx context.Context, subscriptionID int64, restoredStatus string, deletedAt time.Time) (*UserSubscription, error)
 
 	ListByUserID(ctx context.Context, userID int64) ([]UserSubscription, error)
 	ListActiveByUserID(ctx context.Context, userID int64) ([]UserSubscription, error)

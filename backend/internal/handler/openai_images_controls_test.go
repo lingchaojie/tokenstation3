@@ -67,7 +67,7 @@ func TestOpenAIGatewayHandlerImages_DisabledGroupRejectsBeforeScheduling(t *test
 func TestOpenAIGatewayHandlerImages_ReadBodyErrorLogsSafeRequestSummary(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	readErr := errors.New("client disconnected while uploading")
+	readErr := errors.New("upload body read failed")
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
 	req.Body = &failingReadCloser{err: readErr}
 	req.ContentLength = 12345

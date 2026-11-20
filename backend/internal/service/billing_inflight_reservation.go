@@ -360,7 +360,7 @@ type InflightEstimateRequest struct {
 	ReasoningEffort string
 	// Units 按次/按张数量（<=0 视为 1）。
 	Units int
-	// SearchCalls is local alpha/search usage, priced only by WebSearchPricePerCall.
+	// SearchCalls is per-call search usage, priced only by WebSearchPricePerCall.
 	SearchCalls int
 	// 视频：分辨率与时长（秒）。
 	VideoResolution      string

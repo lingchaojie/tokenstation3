@@ -1,4 +1,6 @@
+import { isAxiosError } from 'axios'
 import { apiClient } from './client'
+import { captureStoredUserIdentity, refreshAuthTokens } from './tokenRefresh'
 import type { PaginatedResponse } from '@/types'
 
 const CHAT_API_BASE = '/chat'
@@ -239,44 +241,6 @@ function clearExpiredAuth(redirect = true): void {
   }
 }
 
-async function refreshStreamAuthToken(): Promise<string> {
-  const refreshToken = localStorage.getItem('refresh_token')
-  if (!refreshToken) {
-    throw new Error('Missing refresh token')
-  }
-
-  const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  })
-
-  if (!response.ok) {
-    throw new Error(`Token refresh failed with status ${response.status}`)
-  }
-
-  const payload = await response.json() as {
-    code?: number
-    data?: {
-      access_token?: string
-      refresh_token?: string
-      expires_in?: number
-    }
-    message?: string
-  }
-  const accessToken = payload.data?.access_token
-  const newRefreshToken = payload.data?.refresh_token
-  const expiresIn = payload.data?.expires_in
-  if (payload.code !== 0 || !accessToken || !newRefreshToken || typeof expiresIn !== 'number') {
-    throw new Error(payload.message || 'Token refresh failed')
-  }
-
-  localStorage.setItem('auth_token', accessToken)
-  localStorage.setItem('refresh_token', newRefreshToken)
-  localStorage.setItem('token_expires_at', String(Date.now() + expiresIn * 1000))
-  return accessToken
-}
-
 function buildStreamHeaders(token: string | null): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -359,21 +323,46 @@ export async function sendChatMessageStream(
   signal?: AbortSignal
 ): Promise<WebChatStreamSendResult> {
   const url = `${API_BASE_URL}${CHAT_API_BASE}/conversations/${conversationId}/messages`
-  let response = await fetch(url, streamRequestInit(request, localStorage.getItem('auth_token'), signal))
+  const isSameUser = captureStoredUserIdentity()
+  let accessToken = localStorage.getItem('auth_token')
+  let refreshToken = localStorage.getItem('refresh_token')
+  const sessionMatchesRequest = () =>
+    isSameUser() &&
+    localStorage.getItem('auth_token') === accessToken &&
+    localStorage.getItem('refresh_token') === refreshToken
+  let response = await fetch(url, streamRequestInit(request, accessToken, signal))
 
-  if (response.status === 401 && localStorage.getItem('refresh_token')) {
+  if (response.status === 401 && refreshToken) {
+    signal?.throwIfAborted()
+    if (!isSameUser() || !localStorage.getItem('refresh_token')) {
+      throw new Error('Authentication session changed while sending the message.')
+    }
     try {
-      const token = await refreshStreamAuthToken()
-      response = await fetch(url, streamRequestInit(request, token, signal))
-    } catch {
+      const tokens = await refreshAuthTokens({ failedAccessToken: accessToken })
+      if (!isSameUser() ||
+          localStorage.getItem('refresh_token') !== tokens.refresh_token ||
+          localStorage.getItem('auth_token') !== tokens.access_token) {
+        throw new Error('Authentication session changed while refreshing.')
+      }
+      accessToken = tokens.access_token
+      refreshToken = tokens.refresh_token
+    } catch (error) {
+      signal?.throwIfAborted()
+      if (!sessionMatchesRequest()) throw error
+      if (isAxiosError(error)) {
+        const status = error.response?.status ?? 0
+        if (status === 0 || status === 429 || status >= 500) throw error
+      }
       clearExpiredAuth()
       throw new Error('Session expired. Please log in again.')
     }
+    signal?.throwIfAborted()
+    response = await fetch(url, streamRequestInit(request, accessToken, signal))
   }
 
   if (!response.ok) {
-    if (response.status === 401) {
-      clearExpiredAuth(!!localStorage.getItem('auth_token'))
+    if (response.status === 401 && sessionMatchesRequest()) {
+      clearExpiredAuth(!!accessToken)
     }
     throw await buildStreamError(response)
   }

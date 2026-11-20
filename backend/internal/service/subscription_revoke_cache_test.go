@@ -107,7 +107,7 @@ func (r *restoreUserSubRepoStub) ExistsGenericByUserID(context.Context, int64) (
 	return r.existsGeneric, nil
 }
 
-func (r *restoreUserSubRepoStub) Restore(_ context.Context, id int64, restoredStatus string) (*UserSubscription, error) {
+func (r *restoreUserSubRepoStub) Restore(_ context.Context, id int64, restoredStatus string, _ time.Time) (*UserSubscription, error) {
 	if r.sub == nil || r.sub.ID != id {
 		return nil, ErrSubscriptionNotFound
 	}

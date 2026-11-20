@@ -55,6 +55,8 @@ type userAvailableGroup struct {
 	Platform         string `json:"platform"`
 	SubscriptionType string `json:"subscription_type"`
 	IsExclusive      bool   `json:"is_exclusive"`
+
+	i18n service.GroupI18n
 }
 
 // userSupportedModelPricing 用户可见的定价字段白名单。
@@ -147,6 +149,8 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 		return
 	}
 
+	c.Writer.Header().Add("Vary", "Accept-Language")
+	acceptLanguage := c.GetHeader("Accept-Language")
 	out := make([]userAvailableChannel, 0, len(channels))
 	for _, ch := range channels {
 		if ch.Status != service.StatusActive {
@@ -156,6 +160,7 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 		if len(visibleGroups) == 0 {
 			continue
 		}
+		localizeUserAvailableGroups(visibleGroups, acceptLanguage)
 		sections := buildPlatformSections(ch, visibleGroups)
 		if len(sections) == 0 {
 			continue
@@ -168,6 +173,13 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 	}
 
 	response.Success(c, out)
+}
+
+// localizeUserAvailableGroups 把分组名称就地换成请求首选语言的版本。
+func localizeUserAvailableGroups(groups []userAvailableGroup, acceptLanguage string) {
+	for i := range groups {
+		groups[i].Name = groups[i].i18n.LocalizeName(acceptLanguage, groups[i].Name)
+	}
 }
 
 // buildPlatformSections 把一个渠道按 visibleGroups 的平台集合拆成有序的 section 列表：
@@ -223,6 +235,7 @@ func filterUserVisibleGroups(
 			Platform:         g.Platform,
 			SubscriptionType: g.SubscriptionType,
 			IsExclusive:      g.IsExclusive,
+			i18n:             g.I18n,
 		})
 	}
 	return visible

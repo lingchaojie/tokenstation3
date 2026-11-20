@@ -66,6 +66,7 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "groups", "video_model_prices", "jsonb", 0, true)
 	requireColumn(t, tx, "groups", "kiro_endpoint_mode", "character varying", 8, false)
 	requireColumn(t, tx, "groups", "force_openai_fast", "boolean", 0, false)
+	requireColumn(t, tx, "groups", "force_openai_ultrafast", "boolean", 0, false)
 	requireColumn(t, tx, "groups", "free_openai_fast", "boolean", 0, false)
 	requireColumnDefaultContains(t, tx, "groups", "force_openai_fast", "false")
 	requireColumnDefaultContains(t, tx, "groups", "free_openai_fast", "false")

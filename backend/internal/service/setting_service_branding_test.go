@@ -111,7 +111,7 @@ func TestProvideSettingService_MigratesLegacyBrandingDefaultsOnStartup(t *testin
 		SettingKeySiteSubtitle:        "Subscription to API Conversion Platform",
 	}}
 
-	_, err := ProvideSettingService(repo, nil, nil, &config.Config{})
+	_, err := ProvideSettingService(nil, repo, nil, nil, &config.Config{})
 	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
 
 	require.NoError(t, err)

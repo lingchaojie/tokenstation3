@@ -165,9 +165,11 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 		return
 	}
 
+	c.Writer.Header().Add("Vary", "Accept-Language")
+	acceptLanguage := c.GetHeader("Accept-Language")
 	out := make([]dto.APIKey, 0, len(keys))
 	for i := range keys {
-		out = append(out, *dto.APIKeyFromService(&keys[i]))
+		out = append(out, *dto.APIKeyFromService(&keys[i]).Localized(acceptLanguage))
 	}
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
@@ -199,7 +201,7 @@ func (h *APIKeyHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.APIKeyFromService(key))
+	response.Success(c, dto.APIKeyFromService(key).Localized(c.GetHeader("Accept-Language")))
 }
 
 // Create handles creating a new API key
@@ -254,7 +256,29 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 			return nil, err
 		}
 		return dto.APIKeyFromService(key), nil
-	})
+	}, func(data any) { respondLocalizedAPIKeyCreate(c, data) })
+}
+
+func respondLocalizedAPIKeyCreate(c *gin.Context, data any) {
+	c.Writer.Header().Add("Vary", "Accept-Language")
+	language := c.GetHeader("Accept-Language")
+	switch key := data.(type) {
+	case *dto.APIKey:
+		data = key.Localized(language)
+	case map[string]any:
+		// Idempotency replay stores the canonical group as JSON. Localize just
+		// its display fields and keep the stored key and response shape intact.
+		if group, ok := key["group"].(map[string]any); ok {
+			var i18n service.GroupI18n
+			if raw, err := json.Marshal(group["i18n"]); err == nil && json.Unmarshal(raw, &i18n) == nil {
+				name, _ := group["name"].(string)
+				description, _ := group["description"].(string)
+				group["name"], group["description"] = i18n.Localize(language, name, description)
+			}
+			delete(group, "i18n")
+		}
+	}
+	response.Success(c, data)
 }
 
 // Update handles updating an API key
@@ -329,7 +353,7 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.APIKeyFromService(key))
+	response.Success(c, dto.APIKeyFromService(key).Localized(c.GetHeader("Accept-Language")))
 }
 
 // Delete handles deleting an API key
@@ -371,9 +395,11 @@ func (h *APIKeyHandler) GetAvailableGroups(c *gin.Context) {
 		return
 	}
 
+	c.Writer.Header().Add("Vary", "Accept-Language")
+	acceptLanguage := c.GetHeader("Accept-Language")
 	out := make([]dto.Group, 0, len(groups))
 	for i := range groups {
-		out = append(out, *dto.GroupFromService(&groups[i]))
+		out = append(out, *dto.GroupFromService(&groups[i]).Localized(acceptLanguage))
 	}
 	response.Success(c, out)
 }

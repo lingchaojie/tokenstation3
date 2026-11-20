@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/sysutil"
 	"github.com/spf13/viper"
 	"golang.org/x/net/http/httpguts"
 )
@@ -506,6 +507,24 @@ func shouldApplyLegacyWeChatEnv(configKey, envKey string) bool {
 	return !hasNewEnv
 }
 
+// detectMemoryLimitBytes is replaced in tests so defaults do not depend on the host.
+var detectMemoryLimitBytes = sysutil.MemoryLimitBytes
+
+const (
+	defaultRequestBodyMemoryBudgetBytes = int64(1 << 30)
+	// requestBodyMemoryBudgetDivisor leaves the rest of memory for conversion
+	// state, SSE buffers, caches and GC headroom.
+	requestBodyMemoryBudgetDivisor = 4
+)
+
+// autoRequestBodyMemoryBudget sizes the unconfigured ingress budget to a
+// quarter of the process memory limit. It never goes below the historical
+// 1 GiB default, so small instances keep their previous behavior.
+func autoRequestBodyMemoryBudget(memoryLimitBytes uint64) int64 {
+	// uint64 / 4 always fits in int64.
+	return max(int64(memoryLimitBytes/requestBodyMemoryBudgetDivisor), defaultRequestBodyMemoryBudgetBytes)
+}
+
 func hasExplicitConfigOrEnv(configKey, envKey string) bool {
 	if viper.InConfig(configKey) {
 		return true
@@ -947,7 +966,7 @@ type CircuitBreakerConfig struct {
 }
 
 type ConcurrencyConfig struct {
-	// PingInterval: 并发等待期间的 SSE ping 间隔（秒）
+	// PingInterval: 并发等待期间的 SSE ping 间隔（秒），0 禁用 ping
 	PingInterval int `mapstructure:"ping_interval"`
 }
 
@@ -971,12 +990,16 @@ const (
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
+	// MinOutputTokens is the minimum max_output_tokens used when
+	// converting Chat Completions or Anthropic requests to Responses.
+	MinOutputTokens int `mapstructure:"min_output_tokens"`
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
 	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
 	// OpenAIResponseHeaderTimeout: OpenAI/Codex 上游等待响应头的超时时间（秒），0表示无超时
 	// OpenAI/Codex 请求可能在上游排队较久；默认不使用通用响应头超时截断。
-	OpenAIResponseHeaderTimeout int `mapstructure:"openai_response_header_timeout"`
+	OpenAIResponseHeaderTimeout         int  `mapstructure:"openai_response_header_timeout"`
+	DisableOpenAITransportErrorCooldown bool `mapstructure:"disable_openai_transport_error_cooldown"`
 	// GrokResponseHeaderTimeout bounds the pre-first-byte wait for xAI/Grok.
 	// A zero value uses the provider-safe default instead of the generic gateway timeout.
 	GrokResponseHeaderTimeout int `mapstructure:"grok_response_header_timeout"`
@@ -987,6 +1010,13 @@ type GatewayConfig struct {
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
+	// RequestBodyMemoryBudgetBytes bounds buffered ingress allocations per instance; 0 disables it.
+	// When unset in config and env it defaults to 1/4 of the memory limit (at least 1 GiB).
+	RequestBodyMemoryBudgetBytes int64 `mapstructure:"request_body_memory_budget_bytes"`
+	// RequestBodyReadTimeoutSeconds bounds each socket read during upload; 0 disables it.
+	RequestBodyReadTimeoutSeconds int `mapstructure:"request_body_read_timeout_seconds"`
+	// DownstreamWriteTimeoutSeconds bounds each HTTP write/flush, not the lifetime of a stream.
+	DownstreamWriteTimeoutSeconds int `mapstructure:"downstream_write_timeout_seconds"`
 	// TextMaxBodySize limits endpoints that cannot carry inline image/video payloads.
 	TextMaxBodySize int64 `mapstructure:"text_max_body_size"`
 	// 非流式上游响应体读取上限（字节），用于防止无界读取导致内存放大
@@ -1074,6 +1104,8 @@ type GatewayConfig struct {
 
 	// StreamDataIntervalTimeout: 流数据间隔超时（秒），0表示禁用
 	StreamDataIntervalTimeout int `mapstructure:"stream_data_interval_timeout"`
+	// UpstreamDrainTimeoutSeconds is the total drain limit after downstream cancellation. Zero disables it.
+	UpstreamDrainTimeoutSeconds int `mapstructure:"upstream_drain_timeout_seconds"`
 	// StreamKeepaliveInterval: 流式 keepalive 间隔（秒），0表示禁用
 	StreamKeepaliveInterval int `mapstructure:"stream_keepalive_interval"`
 	// KiroStreamKeepaliveInterval: Kiro 流式 keepalive 间隔（秒），0使用默认 25 秒
@@ -1085,7 +1117,10 @@ type GatewayConfig struct {
 	// ImageNonstreamKeepaliveInterval: 图片非流式 JSON keepalive 间隔（秒），0表示禁用
 	ImageNonstreamKeepaliveInterval int `mapstructure:"image_nonstream_keepalive_interval"`
 	// MaxLineSize: 上游 SSE 单行最大字节数（0使用默认值）
-	MaxLineSize int `mapstructure:"max_line_size"`
+	MaxLineSize      int   `mapstructure:"max_line_size"`
+	SSEQueueMaxBytes int64 `mapstructure:"sse_queue_max_bytes"`
+	SSEEventMaxBytes int64 `mapstructure:"sse_event_max_bytes"`
+	SSEEventMaxLines int   `mapstructure:"sse_event_max_lines"`
 
 	// 是否记录上游错误响应体摘要（避免输出请求内容）
 	LogUpstreamErrorBody bool `mapstructure:"log_upstream_error_body"`
@@ -1102,6 +1137,8 @@ type GatewayConfig struct {
 	MaxAccountSwitches int `mapstructure:"max_account_switches"`
 	// Gemini 账户切换最大次数（Gemini 平台单独配置，因 API 限制更严格）
 	MaxAccountSwitchesGemini int `mapstructure:"max_account_switches_gemini"`
+	// Gemini 同账号重试次数（429/5xx 等可重试错误在换号前对同一账号的重发次数，不含首次请求）
+	MaxSameAccountRetriesGemini int `mapstructure:"max_same_account_retries_gemini"`
 
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
@@ -2067,6 +2104,15 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		cfg.Security.ForwardedClientIPHeaders = normalizeStringSlice(strings.Split(forwardedClientIPHeadersEnv, ","))
 	}
 	cfg.Server.TrustedProxiesConfigured = trustedProxiesConfigured
+	// Mirror viper's own precedence: an empty environment variable is ignored by
+	// viper, so it must not pin the static default either (e.g. Compose ${VAR:-}).
+	if !viper.InConfig("gateway.request_body_memory_budget_bytes") && os.Getenv("GATEWAY_REQUEST_BODY_MEMORY_BUDGET_BYTES") == "" {
+		memoryLimit := detectMemoryLimitBytes()
+		cfg.Gateway.RequestBodyMemoryBudgetBytes = autoRequestBodyMemoryBudget(memoryLimit)
+		slog.Info("gateway.request_body_memory_budget_bytes auto-sized from memory limit",
+			"budget_bytes", cfg.Gateway.RequestBodyMemoryBudgetBytes,
+			"memory_limit_bytes", memoryLimit)
+	}
 	if cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs == 0 {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs = 15000
 	}
@@ -2237,6 +2283,7 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
+	viper.SetDefault("gateway.min_output_tokens", 128)
 	viper.SetDefault("simple_mode.auto_create_default_groups", true)
 	viper.SetDefault("simple_mode_key_rate_limit_enabled", false)
 
@@ -2277,6 +2324,7 @@ func setDefaults() {
 		"api.openai.com",
 		"api.anthropic.com",
 		"api.kimi.com",
+		"api.kimi.ai",
 		"api.moonshot.ai",
 		"api.moonshot.cn",
 		"api.deepseek.com",
@@ -2601,6 +2649,7 @@ func setDefaults() {
 	// Gateway
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
 	viper.SetDefault("gateway.openai_response_header_timeout", 0)
+	viper.SetDefault("gateway.disable_openai_transport_error_cooldown", false)
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
@@ -2610,6 +2659,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
+	viper.SetDefault("gateway.max_same_account_retries_gemini", 4)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
@@ -2706,6 +2756,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
+	// Without explicit config or env, load() replaces this with a size derived
+	// from the memory limit (see autoRequestBodyMemoryBudget).
+	viper.SetDefault("gateway.request_body_memory_budget_bytes", defaultRequestBodyMemoryBudgetBytes)
+	viper.SetDefault("gateway.request_body_read_timeout_seconds", 0)
+	viper.SetDefault("gateway.downstream_write_timeout_seconds", 0)
 	viper.SetDefault("gateway.text_max_body_size", int64(32*1024*1024))
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.models_list_read_max_bytes", DefaultModelsListReadMaxBytes)
@@ -2721,12 +2776,16 @@ func setDefaults() {
 	viper.SetDefault("gateway.client_idle_ttl_seconds", 900)
 	viper.SetDefault("gateway.concurrency_slot_ttl_minutes", 30) // 并发槽位过期时间（支持超长请求）
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
+	viper.SetDefault("gateway.upstream_drain_timeout_seconds", 0)
 	viper.SetDefault("gateway.stream_keepalive_interval", 10)
 	viper.SetDefault("gateway.kiro_stream_keepalive_interval", 25)
 	viper.SetDefault("gateway.image_stream_data_interval_timeout", 900)
 	viper.SetDefault("gateway.image_stream_keepalive_interval", 10)
 	viper.SetDefault("gateway.image_nonstream_keepalive_interval", 0)
 	viper.SetDefault("gateway.max_line_size", 500*1024*1024)
+	viper.SetDefault("gateway.sse_queue_max_bytes", int64(8*1024*1024))
+	viper.SetDefault("gateway.sse_event_max_bytes", int64(0))
+	viper.SetDefault("gateway.sse_event_max_lines", 4096)
 	viper.SetDefault("gateway.scheduling.sticky_session_max_waiting", 3)
 	viper.SetDefault("gateway.scheduling.sticky_session_wait_timeout", 120*time.Second)
 	viper.SetDefault("gateway.scheduling.fallback_wait_timeout", 30*time.Second)
@@ -2920,6 +2979,9 @@ func rejectEnabledLegacyCaptureSettings(enabled bool, configured []string) error
 }
 
 func (c *Config) Validate() error {
+	if c.Gateway.MinOutputTokens < 16 {
+		return fmt.Errorf("gateway.min_output_tokens must be at least 16")
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
@@ -3551,6 +3613,18 @@ func (c *Config) Validate() error {
 	if c.Gateway.MaxBodySize <= 0 {
 		return fmt.Errorf("gateway.max_body_size must be positive")
 	}
+	if c.Gateway.RequestBodyMemoryBudgetBytes < 0 {
+		return fmt.Errorf("gateway.request_body_memory_budget_bytes must be non-negative")
+	}
+	if c.Gateway.RequestBodyReadTimeoutSeconds < 0 || c.Gateway.RequestBodyReadTimeoutSeconds > 3600 {
+		return fmt.Errorf("gateway.request_body_read_timeout_seconds must be between 0 and 3600")
+	}
+	if c.Gateway.DownstreamWriteTimeoutSeconds < 0 || c.Gateway.DownstreamWriteTimeoutSeconds > 3600 {
+		return fmt.Errorf("gateway.downstream_write_timeout_seconds must be between 0 and 3600")
+	}
+	if c.Gateway.SSEQueueMaxBytes < 0 || c.Gateway.SSEEventMaxBytes < 0 || c.Gateway.SSEEventMaxLines < 0 {
+		return fmt.Errorf("gateway.sse_queue_max_bytes, sse_event_max_bytes and sse_event_max_lines must be non-negative")
+	}
 	if c.Gateway.TextMaxBodySize <= 0 || c.Gateway.TextMaxBodySize > c.Gateway.MaxBodySize {
 		return fmt.Errorf("gateway.text_max_body_size must be positive and no greater than gateway.max_body_size")
 	}
@@ -3578,6 +3652,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.GrokResponseHeaderTimeout < 0 || c.Gateway.GrokResponseHeaderTimeout > 1800 {
 		return fmt.Errorf("gateway.grok_response_header_timeout must be between 0-1800 seconds")
+	}
+	if c.Gateway.MaxSameAccountRetriesGemini < 0 || c.Gateway.MaxSameAccountRetriesGemini > 10 {
+		return fmt.Errorf("gateway.max_same_account_retries_gemini must be between 0-10")
 	}
 	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
 		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {
@@ -3643,6 +3720,9 @@ func (c *Config) Validate() error {
 	if c.Gateway.StreamDataIntervalTimeout != 0 &&
 		(c.Gateway.StreamDataIntervalTimeout < 30 || c.Gateway.StreamDataIntervalTimeout > 300) {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be 0 or between 30-300 seconds")
+	}
+	if c.Gateway.UpstreamDrainTimeoutSeconds < 0 || int64(c.Gateway.UpstreamDrainTimeoutSeconds) > int64((1<<63-1)/time.Second) {
+		return fmt.Errorf("gateway.upstream_drain_timeout_seconds must be a non-negative duration in seconds")
 	}
 	if c.Gateway.StreamKeepaliveInterval < 0 {
 		return fmt.Errorf("gateway.stream_keepalive_interval must be non-negative")
@@ -3984,8 +4064,8 @@ func (c *Config) Validate() error {
 	if c.Ops.Cleanup.Enabled && strings.TrimSpace(c.Ops.Cleanup.Schedule) == "" {
 		return fmt.Errorf("ops.cleanup.schedule is required when ops.cleanup.enabled=true")
 	}
-	if c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30 {
-		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")
+	if c.Concurrency.PingInterval != 0 && (c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30) {
+		return fmt.Errorf("concurrency.ping_interval must be 0 (disabled) or between 5-30 seconds")
 	}
 	if c.Gateway.Grok.FreeQuotaSoftGateEnabled {
 		if c.Gateway.Grok.FreeQuotaTokenLimit <= 0 {

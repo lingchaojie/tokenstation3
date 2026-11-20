@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -553,30 +554,32 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	// OAuth 账号：创建后异步设置隐私。
-	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
-	if account.Type == AccountTypeOAuth {
-		switch account.Platform {
-		case PlatformOpenAI:
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_openai_privacy_panic", "account_id", account.ID, "recover", r)
-					}
+	AfterAccountCommit(ctx, func(_ context.Context) {
+		// OAuth 账号：创建后异步设置隐私。
+		// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
+		if account.Type == AccountTypeOAuth {
+			switch account.Platform {
+			case PlatformOpenAI:
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Error("create_account_openai_privacy_panic", "account_id", account.ID, "recover", r)
+						}
+					}()
+					s.EnsureOpenAIPrivacy(context.Background(), account)
 				}()
-				s.EnsureOpenAIPrivacy(context.Background(), account)
-			}()
-		case PlatformAntigravity:
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_antigravity_privacy_panic", "account_id", account.ID, "recover", r)
-					}
+			case PlatformAntigravity:
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Error("create_account_antigravity_privacy_panic", "account_id", account.ID, "recover", r)
+						}
+					}()
+					s.EnsureAntigravityPrivacy(context.Background(), account)
 				}()
-				s.EnsureAntigravityPrivacy(context.Background(), account)
-			}()
+			}
 		}
-	}
+	})
 
 	return account, nil
 }
@@ -661,16 +664,28 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	} else if len(input.Credentials) > 0 {
 		// 敏感子键采用"incoming 没提供就保留"的合并语义：前端响应已脱敏，
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
-		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		credentials := MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
 		// 校验并规范化请求头覆写配置（header 名小写化、格式检查）
-		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
+		if err := NormalizeHeaderOverrideCredentials(credentials); err != nil {
 			return nil, err
 		}
-		if err := NormalizeProtocolRulesCredentials(account.Credentials); err != nil {
+		if err := NormalizeProtocolRulesCredentials(credentials); err != nil {
 			return nil, err
 		}
 		// Strip SSO/password residue that must never sit next to OAuth tokens.
-		account.Credentials = SanitizeStoredCredentials(account.Platform, account.Credentials)
+		credentials = SanitizeStoredCredentials(account.Platform, credentials)
+		if adminaccess.RestrictedFromContext(ctx) != nil {
+			baseURL, present := credentials["base_url"]
+			if !present {
+				baseURL = ""
+			}
+			if !reflect.DeepEqual(account.Credentials["base_url"], baseURL) {
+				if err := validateScopedAccountBaseURLChange(account.GetCredential("base_url"), baseURL); err != nil {
+					return nil, err
+				}
+			}
+		}
+		account.Credentials = credentials
 	}
 	// Extra 使用 map：需要区分“未提供(nil)”与“显式清空({})”。
 	// 关闭配额限制时前端会删除 quota_* 键并提交 extra:{}，此时也必须落库。
@@ -694,6 +709,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
+		// 目录观察和能力 metadata 只由同步写入。表单里的旧值或注入值不能进入本次更新。
+		delete(normalizedExtra, grokObservedModelsExtraKey)
+		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			"quota_used",
@@ -702,6 +720,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			"quota_weekly_used",
 			"quota_weekly_start",
 			grokBillingExtraKey,
+			grokObservedModelsExtraKey,
+			UpstreamModelMetadataExtraKey,
 			UpstreamBillingProbeEnabledExtraKey,
 			UpstreamBillingProbeExtraKey,
 			OllamaCloudUsageSessionExtraKey,
@@ -1272,10 +1292,16 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, id); err != nil {
 		return nil, err
 	}
-	if s.runtimeBlocker != nil {
-		s.runtimeBlocker.ClearAccountSchedulingBlock(id)
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	return s.accountRepo.GetByID(ctx, id)
+	AfterAccountCommit(ctx, func(context.Context) {
+		if s.runtimeBlocker != nil {
+			s.runtimeBlocker.ClearAccountSchedulingBlock(id)
+		}
+	})
+	return account, nil
 }
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {

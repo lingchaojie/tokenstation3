@@ -79,7 +79,7 @@ func TestReadOpenAICompatBufferedTerminalKeepsParserErrorsButAllowsProviderTail(
 				Body:       io.NopCloser(strings.NewReader(tt.body)),
 			}
 
-			finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
+			finalResponse, _, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, nil, "test", "rid")
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -109,7 +109,7 @@ func TestReadOpenAICompatBufferedTerminalAllowsDelayedChunkedTail(t *testing.T) 
 		Body:          body,
 	}
 
-	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
+	finalResponse, _, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, nil, "test", "rid")
 
 	require.NoError(t, err)
 	require.NotNil(t, finalResponse)
@@ -130,7 +130,7 @@ func TestReadOpenAICompatBufferedTerminalRejectsBufferedPartialTailBeforeClosing
 		Body:          body,
 	}
 
-	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
+	finalResponse, _, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, nil, "test", "rid")
 
 	require.ErrorContains(t, err, "incomplete provider event")
 	require.Nil(t, finalResponse)
@@ -152,7 +152,7 @@ func TestReadOpenAICompatBufferedTerminalReturnsAfterBoundedTailGrace(t *testing
 	}
 	started := time.Now()
 
-	finalResponse, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, "test", "rid")
+	finalResponse, _, _, _, _, err := (&OpenAIGatewayService{}).readOpenAICompatBufferedTerminal(resp, nil, nil, "test", "rid")
 
 	require.NoError(t, err)
 	require.NotNil(t, finalResponse)

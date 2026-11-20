@@ -6,13 +6,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	paymentprovider "github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -226,104 +232,294 @@ func TestCreateOrderAllowsSameUserRenewalWhenPlanSeatLimitReached(t *testing.T) 
 }
 
 func TestVerifyOrderByOutTradeNoBackfillsTradeNoFromPaidQuery(t *testing.T) {
-	ctx := context.Background()
-	client := newPaymentOrderLifecycleTestClient(t)
+	for _, tc := range []struct {
+		name, firstCheck string
+		easyPay, unpaid  bool
+	}{
+		{name: "Alipay"},
+		{name: "EasyPay active verification places a hold", firstCheck: "verify", easyPay: true},
+		{name: "EasyPay cancellation places a hold", firstCheck: "cancel", easyPay: true},
+		{name: "EasyPay hold survives a concurrent cancellation", firstCheck: "cancel-race", easyPay: true},
+		{name: "EasyPay expiry places a hold", firstCheck: "expire", easyPay: true},
+		{name: "EasyPay webhook confirmation places a hold", firstCheck: "webhook", easyPay: true},
+		{name: "EasyPay active verification recovers an old expiry", firstCheck: "late-active", easyPay: true},
+		{name: "EasyPay unpaid order still cancels", firstCheck: "cancel", easyPay: true, unpaid: true},
+		{name: "EasyPay unpaid order still expires", firstCheck: "expire", easyPay: true, unpaid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentOrderLifecycleTestClient(t)
 
-	user, err := client.User.Create().
-		SetEmail("checkpaid@example.com").
-		SetPasswordHash("hash").
-		SetUsername("checkpaid-user").
-		Save(ctx)
-	require.NoError(t, err)
+			user, err := client.User.Create().
+				SetEmail("checkpaid@example.com").
+				SetPasswordHash("hash").
+				SetUsername("checkpaid-user").
+				Save(ctx)
+			require.NoError(t, err)
 
-	order, err := client.PaymentOrder.Create().
-		SetUserID(user.ID).
-		SetUserEmail(user.Email).
-		SetUserName(user.Username).
-		SetAmount(88).
-		SetPayAmount(88).
-		SetFeeRate(0).
-		SetRechargeCode("CHECKPAID-UPSTREAM-TRADE-NO").
-		SetOutTradeNo("sub2_checkpaid_trade_no_missing").
-		SetPaymentType(payment.TypeAlipay).
-		SetPaymentTradeNo("").
-		SetOrderType(payment.OrderTypeBalance).
-		SetStatus(OrderStatusPending).
-		SetExpiresAt(time.Now().Add(time.Hour)).
-		SetClientIP("127.0.0.1").
-		SetSrcHost("api.example.com").
-		Save(ctx)
-	require.NoError(t, err)
+			order, err := client.PaymentOrder.Create().
+				SetUserID(user.ID).
+				SetUserEmail(user.Email).
+				SetUserName(user.Username).
+				SetAmount(88).
+				SetPayAmount(88).
+				SetFeeRate(0).
+				SetRechargeCode("CHECKPAID-UPSTREAM-TRADE-NO").
+				SetOutTradeNo("sub2_checkpaid_trade_no_missing").
+				SetPaymentType(payment.TypeAlipay).
+				SetPaymentTradeNo("").
+				SetOrderType(payment.OrderTypeBalance).
+				SetStatus(OrderStatusPending).
+				SetExpiresAt(time.Now().Add(time.Hour)).
+				SetClientIP("127.0.0.1").
+				SetSrcHost("api.example.com").
+				Save(ctx)
+			require.NoError(t, err)
 
-	userRepo := &mockUserRepo{
-		getByIDUser: &User{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Balance:  0,
-		},
+			userRepo := &mockUserRepo{
+				getByIDUser: &User{
+					ID:       user.ID,
+					Email:    user.Email,
+					Username: user.Username,
+					Balance:  0,
+				},
+			}
+			userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {
+				require.Equal(t, user.ID, id)
+				if userRepo.getByIDUser != nil {
+					userRepo.getByIDUser.Balance += amount
+				}
+				return nil
+			}
+			redeemRepo := &paymentOrderLifecycleRedeemRepo{
+				codesByCode: map[string]*RedeemCode{
+					order.RechargeCode: {
+						ID:     1,
+						Code:   order.RechargeCode,
+						Type:   RedeemTypeBalance,
+						Value:  order.Amount,
+						Status: StatusUnused,
+					},
+				},
+			}
+			redeemService := NewRedeemService(
+				redeemRepo,
+				userRepo,
+				nil,
+				nil,
+				nil,
+				client,
+				nil,
+				nil,
+			)
+			registry := payment.NewRegistry()
+			provider := &paymentOrderLifecycleQueryProvider{
+				resp: &payment.QueryOrderResponse{
+					TradeNo: "upstream-trade-123",
+					Status:  payment.ProviderStatusPaid,
+					Amount:  88,
+				},
+			}
+			const (
+				missingTradeNo = iota
+				merchantUnavailable
+				publishTradeNo
+				merchantUnpaid
+			)
+			var queryPhase atomic.Int32
+			var queryCalls atomic.Int32
+			cancelQueryStarted := make(chan struct{})
+			releaseCancelQuery := make(chan struct{})
+			var easyPay *paymentprovider.EasyPay
+			tradeNo := "upstream-trade-123"
+			if tc.firstCheck == "verify" {
+				tradeNo = order.OutTradeNo
+			}
+			if tc.easyPay {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Query().Get("out_trade_no") != order.OutTradeNo || r.URL.Query().Get("pid") != "merchant" {
+						t.Error("unexpected merchant order reference")
+					}
+					if tc.firstCheck == "cancel-race" && queryCalls.Add(1) == 1 {
+						close(cancelQueryStarted)
+						select {
+						case <-releaseCancelQuery:
+							w.WriteHeader(http.StatusServiceUnavailable)
+						case <-r.Context().Done():
+						}
+						return
+					}
+					switch queryPhase.Load() {
+					case merchantUnavailable:
+						w.WriteHeader(http.StatusServiceUnavailable)
+					case merchantUnpaid:
+						_, _ = fmt.Fprint(w, `{"code":1,"status":0,"money":"88.00"}`)
+					case publishTradeNo:
+						_, _ = fmt.Fprintf(w, `{"code":1,"status":1,"money":"88.00","trade_no":%q}`, tradeNo)
+					case missingTradeNo:
+						_, _ = fmt.Fprint(w, `{"code":1,"status":1,"money":"88.00"}`)
+					}
+				}))
+				t.Cleanup(server.Close)
+				p, err := paymentprovider.NewEasyPay("easypay-checkpaid", map[string]string{
+					"apiBase": server.URL, "pid": "merchant", "pkey": "synthetic-secret",
+					"notifyUrl": "https://fixture.invalid/notify", "returnUrl": "https://fixture.invalid/return",
+				})
+				require.NoError(t, err)
+				easyPay = p
+				registry.Register(p)
+			} else {
+				registry.Register(provider)
+			}
+
+			svc := &PaymentService{
+				entClient:       client,
+				registry:        registry,
+				redeemService:   redeemService,
+				userRepo:        userRepo,
+				providersLoaded: true,
+			}
+
+			if tc.firstCheck == "expire" {
+				_, err := client.PaymentOrder.UpdateOneID(order.ID).SetExpiresAt(time.Now().Add(-time.Minute)).Save(ctx)
+				require.NoError(t, err)
+			}
+			if tc.unpaid {
+				queryPhase.Store(merchantUnpaid)
+				expected := OrderStatusCancelled
+				if tc.firstCheck == "cancel" {
+					outcome, err := svc.CancelOrder(ctx, order.ID, user.ID)
+					require.NoError(t, err)
+					require.Equal(t, checkPaidResultCancelled, outcome)
+				} else {
+					expected = OrderStatusExpired
+					n, err := svc.ExpireTimedOutOrders(ctx)
+					require.NoError(t, err)
+					require.Equal(t, 1, n)
+				}
+				stored, err := client.PaymentOrder.Get(ctx, order.ID)
+				require.NoError(t, err)
+				require.Equal(t, expected, stored.Status)
+				return
+			}
+
+			webhook := &payment.PaymentNotification{
+				OrderID: order.OutTradeNo, TradeNo: tradeNo, Amount: 88,
+				Status: payment.NotificationStatusSuccess, Metadata: map[string]string{"pid": "merchant"},
+			}
+			if tc.firstCheck == "late-active" {
+				queryPhase.Store(publishTradeNo)
+				updatedAt := time.Now().Add(-time.Duration(paymentGraceMinutes+1) * time.Minute)
+				_, err := client.PaymentOrder.UpdateOneID(order.ID).
+					SetStatus(OrderStatusExpired).SetUpdatedAt(updatedAt).Save(ctx)
+				require.NoError(t, err)
+				require.NoError(t, svc.HandleVerifiedPaymentNotification(ctx, webhook, easyPay))
+				expired, err := client.PaymentOrder.Get(ctx, order.ID)
+				require.NoError(t, err)
+				require.Equal(t, OrderStatusExpired, expired.Status, "a late callback still respects the expiry grace")
+				require.Empty(t, expired.PaymentTradeNo)
+				require.Zero(t, userRepo.getByIDUser.Balance)
+			} else if tc.easyPay {
+				switch tc.firstCheck {
+				case "verify":
+					_, err := svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, user.ID)
+					require.NoError(t, err)
+				case "cancel":
+					outcome, err := svc.CancelOrder(ctx, order.ID, user.ID)
+					require.Empty(t, outcome)
+					require.Equal(t, "PAYMENT_CONFIRMATION_PENDING", infraerrors.Reason(err))
+				case "cancel-race":
+					cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					defer cancel()
+					cancelResult := make(chan error, 1)
+					go func() {
+						_, err := svc.CancelOrder(cancelCtx, order.ID, user.ID)
+						cancelResult <- err
+					}()
+					select {
+					case <-cancelQueryStarted:
+					case <-cancelCtx.Done():
+						t.Fatal("cancellation never queried EasyPay")
+					}
+					_, err := svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, user.ID)
+					require.NoError(t, err)
+					close(releaseCancelQuery)
+					select {
+					case err := <-cancelResult:
+						require.Equal(t, "PAYMENT_CONFIRMATION_PENDING", infraerrors.Reason(err))
+					case <-cancelCtx.Done():
+						t.Fatal("cancellation did not finish")
+					}
+				case "expire":
+					n, err := svc.ExpireTimedOutOrders(ctx)
+					require.NoError(t, err)
+					require.Zero(t, n)
+				case "webhook":
+					require.ErrorIs(t, svc.HandleVerifiedPaymentNotification(ctx, webhook, easyPay), ErrPaymentUpstreamUnconfirmed)
+				}
+				pending, err := client.PaymentOrder.Get(ctx, order.ID)
+				require.NoError(t, err)
+				require.Equal(t, OrderStatusPending, pending.Status)
+				require.Empty(t, pending.PaymentTradeNo)
+				require.Nil(t, pending.PaidAt)
+				require.Zero(t, userRepo.getByIDUser.Balance)
+				require.Empty(t, redeemRepo.useCalls)
+				hold := client.PaymentAuditLog.Query().Where(
+					paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+					paymentauditlog.ActionEQ("PAYMENT_AWAITING_TRADE_NO"),
+				)
+				holdCount, err := hold.Count(ctx)
+				require.NoError(t, err)
+				require.Equal(t, 1, holdCount, "affirmative payment evidence must survive the query")
+				require.ErrorIs(t, svc.HandleVerifiedPaymentNotification(ctx, webhook, easyPay), ErrPaymentUpstreamUnconfirmed)
+
+				queryPhase.Store(merchantUnavailable)
+				outcome, err := svc.CancelOrder(ctx, order.ID, user.ID)
+				require.Empty(t, outcome)
+				require.Equal(t, "PAYMENT_CONFIRMATION_PENDING", infraerrors.Reason(err))
+				outcome, err = svc.AdminCancelOrder(ctx, order.ID)
+				require.Empty(t, outcome)
+				require.Equal(t, "PAYMENT_CONFIRMATION_PENDING", infraerrors.Reason(err))
+				_, err = client.PaymentOrder.UpdateOneID(order.ID).SetExpiresAt(time.Now().Add(-time.Minute)).Save(ctx)
+				require.NoError(t, err)
+				n, err := svc.ExpireTimedOutOrders(ctx)
+				require.NoError(t, err)
+				require.Zero(t, n)
+				pending, err = client.PaymentOrder.Get(ctx, order.ID)
+				require.NoError(t, err)
+				require.Equal(t, OrderStatusPending, pending.Status)
+				holdCount, err = hold.Count(ctx)
+				require.NoError(t, err)
+				require.Equal(t, 1, holdCount)
+				queryPhase.Store(publishTradeNo)
+				if tc.firstCheck == "cancel" {
+					outcome, err := svc.CancelOrder(ctx, order.ID, user.ID)
+					require.Empty(t, outcome)
+					require.Equal(t, "ORDER_ALREADY_PAID", infraerrors.Reason(err))
+				}
+			}
+
+			got, err := svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, user.ID)
+			require.NoError(t, err)
+			if tc.easyPay {
+				require.NoError(t, svc.HandleVerifiedPaymentNotification(ctx, webhook, easyPay))
+			} else {
+				require.Equal(t, order.OutTradeNo, provider.lastQueryTradeNo)
+			}
+			require.Equal(t, OrderStatusCompleted, got.Status)
+			require.Equal(t, tradeNo, got.PaymentTradeNo)
+
+			reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, OrderStatusCompleted, reloaded.Status)
+			require.Equal(t, tradeNo, reloaded.PaymentTradeNo)
+
+			require.Equal(t, 88.0, userRepo.getByIDUser.Balance)
+			require.Len(t, redeemRepo.useCalls, 1)
+			require.Equal(t, int64(1), redeemRepo.useCalls[0].id)
+			require.Equal(t, user.ID, redeemRepo.useCalls[0].userID)
+		})
 	}
-	userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {
-		require.Equal(t, user.ID, id)
-		if userRepo.getByIDUser != nil {
-			userRepo.getByIDUser.Balance += amount
-		}
-		return nil
-	}
-	redeemRepo := &paymentOrderLifecycleRedeemRepo{
-		codesByCode: map[string]*RedeemCode{
-			order.RechargeCode: {
-				ID:     1,
-				Code:   order.RechargeCode,
-				Type:   RedeemTypeBalance,
-				Value:  order.Amount,
-				Status: StatusUnused,
-			},
-		},
-	}
-	redeemService := NewRedeemService(
-		redeemRepo,
-		userRepo,
-		nil,
-		nil,
-		nil,
-		client,
-		nil,
-		nil,
-	)
-	registry := payment.NewRegistry()
-	provider := &paymentOrderLifecycleQueryProvider{
-		resp: &payment.QueryOrderResponse{
-			TradeNo: "upstream-trade-123",
-			Status:  payment.ProviderStatusPaid,
-			Amount:  88,
-		},
-	}
-	registry.Register(provider)
-
-	svc := &PaymentService{
-		entClient:       client,
-		registry:        registry,
-		redeemService:   redeemService,
-		userRepo:        userRepo,
-		providersLoaded: true,
-	}
-
-	got, err := svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, user.ID)
-	require.NoError(t, err)
-	require.Equal(t, order.OutTradeNo, provider.lastQueryTradeNo)
-	require.Equal(t, OrderStatusCompleted, got.Status)
-	require.Equal(t, "upstream-trade-123", got.PaymentTradeNo)
-
-	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
-	require.NoError(t, err)
-	require.Equal(t, OrderStatusCompleted, reloaded.Status)
-	require.Equal(t, "upstream-trade-123", reloaded.PaymentTradeNo)
-
-	require.Equal(t, 88.0, userRepo.getByIDUser.Balance)
-	require.Len(t, redeemRepo.useCalls, 1)
-	require.Equal(t, int64(1), redeemRepo.useCalls[0].id)
-	require.Equal(t, user.ID, redeemRepo.useCalls[0].userID)
 }
 
 func TestVerifyOrderByOutTradeNoRetriesZeroAmountPaidQueryOnce(t *testing.T) {
@@ -628,6 +824,29 @@ func TestCancelOrderStillClosesUnpaidUpstreamOrder(t *testing.T) {
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusCancelled, reloaded.Status)
+}
+
+func TestCancelOrderPinnedNonEasyPayDoesNotReadConfirmationAudit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	userID := createPaymentOrderSeatUser(t, ctx, client, "cancel-pinned-alipay@example.com")
+	order := createFirstRechargeBalanceOrder(t, ctx, client, userID, 88, OrderStatusPending,
+		"CANCEL-PINNED-ALIPAY", "sub2_cancel_pinned_alipay")
+	_, err := client.PaymentOrder.UpdateOneID(order.ID).SetProviderKey(payment.TypeAlipay).Save(ctx)
+	require.NoError(t, err)
+
+	client.PaymentAuditLog.Intercept(dbent.InterceptFunc(func(_ dbent.Querier) dbent.Querier {
+		return dbent.QuerierFunc(func(context.Context, dbent.Query) (dbent.Value, error) {
+			return nil, fmt.Errorf("confirmation audit read unavailable")
+		})
+	}))
+	svc := &PaymentService{entClient: client}
+	outcome, err := svc.CancelOrder(ctx, order.ID, userID)
+	require.NoError(t, err)
+	require.Equal(t, checkPaidResultCancelled, outcome)
+	stored, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCancelled, stored.Status)
 }
 
 func TestReconcilePendingPaymentOrdersBackfillsPaidOrder(t *testing.T) {
@@ -1163,4 +1382,394 @@ func newPaymentOrderLifecycleTestClient(t *testing.T) *dbent.Client {
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
 	t.Cleanup(func() { _ = client.Close() })
 	return client
+}
+
+func TestExpiryRotatesPastStalledEasyPayHoldsWithSeparateBudget(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	userID := createPaymentOrderSeatUser(t, ctx, client, "expiry-fairness@example.com")
+	createOrder := func(reference string, age time.Duration) *dbent.PaymentOrder {
+		order, err := client.PaymentOrder.Create().
+			SetUserID(userID).
+			SetUserEmail("expiry-fairness@example.com").
+			SetUserName("expiry-fairness").
+			SetAmount(88).
+			SetPayAmount(88).
+			SetFeeRate(0).
+			SetRechargeCode(reference).
+			SetOutTradeNo(reference).
+			SetPaymentType(payment.TypeAlipay).
+			SetPaymentTradeNo("").
+			SetOrderType(payment.OrderTypeBalance).
+			SetStatus(OrderStatusPending).
+			SetExpiresAt(time.Now().Add(-age)).
+			SetClientIP("127.0.0.1").
+			SetSrcHost("api.example.com").
+			Save(ctx)
+		require.NoError(t, err)
+		return order
+	}
+	held := createOrder("sub2_held_expired", 2*time.Minute)
+	laterHeld := createOrder("sub2_later_held", 90*time.Second)
+	unpaid := createOrder("sub2_unpaid_expired", time.Minute)
+	sweepCtx, interruptSweep := context.WithCancel(ctx)
+	defer interruptSweep()
+	secondSweepCtx, interruptSecondSweep := context.WithCancel(ctx)
+	defer interruptSecondSweep()
+	var stalledQueries atomic.Int32
+	var sawLaterHeld atomic.Bool
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("out_trade_no") {
+		case held.OutTradeNo:
+			// The old payment remains unverifiable until the sweep budget ends.
+			if stalledQueries.Add(1) == 1 {
+				interruptSweep()
+			} else {
+				interruptSecondSweep()
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+		case laterHeld.OutTradeNo:
+			sawLaterHeld.Store(true)
+			_, _ = fmt.Fprint(w, `{"code":1,"status":1,"money":"88.00"}`)
+		case unpaid.OutTradeNo:
+			_, _ = fmt.Fprint(w, `{"code":1,"status":0,"money":"88.00"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer gateway.Close()
+	provider, err := paymentprovider.NewEasyPay("expiry-fairness", map[string]string{
+		"apiBase": gateway.URL, "pid": "merchant", "pkey": "synthetic-secret",
+		"notifyUrl": "https://fixture.invalid/notify", "returnUrl": "https://fixture.invalid/return",
+	})
+	require.NoError(t, err)
+	registry := payment.NewRegistry()
+	registry.Register(provider)
+	svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true}
+	require.NoError(t, svc.markEasyPayAwaitingTradeNo(ctx, held.ID, provider))
+	require.NoError(t, svc.markEasyPayAwaitingTradeNo(ctx, laterHeld.ID, provider))
+
+	count, err := svc.ExpireTimedOutOrders(ctx)
+	require.NoError(t, err)
+	require.Zero(t, stalledQueries.Load(), "ordinary expiry must use its own budget")
+	require.Equal(t, 1, count)
+
+	cursor, err := svc.reconcileExpiredEasyPayHolds(sweepCtx, easyPayHoldCursor{})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), stalledQueries.Load(), "the held order must still be rechecked")
+	require.Equal(t, held.ID, cursor.afterID)
+	require.False(t, sawLaterHeld.Load(), "the oldest hold consumed the first hold budget")
+
+	_, err = svc.reconcileExpiredEasyPayHolds(secondSweepCtx, cursor)
+	require.NoError(t, err)
+	require.True(t, sawLaterHeld.Load(), "a stalled older hold must not consume every later retry sweep")
+	reloadedHeld, err := client.PaymentOrder.Get(ctx, held.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPending, reloadedHeld.Status)
+	reloadedUnpaid, err := client.PaymentOrder.Get(ctx, unpaid.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusExpired, reloadedUnpaid.Status)
+}
+
+func TestLegacyEasyPayHoldRemainsBoundToObservedMerchant(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	userID := createPaymentOrderSeatUser(t, ctx, client, "replacement-merchant@example.com")
+	order, err := client.PaymentOrder.Create().SetUserID(userID).SetUserEmail("replacement-merchant@example.com").SetUserName("customer").
+		SetAmount(88).SetPayAmount(88).SetFeeRate(0).SetRechargeCode("LEGACY-EASYPAY-MERCHANT").
+		SetOutTradeNo("sub2_legacy_merchant").SetPaymentType(payment.TypeAlipay).SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).SetStatus(OrderStatusPending).SetExpiresAt(time.Now().Add(-time.Minute)).
+		SetClientIP("127.0.0.1").SetSrcHost("fixture.invalid").Save(ctx)
+	require.NoError(t, err)
+	var originalTradeNumberReady atomic.Bool
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if originalTradeNumberReady.Load() {
+			_, _ = fmt.Fprint(w, `{"code":1,"status":1,"money":"88.00","pid":"original-merchant","trade_no":"original-trade"}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"code":1,"status":1,"money":"88.00","pid":"original-merchant"}`)
+	}))
+	defer gateway.Close()
+	easyPay, err := paymentprovider.NewEasyPay("original", map[string]string{
+		"apiBase": gateway.URL, "pid": "original-merchant", "pkey": "synthetic-fixture",
+		"notifyUrl": "https://fixture.invalid/notify", "returnUrl": "https://fixture.invalid/return",
+	})
+	require.NoError(t, err)
+	registry := payment.NewRegistry()
+	registry.Register(easyPay)
+	userRepo := &mockUserRepo{getByIDUser: &User{ID: userID}}
+	userRepo.updateBalanceFn = func(_ context.Context, _ int64, amount float64) error {
+		userRepo.getByIDUser.Balance += amount
+		return nil
+	}
+	redeemRepo := &paymentOrderLifecycleRedeemRepo{codesByCode: map[string]*RedeemCode{
+		order.RechargeCode: {ID: 1, Code: order.RechargeCode, Type: RedeemTypeBalance, Value: order.Amount, Status: StatusUnused},
+	}}
+	redeemService := NewRedeemService(redeemRepo, userRepo, nil, nil, nil, client, nil, nil)
+	svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true, redeemService: redeemService, userRepo: userRepo}
+	_, err = svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, order.UserID)
+	require.NoError(t, err)
+	held, err := paymentAwaitsTradeNo(ctx, client, order.ID)
+	require.NoError(t, err)
+	require.True(t, held)
+	replacement := &paymentOrderLifecycleQueryProvider{key: payment.TypeAlipay,
+		resp: &payment.QueryOrderResponse{TradeNo: "replacement-trade-number", Status: payment.ProviderStatusPaid, Amount: 88}}
+	registry.Register(replacement)
+	_, err = svc.reconcileExpiredEasyPayHolds(ctx, easyPayHoldCursor{})
+	require.NoError(t, err)
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	t.Logf("after replacement provider: status=%s tradeNo=%s balance=%v", reloaded.Status, reloaded.PaymentTradeNo, userRepo.getByIDUser.Balance)
+	require.Equal(t, OrderStatusPending, reloaded.Status)
+	require.Zero(t, replacement.queryCalls, "the replacement must never be queried for the held order")
+	require.Empty(t, reloaded.PaymentTradeNo)
+	require.Zero(t, userRepo.getByIDUser.Balance)
+
+	var newMerchantQueries atomic.Int32
+	newGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		newMerchantQueries.Add(1)
+		_, _ = fmt.Fprint(w, `{"code":1,"status":1,"money":"88.00","pid":"another-merchant","trade_no":"wrong-merchant-trade"}`)
+	}))
+	defer newGateway.Close()
+	anotherMerchant, err := paymentprovider.NewEasyPay("current", map[string]string{
+		"apiBase": newGateway.URL, "pid": "another-merchant", "pkey": "another-synthetic-fixture",
+		"notifyUrl": "https://fixture.invalid/notify", "returnUrl": "https://fixture.invalid/return",
+	})
+	require.NoError(t, err)
+	registry.Register(anotherMerchant)
+	_, err = svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, order.UserID)
+	require.NoError(t, err)
+	require.ErrorIs(t, svc.HandleVerifiedPaymentNotification(ctx, &payment.PaymentNotification{
+		OrderID: order.OutTradeNo, TradeNo: "wrong-merchant-trade", Amount: 88,
+		Status: payment.NotificationStatusSuccess, Metadata: anotherMerchant.MerchantIdentityMetadata(),
+	}, anotherMerchant), ErrPaymentUpstreamUnconfirmed)
+	require.Zero(t, newMerchantQueries.Load(), "another EasyPay merchant cannot confirm the hold")
+	require.Zero(t, userRepo.getByIDUser.Balance)
+
+	registry.Register(easyPay)
+	originalTradeNumberReady.Store(true)
+	for i := 0; i < 2; i++ {
+		_, err = svc.reconcileExpiredEasyPayHolds(ctx, easyPayHoldCursor{})
+		require.NoError(t, err)
+	}
+	reloaded, err = client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	require.Equal(t, "original-trade", reloaded.PaymentTradeNo)
+	require.Equal(t, 88.0, userRepo.getByIDUser.Balance)
+}
+
+func TestEasyPayHoldSweepFinishesRoundBeforeNewArrivals(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	userID := createPaymentOrderSeatUser(t, ctx, client, "hold-rotation@example.com")
+	sweepCancellation := make(chan context.CancelFunc, 1)
+	attemptedOrders := make(chan string, 1)
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel := <-sweepCancellation
+		attemptedOrders <- r.URL.Query().Get("out_trade_no")
+		cancel()
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer gateway.Close()
+	provider, err := paymentprovider.NewEasyPay("rotating-merchant", map[string]string{
+		"apiBase": gateway.URL, "pid": "merchant", "pkey": "synthetic-fixture",
+		"notifyUrl": "https://fixture.invalid/notify", "returnUrl": "https://fixture.invalid/return",
+	})
+	require.NoError(t, err)
+	registry := payment.NewRegistry()
+	registry.Register(provider)
+	svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true}
+	createHold := func(reference string) {
+		order, err := client.PaymentOrder.Create().
+			SetUserID(userID).
+			SetUserEmail("hold-rotation@example.com").
+			SetUserName("hold-rotation").
+			SetAmount(88).
+			SetPayAmount(88).
+			SetFeeRate(0).
+			SetRechargeCode(reference).
+			SetOutTradeNo(reference).
+			SetPaymentType(payment.TypeAlipay).
+			SetPaymentTradeNo("").
+			SetOrderType(payment.OrderTypeBalance).
+			SetStatus(OrderStatusPending).
+			SetExpiresAt(time.Now().Add(-time.Minute)).
+			SetClientIP("127.0.0.1").
+			SetSrcHost("api.example.com").
+			Save(ctx)
+		require.NoError(t, err)
+		require.NoError(t, svc.markEasyPayAwaitingTradeNo(ctx, order.ID, provider))
+	}
+
+	var cursor easyPayHoldCursor
+	runSweep := func(want string) {
+		sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		sweepCancellation <- cancel
+		cursor, err = svc.reconcileExpiredEasyPayHolds(sweepCtx, cursor)
+		require.NoError(t, err)
+		select {
+		case attempted := <-attemptedOrders:
+			require.Equal(t, want, attempted)
+		default:
+			t.Fatal("the sweep did not query a held order")
+		}
+	}
+
+	createHold("sub2_oldest_hold")
+	createHold("sub2_next_hold")
+	runSweep("sub2_oldest_hold")
+	createHold("sub2_new_hold")
+	runSweep("sub2_next_hold")
+	createHold("sub2_newer_hold")
+	runSweep("sub2_oldest_hold")
+}
+
+func TestEasyPayWebhookChecksQueriedAmountAgainstOrder(t *testing.T) {
+	for _, tradeNo := range []string{"", "gateway-trade"} {
+		t.Run("trade-no="+tradeNo, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentOrderLifecycleTestClient(t)
+			userID := createPaymentOrderSeatUser(t, ctx, client, "gateway-amount@example.com")
+			order, err := client.PaymentOrder.Create().
+				SetUserID(userID).
+				SetUserEmail("gateway-amount@example.com").
+				SetUserName("gateway-amount").
+				SetAmount(88).
+				SetPayAmount(88).
+				SetFeeRate(0).
+				SetRechargeCode("GATEWAY-AMOUNT").
+				SetOutTradeNo("sub2_gateway_amount").
+				SetPaymentType(payment.TypeEasyPay).
+				SetPaymentTradeNo("").
+				SetOrderType(payment.OrderTypeBalance).
+				SetStatus(OrderStatusPending).
+				SetExpiresAt(time.Now().Add(time.Minute)).
+				SetClientIP("127.0.0.1").
+				SetSrcHost("api.example.com").
+				Save(ctx)
+			require.NoError(t, err)
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"code":1,"status":1,"money":"87.988","trade_no":%q}`, tradeNo)
+			}))
+			defer gateway.Close()
+			provider, err := paymentprovider.NewEasyPay("authoritative-amount", map[string]string{
+				"apiBase": gateway.URL, "pid": "merchant", "pkey": "synthetic-fixture",
+				"notifyUrl": "https://fixture.invalid/notify", "returnUrl": "https://fixture.invalid/return",
+			})
+			require.NoError(t, err)
+			registry := payment.NewRegistry()
+			registry.Register(provider)
+			userRepo := &mockUserRepo{getByIDUser: &User{ID: userID}}
+			userRepo.updateBalanceFn = func(_ context.Context, _ int64, amount float64) error {
+				userRepo.getByIDUser.Balance += amount
+				return nil
+			}
+			redeemRepo := &paymentOrderLifecycleRedeemRepo{codesByCode: map[string]*RedeemCode{
+				order.RechargeCode: {ID: 1, Code: order.RechargeCode, Type: RedeemTypeBalance, Value: order.Amount, Status: StatusUnused},
+			}}
+			redeemService := NewRedeemService(redeemRepo, userRepo, nil, nil, nil, client, nil, nil)
+			svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true, redeemService: redeemService, userRepo: userRepo}
+			// The signed amount is within the order tolerance and the queried
+			// amount is within the notification tolerance. The queried amount
+			// is outside the order tolerance.
+			err = svc.HandleVerifiedPaymentNotification(ctx, &payment.PaymentNotification{
+				OrderID: order.OutTradeNo, TradeNo: tradeNo, Amount: 87.992,
+				Status: payment.NotificationStatusSuccess, Metadata: provider.MerchantIdentityMetadata(),
+			}, provider)
+			require.ErrorIs(t, err, ErrPaymentUpstreamUnconfirmed)
+			stored, err := client.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, OrderStatusPending, stored.Status)
+			require.Empty(t, stored.PaymentTradeNo)
+			held, err := paymentAwaitsTradeNo(ctx, client, order.ID)
+			require.NoError(t, err)
+			require.False(t, held, "the authoritative amount never confirmed this order")
+		})
+	}
+}
+
+type pausedLifecyclePaymentQuery struct {
+	paymentOrderLifecycleQueryProvider
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *pausedLifecyclePaymentQuery) QueryOrder(ctx context.Context, tradeNo string) (*payment.QueryOrderResponse, error) {
+	close(p.started)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.release:
+		return p.paymentOrderLifecycleQueryProvider.QueryOrder(ctx, tradeNo)
+	}
+}
+
+func TestPendingPaymentKeepsTradeReferenceWhenHoldAppearsDuringVerification(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := newPaymentOrderLifecycleTestClient(t)
+	userID := createPaymentOrderSeatUser(t, ctx, client, "hold-during-payment-check@example.com")
+	order, err := client.PaymentOrder.Create().
+		SetUserID(userID).
+		SetUserEmail("hold-during-payment-check@example.com").
+		SetUserName("hold-during-payment-check").
+		SetAmount(88).
+		SetPayAmount(88).
+		SetFeeRate(0).
+		SetRechargeCode("HOLD-DURING-CHECK").
+		SetOutTradeNo("sub2_hold_during_payment_check").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Minute)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+
+	query := &pausedLifecyclePaymentQuery{
+		paymentOrderLifecycleQueryProvider: paymentOrderLifecycleQueryProvider{
+			key: payment.TypeAlipay,
+			resp: &payment.QueryOrderResponse{
+				Status: payment.ProviderStatusPaid, TradeNo: "later-reference", Amount: 88,
+			},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	registry := payment.NewRegistry()
+	registry.Register(query)
+	original, err := paymentprovider.NewEasyPay("fixture-original", map[string]string{
+		"apiBase": "https://fixture.invalid", "pid": "fixture-merchant", "pkey": "fixture-key",
+		"notifyUrl": "https://fixture.invalid/notify", "returnUrl": "https://fixture.invalid/return",
+	})
+	require.NoError(t, err)
+	svc := &PaymentService{entClient: client, registry: registry, providersLoaded: true}
+	done := make(chan error, 1)
+	go func() {
+		_, verifyErr := svc.VerifyOrderByOutTradeNo(ctx, order.OutTradeNo, userID)
+		done <- verifyErr
+	}()
+	select {
+	case <-query.started:
+	case <-ctx.Done():
+		t.Fatal("verification did not reach the payment query")
+	}
+	require.NoError(t, svc.markEasyPayAwaitingTradeNo(ctx, order.ID, original))
+	close(query.release)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("verification did not finish")
+	}
+
+	stored, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusPending, stored.Status)
+	require.Empty(t, stored.PaymentTradeNo)
+	require.Equal(t, 88.0, stored.PayAmount)
 }

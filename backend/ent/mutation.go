@@ -21945,6 +21945,7 @@ type GroupMutation struct {
 	deleted_at                              *time.Time
 	name                                    *string
 	description                             *string
+	i18n                                    *domain.GroupI18n
 	rate_multiplier                         *float64
 	addrate_multiplier                      *float64
 	peak_rate_enabled                       *bool
@@ -22010,6 +22011,7 @@ type GroupMutation struct {
 	allow_messages_dispatch                 *bool
 	allow_live                              *bool
 	force_openai_fast                       *bool
+	force_openai_ultrafast                  *bool
 	free_openai_fast                        *bool
 	require_oauth_only                      *bool
 	require_privacy_set                     *bool
@@ -22364,6 +22366,42 @@ func (m *GroupMutation) DescriptionCleared() bool {
 func (m *GroupMutation) ResetDescription() {
 	m.description = nil
 	delete(m.clearedFields, group.FieldDescription)
+}
+
+// SetI18n sets the "i18n" field.
+func (m *GroupMutation) SetI18n(di domain.GroupI18n) {
+	m.i18n = &di
+}
+
+// I18n returns the value of the "i18n" field in the mutation.
+func (m *GroupMutation) I18n() (r domain.GroupI18n, exists bool) {
+	v := m.i18n
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldI18n returns the old "i18n" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldI18n(ctx context.Context) (v domain.GroupI18n, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldI18n is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldI18n requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldI18n: %w", err)
+	}
+	return oldValue.I18n, nil
+}
+
+// ResetI18n resets all changes to the "i18n" field.
+func (m *GroupMutation) ResetI18n() {
+	m.i18n = nil
 }
 
 // SetRateMultiplier sets the "rate_multiplier" field.
@@ -24565,6 +24603,42 @@ func (m *GroupMutation) ResetForceOpenaiFast() {
 	m.force_openai_fast = nil
 }
 
+// SetForceOpenaiUltrafast sets the "force_openai_ultrafast" field.
+func (m *GroupMutation) SetForceOpenaiUltrafast(b bool) {
+	m.force_openai_ultrafast = &b
+}
+
+// ForceOpenaiUltrafast returns the value of the "force_openai_ultrafast" field in the mutation.
+func (m *GroupMutation) ForceOpenaiUltrafast() (r bool, exists bool) {
+	v := m.force_openai_ultrafast
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldForceOpenaiUltrafast returns the old "force_openai_ultrafast" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldForceOpenaiUltrafast(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldForceOpenaiUltrafast is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldForceOpenaiUltrafast requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldForceOpenaiUltrafast: %w", err)
+	}
+	return oldValue.ForceOpenaiUltrafast, nil
+}
+
+// ResetForceOpenaiUltrafast resets all changes to the "force_openai_ultrafast" field.
+func (m *GroupMutation) ResetForceOpenaiUltrafast() {
+	m.force_openai_ultrafast = nil
+}
+
 // SetFreeOpenaiFast sets the "free_openai_fast" field.
 func (m *GroupMutation) SetFreeOpenaiFast(b bool) {
 	m.free_openai_fast = &b
@@ -25776,7 +25850,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 67)
+	fields := make([]string, 0, 69)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -25791,6 +25865,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.description != nil {
 		fields = append(fields, group.FieldDescription)
+	}
+	if m.i18n != nil {
+		fields = append(fields, group.FieldI18n)
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, group.FieldRateMultiplier)
@@ -25921,6 +25998,9 @@ func (m *GroupMutation) Fields() []string {
 	if m.force_openai_fast != nil {
 		fields = append(fields, group.FieldForceOpenaiFast)
 	}
+	if m.force_openai_ultrafast != nil {
+		fields = append(fields, group.FieldForceOpenaiUltrafast)
+	}
 	if m.free_openai_fast != nil {
 		fields = append(fields, group.FieldFreeOpenaiFast)
 	}
@@ -25996,6 +26076,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case group.FieldDescription:
 		return m.Description()
+	case group.FieldI18n:
+		return m.I18n()
 	case group.FieldRateMultiplier:
 		return m.RateMultiplier()
 	case group.FieldPeakRateEnabled:
@@ -26082,6 +26164,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.AllowLive()
 	case group.FieldForceOpenaiFast:
 		return m.ForceOpenaiFast()
+	case group.FieldForceOpenaiUltrafast:
+		return m.ForceOpenaiUltrafast()
 	case group.FieldFreeOpenaiFast:
 		return m.FreeOpenaiFast()
 	case group.FieldRequireOauthOnly:
@@ -26139,6 +26223,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldName(ctx)
 	case group.FieldDescription:
 		return m.OldDescription(ctx)
+	case group.FieldI18n:
+		return m.OldI18n(ctx)
 	case group.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
 	case group.FieldPeakRateEnabled:
@@ -26225,6 +26311,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldAllowLive(ctx)
 	case group.FieldForceOpenaiFast:
 		return m.OldForceOpenaiFast(ctx)
+	case group.FieldForceOpenaiUltrafast:
+		return m.OldForceOpenaiUltrafast(ctx)
 	case group.FieldFreeOpenaiFast:
 		return m.OldFreeOpenaiFast(ctx)
 	case group.FieldRequireOauthOnly:
@@ -26306,6 +26394,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDescription(v)
+		return nil
+	case group.FieldI18n:
+		v, ok := value.(domain.GroupI18n)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetI18n(v)
 		return nil
 	case group.FieldRateMultiplier:
 		v, ok := value.(float64)
@@ -26607,6 +26702,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetForceOpenaiFast(v)
+		return nil
+	case group.FieldForceOpenaiUltrafast:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetForceOpenaiUltrafast(v)
 		return nil
 	case group.FieldFreeOpenaiFast:
 		v, ok := value.(bool)
@@ -27219,6 +27321,9 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldDescription:
 		m.ResetDescription()
 		return nil
+	case group.FieldI18n:
+		m.ResetI18n()
+		return nil
 	case group.FieldRateMultiplier:
 		m.ResetRateMultiplier()
 		return nil
@@ -27347,6 +27452,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldForceOpenaiFast:
 		m.ResetForceOpenaiFast()
+		return nil
+	case group.FieldForceOpenaiUltrafast:
+		m.ResetForceOpenaiUltrafast()
 		return nil
 	case group.FieldFreeOpenaiFast:
 		m.ResetFreeOpenaiFast()

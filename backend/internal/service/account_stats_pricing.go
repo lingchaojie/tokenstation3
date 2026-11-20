@@ -24,6 +24,7 @@ type accountStatsCostUsage struct {
 	usageUnits                     float64
 	sizeTier                       string
 	disableModelLongContextPricing bool
+	upstreamPriceFactor            float64
 }
 
 // pricingAt 与本次客户计费使用同一时刻，避免跨峰谷请求的成本与售价错位。
@@ -64,7 +65,7 @@ func resolveAccountStatsCostWithUsage(
 	// 因此实际命中的 provider 长上下文价格必须先于客户计费回退。
 	// 已确认的订阅模型豁免只跳过模型价卡附加费，显式自定义规则仍保持最高优先级。
 	if billingService != nil && !usage.disableModelLongContextPricing {
-		if cost := tryLongContextModelFilePricing(billingService, upstreamModel, tokens, serviceTier, pricingAt, reasoningEffort); cost != nil {
+		if cost := tryLongContextModelFilePricing(billingService, upstreamModel, tokens, serviceTier, pricingAt, usage.upstreamPriceFactor, reasoningEffort); cost != nil {
 			return cost
 		}
 	}
@@ -80,29 +81,25 @@ func resolveAccountStatsCostWithUsage(
 
 	// 优先级 4：模型定价文件（LiteLLM）默认价格
 	if billingService != nil {
-		return tryModelFilePricingWithPolicy(billingService, upstreamModel, tokens, serviceTier, pricingAt, usage.disableModelLongContextPricing, reasoningEffort)
+		return tryModelFilePricingWithPolicy(billingService, upstreamModel, tokens, serviceTier, pricingAt, usage.disableModelLongContextPricing, usage.upstreamPriceFactor, reasoningEffort)
 	}
 
 	return nil
 }
 
-func tryLongContextModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, reasoningEfforts ...string) *float64 {
+func tryLongContextModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, defaultMultiplier float64, reasoningEfforts ...string) *float64 {
 	pricing, err := billingService.GetModelPricing(model)
 	if err != nil || pricing == nil || !billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
 		return nil
 	}
-	return tryModelFilePricing(billingService, model, tokens, serviceTier, pricingAt, reasoningEfforts...)
+	return tryModelFilePricingWithPolicy(billingService, model, tokens, serviceTier, pricingAt, false, defaultMultiplier, reasoningEfforts...)
 }
 
-// tryModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的价格计算费用。
+// tryModelFilePricingWithPolicy 使用模型定价文件（LiteLLM/fallback）中的价格计算费用。
 // 与用户计费共用同一条定价管线，避免这里维护第二份"单价 × token 数"实现后，
 // 每加一个定价特性都要手工镜像一次。解析器不配置渠道或分组，保持优先级 3 的
 // 语义：只取模型定价文件，不引入自定义售价。
-func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, reasoningEfforts ...string) *float64 {
-	return tryModelFilePricingWithPolicy(billingService, model, tokens, serviceTier, pricingAt, false, reasoningEfforts...)
-}
-
-func tryModelFilePricingWithPolicy(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, disableModelLongContextPricing bool, reasoningEfforts ...string) *float64 {
+func tryModelFilePricingWithPolicy(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, disableModelLongContextPricing bool, defaultMultiplier float64, reasoningEfforts ...string) *float64 {
 	reasoningEffort := ""
 	if len(reasoningEfforts) > 0 {
 		reasoningEffort = reasoningEfforts[0]
@@ -119,6 +116,7 @@ func tryModelFilePricingWithPolicy(billingService *BillingService, model string,
 		PricingAt:                      pricingAt,
 		Resolver:                       NewModelPricingResolver(nil, billingService),
 		DisableModelLongContextPricing: disableModelLongContextPricing,
+		defaultTokenPriceMultiplier:    defaultMultiplier,
 	})
 	if err != nil || breakdown == nil || breakdown.TotalCost < 0 {
 		return nil
@@ -364,6 +362,22 @@ func applyAccountStatsCost(
 	pricingAt time.Time,
 	disableModelLongContextPricing ...bool,
 ) {
+	applyAccountStatsCostWithUpstreamFactor(ctx, usageLog, cs, bs, accountID, groupID,
+		upstreamModel, requestedModel, tokens, totalCost, pricingAt, 1, disableModelLongContextPricing...)
+}
+
+func applyAccountStatsCostWithUpstreamFactor(
+	ctx context.Context,
+	usageLog *UsageLog,
+	cs *ChannelService, bs *BillingService,
+	accountID int64, groupID int64,
+	upstreamModel, requestedModel string,
+	tokens UsageTokens,
+	totalCost float64,
+	pricingAt time.Time,
+	upstreamPriceFactor float64,
+	disableModelLongContextPricing ...bool,
+) {
 	if usageLog == nil {
 		return
 	}
@@ -371,7 +385,7 @@ func applyAccountStatsCost(
 	if model == "" {
 		model = requestedModel
 	}
-	usage := accountStatsCostUsage{requestCount: 1}
+	usage := accountStatsCostUsage{requestCount: 1, upstreamPriceFactor: upstreamPriceFactor}
 	if len(disableModelLongContextPricing) > 0 {
 		usage.disableModelLongContextPricing = disableModelLongContextPricing[0]
 	}

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"io/fs"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -84,6 +85,15 @@ var upstreamSyncMigrationFilenames = []string{
 	"248_drop_platform_check_constraints.sql",
 }
 
+var novemberUpstreamMigrations = []string{
+	"249_group_i18n.sql",
+	"250_scoped_admin_api_keys.sql",
+	"251_add_usage_logs_api_key_cost_index_notx.sql",
+	"252_group_force_openai_ultrafast.sql",
+	"253_group_usage_rollup_nonblocking_build.sql",
+	"254_channel_pricing_ultrafast_multiplier.sql",
+}
+
 func TestUpstreamSyncMigrationSequenceStartsAfterLocal190(t *testing.T) {
 	files, err := fs.Glob(migrations.FS, "*.sql")
 	require.NoError(t, err)
@@ -96,7 +106,7 @@ func TestUpstreamSyncMigrationSequenceStartsAfterLocal190(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	require.Equal(t, upstreamSyncMigrationFilenames, got)
+	require.Equal(t, append(slices.Clone(upstreamSyncMigrationFilenames), novemberUpstreamMigrations...), got)
 }
 
 func TestUpstreamSyncMigrationSequenceIntentionallyLeavesPromptAuditGap(t *testing.T) {
@@ -258,4 +268,79 @@ ORDER BY id
 
 func stringPointer(value string) *string {
 	return &value
+}
+
+func TestUpstreamSyncMigrationsUpgradePersisted248(t *testing.T) {
+	ctx := context.Background()
+	container, err := tcpostgres.Run(
+		ctx,
+		selectDockerImage(ctx, postgresImageTag),
+		tcpostgres.WithDatabase("upstream_248_upgrade"),
+		tcpostgres.WithUsername("postgres"),
+		tcpostgres.WithPassword("postgres"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = container.Terminate(ctx) })
+
+	dsn, err := container.ConnectionString(ctx, "sslmode=disable", "TimeZone=UTC")
+	require.NoError(t, err)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, applyMigrationsFS(ctx, db, embeddedMigrationsBefore(t, "249_")))
+	var latest string
+	require.NoError(t, db.QueryRowContext(ctx, `
+SELECT max(filename) FROM schema_migrations
+`).Scan(&latest))
+	require.Equal(t, "248_drop_platform_check_constraints.sql", latest)
+
+	var groupID, channelID, priceID int64
+	require.NoError(t, db.QueryRowContext(ctx, `
+INSERT INTO groups (name, platform, allow_image_generation, force_openai_fast)
+VALUES ('migration-test-248-gemini', 'gemini', FALSE, FALSE)
+RETURNING id
+`).Scan(&groupID))
+	require.NoError(t, db.QueryRowContext(ctx, `
+INSERT INTO channels (name) VALUES ('migration-test-248-channel') RETURNING id
+`).Scan(&channelID))
+	require.NoError(t, db.QueryRowContext(ctx, `
+INSERT INTO channel_model_pricing (channel_id, models, fast_multiplier)
+VALUES ($1, '["gpt-6.2-sol"]', 2)
+RETURNING id
+`, channelID).Scan(&priceID))
+
+	task3InstallMigrationOrderAudit(t, db)
+	for range 2 {
+		require.NoError(t, ApplyMigrations(ctx, db))
+		var applied string
+		require.NoError(t, db.QueryRowContext(ctx, `
+SELECT string_agg(filename, ',' ORDER BY sequence) FROM task3_migration_apply_audit
+`).Scan(&applied))
+		require.Equal(t, novemberUpstreamMigrations, strings.Split(applied, ","))
+
+		var allowImages, forceUltraFast bool
+		var i18n string
+		require.NoError(t, db.QueryRowContext(ctx, `
+SELECT allow_image_generation, force_openai_ultrafast, i18n::text
+FROM groups WHERE id = $1
+`, groupID).Scan(&allowImages, &forceUltraFast, &i18n))
+		require.False(t, allowImages)
+		require.False(t, forceUltraFast)
+		require.JSONEq(t, "{}", i18n)
+
+		var fastMultiplier float64
+		var ultraFastMultiplier sql.NullFloat64
+		require.NoError(t, db.QueryRowContext(ctx, `
+SELECT fast_multiplier, ultrafast_multiplier FROM channel_model_pricing WHERE id = $1
+`, priceID).Scan(&fastMultiplier, &ultraFastMultiplier))
+		require.Equal(t, 2.0, fastMultiplier)
+		require.False(t, ultraFastMultiplier.Valid)
+
+		var indexValid bool
+		require.NoError(t, db.QueryRowContext(ctx, `
+SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_usage_logs_api_key_created_cost'::regclass
+`).Scan(&indexValid))
+		require.True(t, indexValid)
+	}
 }

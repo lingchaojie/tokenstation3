@@ -115,7 +115,7 @@
               <th class="pb-2 text-right">{{ t('admin.dashboard.tokens') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.actual') }}</th>
               <th v-if="showAccountCost" class="pb-2 text-right">{{ t('admin.dashboard.accountCost') }}</th>
-              <th class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
+              <th v-if="showStandardCost" class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -148,7 +148,7 @@
                 <td v-if="showAccountCost" class="py-1.5 text-right text-orange-500 dark:text-orange-400">
                   ${{ formatCost(model.account_cost) }}
                 </td>
-                <td class="py-1.5 text-right text-gray-400 dark:text-gray-500">
+                <td v-if="showStandardCost" class="py-1.5 text-right text-gray-400 dark:text-gray-500">
                   ${{ formatCost(model.cost) }}
                 </td>
               </tr>
@@ -158,6 +158,7 @@
                     :items="breakdownItems"
                     :loading="breakdownLoading"
                     :show-account-cost="showAccountCost"
+                    :show-standard-cost="showStandardCost"
                   />
                 </td>
               </tr>
@@ -243,7 +244,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 import { Doughnut } from 'vue-chartjs'
@@ -275,6 +276,7 @@ const props = withDefaults(defineProps<{
   showMetricToggle?: boolean
   enableBreakdown?: boolean
   showAccountCost?: boolean
+  showStandardCost?: boolean
   rankingLoading?: boolean
   rankingError?: boolean
   startDate?: string
@@ -295,6 +297,7 @@ const props = withDefaults(defineProps<{
   showMetricToggle: false,
   enableBreakdown: true,
   showAccountCost: true,
+  showStandardCost: true,
   rankingLoading: false,
   rankingError: false
 })
@@ -302,13 +305,28 @@ const props = withDefaults(defineProps<{
 const expandedKey = ref<string | null>(null)
 const breakdownItems = ref<UserBreakdownItem[]>([])
 const breakdownLoading = ref(false)
+let breakdownRequest = 0
+
+function resetBreakdown() {
+  breakdownRequest++
+  expandedKey.value = null
+  breakdownItems.value = []
+  breakdownLoading.value = false
+}
+
+watch(
+  () => [props.filters, props.startDate, props.endDate, props.source, props.enableBreakdown],
+  resetBreakdown,
+  { deep: true }
+)
 
 const toggleBreakdown = async (type: string, id: string) => {
   const key = `${type}-${id}`
   if (expandedKey.value === key) {
-    expandedKey.value = null
+    resetBreakdown()
     return
   }
+  const request = ++breakdownRequest
   expandedKey.value = key
   breakdownLoading.value = true
   breakdownItems.value = []
@@ -320,11 +338,11 @@ const toggleBreakdown = async (type: string, id: string) => {
       model: id,
       model_source: props.source,
     })
-    breakdownItems.value = res.users || []
+    if (request === breakdownRequest) breakdownItems.value = res.users || []
   } catch {
-    breakdownItems.value = []
+    if (request === breakdownRequest) breakdownItems.value = []
   } finally {
-    breakdownLoading.value = false
+    if (request === breakdownRequest) breakdownLoading.value = false
   }
 }
 
@@ -336,7 +354,7 @@ const emit = defineEmits<{
 
 const enableRankingView = computed(() => props.enableRankingView)
 const showAccountCost = computed(() => props.showAccountCost)
-const distributionColspan = computed(() => showAccountCost.value ? 6 : 5)
+const distributionColspan = computed(() => 4 + Number(props.showAccountCost) + Number(props.showStandardCost))
 const activeView = ref<'model_distribution' | 'spending_ranking'>('model_distribution')
 
 const chartColors = [

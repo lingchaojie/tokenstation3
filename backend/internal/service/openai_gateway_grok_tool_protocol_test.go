@@ -80,7 +80,7 @@ func TestGrokResponsesClientToolStreamBoundsPendingSSEFields(t *testing.T) {
 	body := newGrokResponsesClientToolStreamBody(
 		io.NopCloser(strings.NewReader(source.String())),
 		apicompat.ResponsesClientToolMapping{},
-		defaultMaxLineSize,
+		defaultMaxLineSize, nil,
 	)
 	_, err := io.ReadAll(body)
 	require.ErrorContains(t, err, "pending SSE fields exceeded")
@@ -157,7 +157,7 @@ func TestGrokResponsesClientToolParserDrainsFiniteProviderTailForCapture(t *test
 	finishCapture := beginCaptureResponse(c, resp, true, 1<<20)
 	body := newGrokResponsesClientToolStreamBody(resp.Body, apicompat.ResponsesClientToolMapping{
 		CustomTools: map[string]bool{"apply_patch": true},
-	}, defaultMaxLineSize)
+	}, defaultMaxLineSize, nil)
 	_, err := io.ReadAll(body)
 	require.NoError(t, err)
 	finishCapture()
@@ -562,7 +562,7 @@ func TestGrokResponsesClientToolStreamBodyFlushesFrameBeforeEOF(t *testing.T) {
 	sourceReader, sourceWriter := io.Pipe()
 	body := newGrokResponsesClientToolStreamBody(sourceReader, apicompat.ResponsesClientToolMapping{
 		CustomTools: map[string]bool{"apply_patch": true},
-	}, defaultMaxLineSize)
+	}, defaultMaxLineSize, nil)
 	defer func() { _ = body.Close() }()
 	defer func() { _ = sourceWriter.Close() }()
 
@@ -616,7 +616,7 @@ func TestGrokResponsesClientToolStreamBodyDropsLargeProviderArgumentsWithoutDisc
 	source := io.NopCloser(strings.NewReader("data: " + added + "\n\ndata: " + string(deltaPayload) + "\n\n"))
 	body := newGrokResponsesClientToolStreamBody(source, apicompat.ResponsesClientToolMapping{
 		CustomTools: map[string]bool{"apply_patch": true},
-	}, defaultMaxLineSize)
+	}, defaultMaxLineSize, nil)
 	defer func() { _ = body.Close() }()
 
 	output, err := io.ReadAll(body)

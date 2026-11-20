@@ -49,7 +49,7 @@ const codexOfficialClientFamilyPrefix = "codex "
 // 或在 bump context/codex 时同步补入本集合。
 var codexOfficialClientOriginators = map[string]bool{
 	"codex_cli_rs":          true, // CLI 默认 DEFAULT_ORIGINATOR
-	"codex-tui":             true, // 交互式 TUI（连字符，真实流量占比最高）
+	CodexTUIOriginator:      true, // 交互式 TUI（连字符，真实流量占比最高）
 	"codex_vscode":          true, // VSCode/Cursor 扩展
 	"codex_vscode_copilot":  true, // 扩展 GitHub Copilot 集成模式
 	"codex_app":             true, // 历史保留

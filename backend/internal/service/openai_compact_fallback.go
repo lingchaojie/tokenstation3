@@ -49,6 +49,15 @@ func isExplicitOpenAICompactRequest(c *gin.Context, body []byte) bool {
 	return isOpenAIResponsesCompactPath(c) || HasCompactionTriggerInInput(body)
 }
 
+// resolveOpenAIInitialCompactOverride is the override used by the first
+// legacy Compact attempt. The raw Chat adapter takes precedence in Forward.
+func (s *OpenAIGatewayService) resolveOpenAIInitialCompactOverride(account *Account, requestedModel string) string {
+	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
+		return ""
+	}
+	return s.resolveOpenAICompactFallbackModel(account, requestedModel)
+}
+
 // resolveOpenAICompactFallbackModel prefers the account's compact-only rule
 // for the client-visible model. The process-wide fallback is used only when
 // that account has no matching compact rule.
@@ -57,6 +66,9 @@ func (s *OpenAIGatewayService) resolveOpenAICompactFallbackModel(account *Accoun
 	if account != nil {
 		if mapped, matched := account.ResolveCompactMappedModel(requestedModel); matched {
 			if mapped = strings.TrimSpace(mapped); mapped != "" {
+				if isRetiredOpenAISubscriptionModel(account, mapped) {
+					return ""
+				}
 				return mapped
 			}
 		}
@@ -68,7 +80,11 @@ func (s *OpenAIGatewayService) resolveOpenAICompactFallbackModel(account *Accoun
 	if fallback == "" {
 		return ""
 	}
-	return strings.TrimSpace(resolveOpenAIAccountUpstreamModelForRequest(account, fallback, false))
+	resolved := strings.TrimSpace(resolveOpenAIAccountUpstreamModelForRequest(account, fallback, false))
+	if isRetiredOpenAISubscriptionModel(account, resolved) {
+		return ""
+	}
+	return resolved
 }
 
 func isOpenAICompactModelFailure(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
@@ -253,6 +269,14 @@ func (s *OpenAIGatewayService) prepareOpenAICompactFallbackRetry(
 	currentModel := strings.TrimSpace(gjson.GetBytes(currentBody, "model").String())
 	if fallbackModel == "" || strings.EqualFold(fallbackModel, currentModel) {
 		return currentBody, "", false
+	}
+	if c != nil && c.Request != nil {
+		ctx := c.Request.Context()
+		if apiKey := getAPIKeyFromContext(c); apiKey != nil &&
+			s.needsUpstreamChannelRestrictionCheck(ctx, apiKey.GroupID) &&
+			s.channelService.IsModelRestricted(ctx, *apiKey.GroupID, fallbackModel) {
+			return currentBody, "", false
+		}
 	}
 	retryBody := ReplaceModelInBody(currentBody, fallbackModel)
 	if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(retryBody, "model").String()), currentModel) {

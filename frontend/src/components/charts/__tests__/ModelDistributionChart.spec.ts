@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
+import { getUserBreakdown, type UserBreakdownResponse } from '@/api/admin/dashboard'
+import EndpointDistributionChart from '../EndpointDistributionChart.vue'
 import ModelDistributionChart from '../ModelDistributionChart.vue'
+
+vi.mock('@/api/admin/dashboard', () => ({ getUserBreakdown: vi.fn() }))
 
 const messages: Record<string, string> = {
   'admin.dashboard.modelDistribution': 'Model Distribution',
@@ -74,6 +78,46 @@ describe('ModelDistributionChart', () => {
       account_cost: 1.5,
     },
   ]
+
+  it.each(['model', 'endpoint'])('ignores stale user breakdowns in the %s chart', async (kind) => {
+    const mock = vi.mocked(getUserBreakdown)
+    mock.mockReset()
+    const filters = { account_id: 42 }
+    const wrapper = kind === 'model'
+      ? mount(ModelDistributionChart, { props: { modelStats, filters } })
+      : mount(EndpointDistributionChart, { props: {
+        endpointStats: modelStats.map(row => ({ ...row, endpoint: row.model })),
+        filters,
+      } })
+    const pending: Array<(response: UserBreakdownResponse) => void> = []
+    mock.mockImplementation(() => new Promise(resolve => { pending.push(resolve) }))
+    const response = (user_id: number, email: string): UserBreakdownResponse => ({
+      users: [{
+        user_id, email, requests: 1, input_tokens: 1, output_tokens: 1, cache_tokens: 0,
+        total_tokens: 2, cost: 1, actual_cost: 1, account_cost: 1,
+      }],
+      start_date: '2026-11-01',
+      end_date: '2026-11-19',
+    })
+    const row = (name: string) => wrapper.findAll('tbody > tr').find(item => item.text().includes(name))!
+
+    await row('model-a').trigger('click')
+    await row('model-b').trigger('click')
+    expect(mock).toHaveBeenCalledTimes(2)
+    expect(mock.mock.calls[1][0]).toMatchObject({
+      account_id: 42, [kind === 'model' ? 'model' : 'endpoint']: 'model-b',
+    })
+    pending[1](response(2, 'second@example.com'))
+    await flushPromises()
+    expect(wrapper.text()).toContain('second@example.com')
+    pending[0](response(1, 'stale@example.com'))
+    await flushPromises()
+    expect(wrapper.text()).toContain('second@example.com')
+    expect(wrapper.text()).not.toContain('stale@example.com')
+
+    await wrapper.setProps({ filters: { account_id: 43 } })
+    expect(wrapper.text()).not.toContain('second@example.com')
+  })
 
   it('uses total_tokens and token ordering by default', () => {
     const wrapper = mount(ModelDistributionChart, {

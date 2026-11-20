@@ -1061,10 +1061,10 @@ func TestGrokNestedTranslatorsJoinBeforePublishingRawCapture(t *testing.T) {
 	raw := &closeReleasedCaptureReader{closed: make(chan struct{})}
 	resp := &http.Response{StatusCode: http.StatusOK, Body: raw, Request: req}
 	svc.wrapOpenAIHTTPCaptureResponse(c, account, resp)
-	resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, defaultMaxLineSize)
+	resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, defaultMaxLineSize, nil)
 	resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, apicompat.ResponsesClientToolMapping{
 		CustomTools: map[string]bool{"apply_patch": true},
-	}, defaultMaxLineSize)
+	}, defaultMaxLineSize, nil)
 
 	scanDone := make(chan struct{})
 	go func() {

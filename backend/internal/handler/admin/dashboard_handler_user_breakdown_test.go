@@ -18,16 +18,20 @@ import (
 
 type userBreakdownRepoCapture struct {
 	service.UsageLogRepository
+	capturedStart time.Time
+	capturedEnd   time.Time
 	capturedDim   usagestats.UserBreakdownDimension
 	capturedLimit int
 	result        []usagestats.UserBreakdownItem
 }
 
 func (r *userBreakdownRepoCapture) GetUserBreakdownStats(
-	_ context.Context, _, _ time.Time,
+	_ context.Context, startTime, endTime time.Time,
 	dim usagestats.UserBreakdownDimension, limit int,
 ) ([]usagestats.UserBreakdownItem, error) {
 	r.capturedDim = dim
+	r.capturedStart = startTime
+	r.capturedEnd = endTime
 	r.capturedLimit = limit
 	if r.result != nil {
 		return r.result, nil
@@ -187,6 +191,23 @@ func TestGetUserBreakdown_EndpointFilter(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/v1/messages", repo.capturedDim.Endpoint)
 	require.Equal(t, "upstream", repo.capturedDim.EndpointType)
+}
+
+func TestGetUserBreakdown_AccountReportDatesAndUpstreamEndpoint(t *testing.T) {
+	repo := &userBreakdownRepoCapture{}
+	router := newUserBreakdownRouter(repo)
+	req := httptest.NewRequest(http.MethodGet,
+		"/admin/dashboard/user-breakdown?account_id=42&start_date=2026-03-01&end_date=2026-03-08&timezone=America%2FNew_York&endpoint=/v1/messages&endpoint_type=upstream", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, int64(42), repo.capturedDim.AccountID)
+	require.Equal(t, "upstream", repo.capturedDim.EndpointType)
+	require.Equal(t, "/v1/messages", repo.capturedDim.Endpoint)
+	require.Equal(t, "2026-03-01T00:00:00-05:00", repo.capturedStart.Format(time.RFC3339))
+	require.Equal(t, "2026-03-09T00:00:00-04:00", repo.capturedEnd.Format(time.RFC3339))
+	require.Contains(t, w.Body.String(), `"end_date":"2026-03-08"`)
 }
 
 func TestGetUserBreakdown_DefaultEndpointType(t *testing.T) {

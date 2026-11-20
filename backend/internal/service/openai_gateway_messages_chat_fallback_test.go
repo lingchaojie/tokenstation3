@@ -188,6 +188,67 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	capture.commit(t, c, result, upstream.lastBody, upstreamBody, false)
 }
 
+func TestForwardAsAnthropic_ForceChatCompletionsGroupUltrafast(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name     string
+		force    bool
+		action   string
+		wantTier string
+	}{
+		{name: "group default", action: BetaPolicyActionPass},
+		{name: "force", force: true, action: BetaPolicyActionPass, wantTier: OpenAIFastTierUltrafast},
+		{name: "filtered", force: true, action: BetaPolicyActionFilter},
+		{name: "downgraded", force: true, action: OpenAIFastPolicyActionForcePriority, wantTier: OpenAIFastTierPriority},
+		{name: "blocked", force: true, action: BetaPolicyActionBlock},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.force {
+				ctx = openAIUltrafastGroupContext()
+			}
+			body := []byte(`{"model":"public-model","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body)).WithContext(ctx)
+			account := forceChatMessagesFallbackAccount()
+			account.Credentials["model_mapping"] = map[string]any{"public-model": "gpt-6.1-sol"}
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl_group","model":"gpt-6.1-sol","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`)),
+			}}
+			svc := newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{
+				ServiceTier: OpenAIFastTierUltrafast, Action: tc.action, Scope: BetaPolicyScopeAll,
+			}}})
+			svc.cfg = rawChatCompletionsTestConfig()
+			svc.httpUpstream = upstream
+
+			result, err := svc.ForwardAsAnthropic(ctx, c, account, body, "", "")
+			if tc.action == BetaPolicyActionBlock {
+				var blocked *OpenAIFastBlockedError
+				require.ErrorAs(t, err, &blocked)
+				require.Nil(t, result)
+				require.Equal(t, http.StatusForbidden, rec.Code)
+				require.Empty(t, upstream.requests)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 1)
+			require.Equal(t, "/v1/chat/completions", upstream.lastReq.URL.Path)
+			require.Equal(t, "gpt-6.1-sol", gjson.GetBytes(upstream.lastBody, "model").String())
+			require.Equal(t, tc.wantTier, gjson.GetBytes(upstream.lastBody, "service_tier").String())
+			if tc.wantTier == "" {
+				require.Nil(t, result.ServiceTier)
+			} else {
+				require.NotNil(t, result.ServiceTier)
+				require.Equal(t, tc.wantTier, *result.ServiceTier)
+			}
+		})
+	}
+}
+
 // Covers the fully-new streaming composition: text block is still open when
 // [DONE] arrives, so finalization must close it (content_block_stop) before
 // message_delta / message_stop.

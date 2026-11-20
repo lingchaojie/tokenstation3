@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
+
+	entsql "entgo.io/ent/dialect/sql"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
@@ -20,12 +24,14 @@ import (
 
 // Cancel rate limit configuration constants.
 const (
-	rateLimitUnitDay           = "day"
-	rateLimitUnitMinute        = "minute"
-	rateLimitUnitHour          = "hour"
-	rateLimitModeFixed         = "fixed"
-	checkPaidResultAlreadyPaid = "already_paid"
-	checkPaidResultCancelled   = "cancelled"
+	rateLimitUnitDay                  = "day"
+	rateLimitUnitMinute               = "minute"
+	rateLimitUnitHour                 = "hour"
+	rateLimitModeFixed                = "fixed"
+	checkPaidResultAlreadyPaid        = "already_paid"
+	checkPaidResultCancelled          = "cancelled"
+	checkPaidResultPaidUnconfirmed    = "paid_unconfirmed"
+	paymentAwaitingTradeNoAuditAction = "PAYMENT_AWAITING_TRADE_NO"
 
 	pendingProviderReconcileLimit = 20
 )
@@ -107,7 +113,7 @@ func (s *PaymentService) CancelOrder(ctx context.Context, orderID, userID int64)
 	if o.Status != OrderStatusPending {
 		return "", infraerrors.BadRequest("INVALID_STATUS", "order cannot be cancelled in current status")
 	}
-	return s.cancelCore(ctx, o, OrderStatusCancelled, fmt.Sprintf("user:%d", userID), "user cancelled order")
+	return s.cancelPendingOrder(ctx, o, fmt.Sprintf("user:%d", userID), "user cancelled order")
 }
 
 func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (string, error) {
@@ -118,18 +124,67 @@ func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (s
 	if o.Status != OrderStatusPending {
 		return "", infraerrors.BadRequest("INVALID_STATUS", "order cannot be cancelled in current status")
 	}
-	return s.cancelCore(ctx, o, OrderStatusCancelled, "admin", "admin cancelled order")
+	return s.cancelPendingOrder(ctx, o, "admin", "admin cancelled order")
+}
+
+func (s *PaymentService) cancelPendingOrder(ctx context.Context, o *dbent.PaymentOrder, operator, detail string) (string, error) {
+	outcome, err := s.cancelCore(ctx, o, OrderStatusCancelled, operator, detail)
+	if err != nil {
+		return "", err
+	}
+	switch outcome {
+	case checkPaidResultPaidUnconfirmed:
+		return "", infraerrors.Conflict("PAYMENT_CONFIRMATION_PENDING", "EasyPay reports this order as paid. The order is awaiting a transaction number and cannot be cancelled.")
+	case checkPaidResultAlreadyPaid:
+		if !orderMayHaveEasyPayConfirmationHold(o) {
+			return outcome, nil
+		}
+		held, err := paymentAwaitsTradeNo(ctx, s.entClient, o.ID)
+		if err != nil {
+			return "", err
+		}
+		if held {
+			return "", infraerrors.Conflict("ORDER_ALREADY_PAID", "This order has already been paid and cannot be cancelled.")
+		}
+	}
+	return outcome, nil
 }
 
 func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
 	if o.PaymentTradeNo != "" || o.PaymentType != "" {
-		if s.checkPaid(ctx, o) == checkPaidResultAlreadyPaid {
-			return checkPaidResultAlreadyPaid, nil
+		switch result := s.checkPaid(ctx, o); result {
+		case checkPaidResultAlreadyPaid, checkPaidResultPaidUnconfirmed:
+			return result, nil
 		}
 	}
-	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
+	client := s.entClient
+	var tx *dbent.Tx
+	if orderMayHaveEasyPayConfirmationHold(o) {
+		var err error
+		tx, err = client.Tx(ctx)
+		if err != nil {
+			return "", fmt.Errorf("begin order cancellation: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		client = tx.Client()
+	}
+	c, err := client.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
 	if err != nil {
 		return "", fmt.Errorf("update order status: %w", err)
+	}
+	if c > 0 && tx != nil {
+		// Query the hold after claiming the order row so this transaction
+		// sees evidence committed by a concurrent verifier.
+		held, err := paymentAwaitsTradeNo(ctx, tx.Client(), o.ID)
+		if err != nil {
+			return "", err
+		}
+		if held {
+			return checkPaidResultPaidUnconfirmed, nil
+		}
+		if err := tx.Commit(); err != nil {
+			return "", fmt.Errorf("commit order cancellation: %w", err)
+		}
 	}
 	if c > 0 {
 		auditAction := "ORDER_CANCELLED"
@@ -141,6 +196,79 @@ func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, 
 	return checkPaidResultCancelled, nil
 }
 
+func orderMayHaveEasyPayConfirmationHold(order *dbent.PaymentOrder) bool {
+	snapshot := psOrderProviderSnapshot(order)
+	if snapshot != nil && snapshot.ProviderKey != "" {
+		return strings.EqualFold(snapshot.ProviderKey, payment.TypeEasyPay)
+	}
+	providerKey := strings.TrimSpace(psStringValue(order.ProviderKey))
+	// Legacy orders can share a visible payment method across merchants.
+	// Their current registry mapping may differ from the merchant that
+	// recorded the hold.
+	return providerKey == "" || strings.EqualFold(providerKey, payment.TypeEasyPay)
+}
+
+func paymentAwaitsTradeNo(ctx context.Context, client *dbent.Client, orderID int64) (bool, error) {
+	held, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(strconv.FormatInt(orderID, 10)),
+		paymentauditlog.ActionEQ(paymentAwaitingTradeNoAuditAction),
+	).Exist(ctx)
+	if err != nil {
+		return false, fmt.Errorf("read EasyPay confirmation hold: %w", err)
+	}
+	return held, nil
+}
+
+func (s *PaymentService) markEasyPayAwaitingTradeNo(ctx context.Context, orderID int64, prov payment.Provider) error {
+	merchant := confirmedEasyPayMerchant(prov)
+	if merchant.Fingerprint == "" {
+		return fmt.Errorf("%w: EasyPay confirmation merchant is unknown", ErrPaymentUpstreamUnconfirmed)
+	}
+	detail, err := json.Marshal(struct {
+		easyPayConfirmationMerchant
+		Detail string `json:"detail"`
+	}{merchant, "EasyPay confirmed the payment amount. The transaction number is pending."})
+	if err != nil {
+		return err
+	}
+	held, err := paymentAwaitsTradeNo(ctx, s.entClient, orderID)
+	if err != nil || held {
+		return err
+	}
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin EasyPay confirmation hold: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Serialize with cancellation and expiry using the same order row.
+	// A repeated observation rolls back without changing the order.
+	claimed, err := tx.PaymentOrder.Update().Where(
+		paymentorder.IDEQ(orderID), paymentorder.StatusEQ(OrderStatusPending),
+	).SetStatus(OrderStatusPending).Save(ctx)
+	if err != nil {
+		return fmt.Errorf("claim pending order for EasyPay confirmation hold: %w", err)
+	}
+	if claimed == 0 {
+		return nil
+	}
+	held, err = paymentAwaitsTradeNo(ctx, tx.Client(), orderID)
+	if err != nil || held {
+		return err
+	}
+	if _, err := tx.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(orderID, 10)).
+		SetAction(paymentAwaitingTradeNoAuditAction).
+		SetOperator(payment.TypeEasyPay).
+		SetDetail(string(detail)).
+		Save(ctx); err != nil {
+		return fmt.Errorf("record EasyPay confirmation hold: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit EasyPay confirmation hold: %w", err)
+	}
+	return nil
+}
+
 func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) string {
 	return s.checkPaidWithOptions(ctx, o, checkPaidOptions{cancelIfUnpaid: true})
 }
@@ -150,9 +278,28 @@ func (s *PaymentService) reconcilePaid(ctx context.Context, o *dbent.PaymentOrde
 }
 
 func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.PaymentOrder, opts checkPaidOptions) string {
-	prov, err := s.getOrderProvider(ctx, o)
-	if err != nil {
-		return ""
+	var merchant *easyPayConfirmationMerchant
+	if o.Status == OrderStatusPending && orderMayHaveEasyPayConfirmationHold(o) {
+		var err error
+		merchant, err = findEasyPayConfirmationMerchant(ctx, s.entClient, o.ID)
+		if err != nil {
+			slog.Error("read EasyPay confirmation hold failed", "orderID", o.ID, "error", err)
+			return ""
+		}
+	}
+	var prov payment.Provider
+	if merchant != nil {
+		var err error
+		prov, err = s.heldEasyPayProvider(ctx, o, *merchant)
+		if err != nil {
+			return checkPaidResultPaidUnconfirmed
+		}
+	} else {
+		var err error
+		prov, err = s.getOrderProvider(ctx, o)
+		if err != nil {
+			return ""
+		}
 	}
 	queryRef := paymentOrderQueryReference(o, prov)
 	if queryRef == "" {
@@ -165,34 +312,67 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
 		return ""
 	}
+	if resp == nil {
+		return ""
+	}
+	if resp.Status == payment.ProviderStatusPaid && !isValidProviderAmount(resp.Amount) {
+		s.writeAuditLog(ctx, o.ID, "PAYMENT_INVALID_AMOUNT", prov.ProviderKey(), map[string]any{
+			"expected": o.PayAmount,
+			"paid":     resp.Amount,
+			"tradeNo":  resp.TradeNo,
+			"queryRef": queryRef,
+		})
+		slog.Warn("query upstream returned invalid paid amount", "orderID", o.ID, "queryRef", queryRef, "paid", resp.Amount)
+		retriedResp, retryOK := requeryPaidOrderOnce(ctx, prov, queryRef)
+		if !retryOK {
+			return ""
+		}
+		resp = retriedResp
+	}
+	if resp.Status == payment.ProviderStatusPaidUnconfirmed && prov.ProviderKey() == payment.TypeEasyPay {
+		if !easyPayQueryMatchesOrder(o, resp) {
+			return ""
+		}
+		if o.Status == OrderStatusPending {
+			if err := s.markEasyPayAwaitingTradeNo(ctx, o.ID, prov); err != nil {
+				slog.Error("record EasyPay confirmation hold failed", "orderID", o.ID, "error", err)
+			}
+		}
+		return checkPaidResultPaidUnconfirmed
+	}
 	if resp.Status == payment.ProviderStatusPaid {
-		if !isValidProviderAmount(resp.Amount) {
-			s.writeAuditLog(ctx, o.ID, "PAYMENT_INVALID_AMOUNT", prov.ProviderKey(), map[string]any{
-				"expected": o.PayAmount,
-				"paid":     resp.Amount,
-				"tradeNo":  resp.TradeNo,
-				"queryRef": queryRef,
-			})
-			slog.Warn("query upstream returned invalid paid amount", "orderID", o.ID, "queryRef", queryRef, "paid", resp.Amount)
-			retriedResp, retryOK := requeryPaidOrderOnce(ctx, prov, queryRef)
-			if !retryOK {
+		notificationTradeNo := o.PaymentTradeNo
+		upstreamTradeNo := strings.TrimSpace(resp.TradeNo)
+		easyPay := prov.ProviderKey() == payment.TypeEasyPay
+		if easyPay {
+			if upstreamTradeNo == "" {
 				return ""
 			}
-			resp = retriedResp
-		}
-		notificationTradeNo := o.PaymentTradeNo
-		if upstreamTradeNo := strings.TrimSpace(resp.TradeNo); paymentOrderShouldPersistUpstreamTradeNo(queryRef, upstreamTradeNo, notificationTradeNo) {
-			if _, updateErr := s.entClient.PaymentOrder.Update().
-				Where(paymentorder.IDEQ(o.ID)).
-				SetPaymentTradeNo(upstreamTradeNo).
-				Save(ctx); updateErr != nil {
-				slog.Error("persist upstream trade no during checkPaid failed", "orderID", o.ID, "tradeNo", upstreamTradeNo, "error", updateErr)
-			} else {
-				o.PaymentTradeNo = upstreamTradeNo
-			}
+			// EasyPay supplies the actual field even when it equals the
+			// site's lookup reference.
 			notificationTradeNo = upstreamTradeNo
 		}
-		if err := s.HandlePaymentNotification(ctx, &payment.PaymentNotification{TradeNo: notificationTradeNo, OrderID: o.OutTradeNo, Amount: resp.Amount, Status: payment.ProviderStatusSuccess, Metadata: resp.Metadata}, prov.ProviderKey()); err != nil {
+		if paymentOrderShouldPersistUpstreamTradeNo(queryRef, upstreamTradeNo, o.PaymentTradeNo) {
+			notificationTradeNo = upstreamTradeNo
+			// A pending legacy order may acquire an EasyPay hold during
+			// the query. Settlement performs its trade number write under
+			// the same order lock as that hold.
+			canBackfill := o.Status != OrderStatusPending || !orderMayHaveEasyPayConfirmationHold(o)
+			if canBackfill && (!easyPay || (o.Status == OrderStatusExpired && easyPayQueryMatchesOrder(o, resp))) {
+				// Keep active recovery of an expired order when a distinct,
+				// confirmed trade number refreshed its grace period.
+				if _, updateErr := s.entClient.PaymentOrder.Update().
+					Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(o.Status)).
+					SetPaymentTradeNo(upstreamTradeNo).
+					Save(ctx); updateErr != nil {
+					slog.Error("persist upstream trade no during checkPaid failed", "orderID", o.ID, "tradeNo", upstreamTradeNo, "error", updateErr)
+				}
+			}
+		}
+		if err := s.handlePaymentNotification(ctx, &payment.PaymentNotification{TradeNo: notificationTradeNo, OrderID: o.OutTradeNo, Amount: resp.Amount, Status: payment.ProviderStatusSuccess, Metadata: resp.Metadata}, prov.ProviderKey(), prov, false); err != nil {
+			if errors.Is(err, ErrPaymentUpstreamUnconfirmed) {
+				return checkPaidResultPaidUnconfirmed
+			}
 			slog.Error("fulfillment failed during checkPaid", "orderID", o.ID, "error", err)
 			// Still return already_paid — order was paid, fulfillment can be retried
 		}
@@ -209,6 +389,17 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 	return ""
 }
 
+func easyPayQueryMatchesOrder(order *dbent.PaymentOrder, resp *payment.QueryOrderResponse) bool {
+	if !paymentOrderAmountMatches(order, resp.Amount) {
+		return false
+	}
+	if err := validateProviderNotificationMetadata(order, payment.TypeEasyPay, resp.Metadata); err != nil {
+		slog.Warn("EasyPay confirmation merchant mismatch", "orderID", order.ID, "error", err)
+		return false
+	}
+	return true
+}
+
 func requeryPaidOrderOnce(ctx context.Context, prov payment.Provider, queryRef string) (*payment.QueryOrderResponse, bool) {
 	if prov == nil || strings.TrimSpace(queryRef) == "" {
 		return nil, false
@@ -220,10 +411,14 @@ func requeryPaidOrderOnce(ctx context.Context, prov payment.Provider, queryRef s
 		slog.Warn("query upstream retry failed", "queryRef", queryRef, "error", err)
 		return nil, false
 	}
-	if resp == nil || resp.Status != payment.ProviderStatusPaid || !isValidProviderAmount(resp.Amount) {
+	if resp == nil || !isValidProviderAmount(resp.Amount) {
 		return nil, false
 	}
-	return resp, true
+	if resp.Status == payment.ProviderStatusPaid ||
+		(prov.ProviderKey() == payment.TypeEasyPay && resp.Status == payment.ProviderStatusPaidUnconfirmed) {
+		return resp, true
+	}
+	return nil, false
 }
 
 func paymentOrderQueryReference(order *dbent.PaymentOrder, prov payment.Provider) string {
@@ -393,13 +588,20 @@ func normalizeOrderLookupOutTradeNo(raw string) (string, error) {
 }
 
 func (s *PaymentService) ExpireTimedOutOrders(ctx context.Context) (int, error) {
-	now := time.Now()
-	orders, err := s.entClient.PaymentOrder.Query().Where(paymentorder.StatusEQ(OrderStatusPending), paymentorder.ExpiresAtLTE(now)).All(ctx)
+	orders, err := s.entClient.PaymentOrder.Query().
+		Where(paymentorder.StatusEQ(OrderStatusPending), paymentorder.ExpiresAtLTE(time.Now()), func(orders *entsql.Selector) {
+			orders.Where(entsql.NotExists(easyPayConfirmationHolds(orders)))
+		}).
+		Order(dbent.Asc(paymentorder.FieldExpiresAt), dbent.Asc(paymentorder.FieldID)).
+		All(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("query expired: %w", err)
 	}
 	n := 0
 	for _, o := range orders {
+		if ctx.Err() != nil {
+			break
+		}
 		// Check upstream payment status before expiring — the user may have
 		// paid just before timeout and the webhook hasn't arrived yet.
 		outcome, _ := s.cancelCore(ctx, o, OrderStatusExpired, "system", "order expired")
@@ -407,11 +609,68 @@ func (s *PaymentService) ExpireTimedOutOrders(ctx context.Context) (int, error) 
 			slog.Info("order was paid during expiry", "orderID", o.ID)
 			continue
 		}
-		if outcome != "" {
+		if outcome == checkPaidResultCancelled {
 			n++
 		}
 	}
 	return n, nil
+}
+
+type easyPayHoldCursor struct {
+	afterID   int64
+	throughID int64
+}
+
+// reconcileExpiredEasyPayHolds gives paid orders their own retry budget.
+func (s *PaymentService) reconcileExpiredEasyPayHolds(ctx context.Context, cursor easyPayHoldCursor) (easyPayHoldCursor, error) {
+	query := s.entClient.PaymentOrder.Query().
+		Where(paymentorder.StatusEQ(OrderStatusPending), paymentorder.ExpiresAtLTE(time.Now()), func(orders *entsql.Selector) {
+			orders.Where(entsql.Exists(easyPayConfirmationHolds(orders)))
+		})
+	if cursor.throughID == 0 {
+		// Bound the round so new arrivals cannot continually delay
+		// another attempt for an older held order.
+		id, err := query.Clone().Order(dbent.Desc(paymentorder.FieldID)).FirstID(ctx)
+		if dbent.IsNotFound(err) {
+			return cursor, nil
+		}
+		if err != nil {
+			return cursor, fmt.Errorf("bound expired EasyPay confirmation holds: %w", err)
+		}
+		cursor.throughID = id
+	}
+	orders, err := query.Where(paymentorder.IDGT(cursor.afterID), paymentorder.IDLTE(cursor.throughID)).
+		Order(dbent.Asc(paymentorder.FieldID)).
+		Limit(pendingProviderReconcileLimit).
+		All(ctx)
+	if err != nil {
+		return cursor, fmt.Errorf("query expired EasyPay confirmation holds: %w", err)
+	}
+	for _, order := range orders {
+		if ctx.Err() != nil {
+			return cursor, nil
+		}
+		// A merchant that spends the entire deadline must not be first next time.
+		cursor.afterID = order.ID
+		s.reconcilePaid(ctx, order)
+	}
+	if cursor.afterID == cursor.throughID || len(orders) < pendingProviderReconcileLimit {
+		return easyPayHoldCursor{}, nil
+	}
+	return cursor, nil
+}
+
+func easyPayConfirmationHolds(orders *entsql.Selector) *entsql.Selector {
+	dialect := entsql.Dialect(orders.Dialect())
+	audit := dialect.Table(paymentauditlog.Table)
+	return dialect.Select(audit.C(paymentauditlog.FieldOrderID)).From(audit).
+		Where(entsql.And(
+			entsql.EQ(audit.C(paymentauditlog.FieldAction), paymentAwaitingTradeNoAuditAction),
+			entsql.P(func(b *entsql.Builder) {
+				b.Ident(audit.C(paymentauditlog.FieldOrderID)).WriteOp(entsql.OpEQ).
+					WriteString("CAST(").Ident(orders.C(paymentorder.FieldID)).WriteString(" AS TEXT)")
+			}),
+		))
 }
 
 // getOrderProvider creates a provider using the order's original instance config.
