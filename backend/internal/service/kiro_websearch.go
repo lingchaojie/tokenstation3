@@ -183,9 +183,6 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			}
 			return nil, failure
 		}
-		if iteration == 0 {
-			cachePlan.commit()
-		}
 		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
 			account != nil && CaptureMayApplyFor(c, string(account.Platform))
 		captureLimit := 0
@@ -213,6 +210,9 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			}
 			return streamResult, streamErr
 		}
+
+		s.acceptKiroRuntimeResponse(ctx, account, cachePlan)
+		cachePlan = nil
 
 		analysis := kiropkg.AnalyzeBufferedStream(chunks)
 		if analysis.HasWebSearchToolUse && strings.TrimSpace(analysis.WebSearchQuery) != "" && iteration+1 < kiroMaxWebSearchIterations {
@@ -287,7 +287,6 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 	requestID := ""
 	cachePlan := s.prepareKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 	cacheUsage := cachePlan.result()
-	cacheCommitted := false
 
 	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
 		s.prefetchKiroWebSearchDescription(ctx, account, token)
@@ -327,10 +326,6 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 			}
 			return nil, failure
 		}
-		if !cacheCommitted {
-			cachePlan.commit()
-			cacheCommitted = true
-		}
 		captureEnabled := s.cfg != nil && s.cfg.Gateway.Capture.Enabled &&
 			account != nil && CaptureMayApplyFor(c, string(account.Platform))
 		captureLimit := 0
@@ -354,6 +349,8 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 			}
 			return nil, newInvalidProviderResponseFailover(resp, "failed to parse KIRO WebSearch provider event stream: "+sanitizeStreamError(parseErr))
 		}
+		s.acceptKiroRuntimeResponse(ctx, account, cachePlan)
+		cachePlan = nil
 		if requestID == "" {
 			requestID = buildKiroRequestID(resp)
 		}

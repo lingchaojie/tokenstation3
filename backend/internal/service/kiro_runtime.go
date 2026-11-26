@@ -408,9 +408,6 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 
 	cachePlan := s.prepareKiroCacheEmulationUsage(ctx, account, parsed.Group, body, mappedModel, inputTokens)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		cachePlan.commit()
-	}
 	cacheUsage := cachePlan.result()
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	captureLimit := 0
@@ -430,6 +427,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			return nil, s.handleKiroStreamFailure(ctx, c, account, mappedModel, body, failure, writeGatewayErrorResponse)
 		}
 		return nil, newInvalidProviderResponseFailover(resp, "failed to parse KIRO provider event stream: "+sanitizeStreamError(err))
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		s.acceptKiroRuntimeResponse(ctx, account, cachePlan)
 	}
 
 	c.Header("Content-Type", "application/json")
@@ -527,7 +527,6 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 	}
 	finishRawCapture := beginCaptureResponse(c, resp, captureEnabled, captureLimit)
 	cachePlan := s.prepareKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-	cachePlan.commit()
 	cacheUsage := cachePlan.result()
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 
@@ -567,6 +566,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 			_ = pw.CloseWithError(streamErr)
 			return
 		}
+		// The pipe may already have delivered message_stop. Closing its reader
+		// cancels translatorCtx, so record acceptance with the request context.
+		s.acceptKiroRuntimeResponse(ctx, account, cachePlan)
 		_ = pw.Close()
 	}()
 
@@ -575,6 +577,17 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		Header:     wrappedHeaders,
 		Body:       translatedBody,
 	}, inputTokens, nil
+}
+
+// acceptKiroRuntimeResponse records state only after the native parser has
+// accepted the response. A cache plan can supply modeled usage before it is
+// committed, including for a partially delivered response that later fails.
+func (s *GatewayService) acceptKiroRuntimeResponse(ctx context.Context, account *Account, cachePlan *kiroCacheEmulationPlan) {
+	cachePlan.commit()
+	if err := s.markKiroSuccess(ctx, account.ID, buildKiroAccountKey(account)); err != nil {
+		// An accepted response can already have reached a streaming client.
+		logger.FromContext(ctx).Warn("kiro.runtime_success_cooldown_update_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+	}
 }
 
 func (s *GatewayService) executeKiroUpstream(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, kiropkg.KiroRequestContext, error) {
@@ -759,13 +772,6 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				return resp, requestCtx, nil
 			}
 
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if err := s.markKiroSuccess(ctx, account.ID, accountKey); err != nil {
-					abortKiroNativeCaptureAttempt(ctx)
-					_ = resp.Body.Close()
-					return nil, requestCtx, err
-				}
-			}
 			return resp, requestCtx, nil
 		}
 	}

@@ -1847,3 +1847,131 @@ func TestGatewayServiceIsAccountSchedulableForSelectionSkipsActiveKiroCooldown(t
 	}
 	require.False(t, svc.isAccountSchedulableForSelection(account))
 }
+
+type kiroRuntimeAcceptanceStore struct {
+	stubKiroCooldownStore
+	failures  int
+	successes int
+}
+
+func (s *kiroRuntimeAcceptanceStore) Mark429(context.Context, string) (time.Duration, error) {
+	s.failures++
+	return 0, nil
+}
+
+func (s *kiroRuntimeAcceptanceStore) MarkSuccess(context.Context, string) error {
+	s.successes++
+	if s.successErr != nil {
+		return s.successErr
+	}
+	s.failures = 0
+	return nil
+}
+
+func TestKiroRuntimeOnlyAcceptedResponsesCommitCacheAndResetCooldown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const endpoint = "https://q.us-east-1.amazonaws.com/mcp"
+	kiroWebSearchDescCache.Store(endpoint, "Search the web")
+	t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+
+	for _, webSearch := range []bool{false, true} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("web_search_%t/stream_%t", webSearch, stream), func(t *testing.T) {
+				resetKiroCacheTracker()
+				account := newKiroCacheTransactionAccount(818, "RUNTIME-ACCEPTANCE")
+				account.Credentials["model_mapping"] = map[string]any{"claude-sonnet-4-6": "claude-sonnet-4-6"}
+				group := kiroCacheGroup(1)
+				fields := fmt.Sprintf(`{"stream":%t,`, stream)
+				if webSearch {
+					fields += `"tools":[{"type":"web_search_20250305","name":"web_search"}],`
+				}
+				body := []byte(strings.Replace(string(kiroCacheRequestBody("runtime acceptance", false)), "{", fields, 1))
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+				require.NoError(t, err)
+				parsed.Group = group
+
+				throttle := kiroAWSFailureFrame(t, "", [2]string{":message-type", "error"}, [2]string{":error-code", "ThrottlingException"})
+				content := buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "partial native output"})
+				store := &kiroRuntimeAcceptanceStore{}
+				svc := &GatewayService{kiroCooldownStore: store, tlsFPProfileService: &TLSFingerprintProfileService{}}
+				for i, raw := range [][]byte{throttle, append(content, throttle...)} {
+					rec := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(rec)
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+					responses := []*http.Response{newJSONResponse(http.StatusOK, string(raw))}
+					if webSearch {
+						mcp := newJSONResponse(http.StatusOK, `{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`)
+						responses = append([]*http.Response{mcp}, responses...)
+					}
+					svc.httpUpstream = &queuedHTTPUpstream{responses: responses}
+					result, forwardErr := svc.forwardKiroMessages(c.Request.Context(), c, account, parsed, time.Now())
+					require.Error(t, forwardErr)
+					if i == 1 && stream && !webSearch {
+						require.NotNil(t, result)
+						require.Contains(t, rec.Body.String(), "partial native output")
+					} else {
+						require.Nil(t, result)
+						require.Empty(t, rec.Body.String())
+					}
+
+					plan := svc.prepareKiroCacheEmulationUsage(c.Request.Context(), account, group, body, parsed.Model, 2000)
+					require.NotNil(t, plan.result())
+					require.Equal(t, 2000, plan.result().CacheCreationInputTokens)
+					require.Zero(t, plan.result().CacheReadInputTokens)
+					if webSearch {
+						require.Equal(t, i+1, store.successes, "one success for each independent MCP call")
+						require.Equal(t, 1, store.failures)
+					} else {
+						require.Zero(t, store.successes)
+						require.Equal(t, i+1, store.failures)
+					}
+				}
+
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+				responses := []*http.Response{newKiroCacheTransactionSuccessResponse(t, "accepted")}
+				if webSearch {
+					mcp := newJSONResponse(http.StatusOK, `{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`)
+					responses = append([]*http.Response{mcp}, responses...)
+				}
+				svc.httpUpstream = &queuedHTTPUpstream{responses: responses}
+				result, err := svc.forwardKiroMessages(c.Request.Context(), c, account, parsed, time.Now())
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Contains(t, rec.Body.String(), "accepted")
+				require.Zero(t, store.failures)
+				if webSearch {
+					require.Equal(t, 4, store.successes)
+				} else {
+					require.Equal(t, 1, store.successes)
+				}
+				plan := svc.prepareKiroCacheEmulationUsage(c.Request.Context(), account, group, body, parsed.Model, 2000)
+				require.NotNil(t, plan.result())
+				require.Zero(t, plan.result().CacheCreationInputTokens)
+				require.Equal(t, 2000, plan.result().CacheReadInputTokens)
+			})
+		}
+	}
+}
+
+func TestKiroRuntimeKeepsAcceptedOutputWhenCooldownResetFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newKiroCacheTransactionAccount(819, "RUNTIME-RESET-FAILURE")
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	svc := &GatewayService{
+		kiroCooldownStore:   &stubKiroCooldownStore{successErr: errors.New("cooldown reset unavailable")},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		httpUpstream:        &queuedHTTPUpstream{responses: []*http.Response{newKiroCacheTransactionSuccessResponse(t, "accepted despite reset failure")}},
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	result, err := svc.forwardKiroMessages(c.Request.Context(), c, account, parsed, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.CaptureResponseComplete)
+	require.Contains(t, rec.Body.String(), "accepted despite reset failure")
+}
