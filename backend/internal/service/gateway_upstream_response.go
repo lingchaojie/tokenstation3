@@ -1420,6 +1420,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					if semanticOutput {
 						return streamResult(), err
 					}
+					if kiroStreamFailureFromResponse(resp, err) != nil {
+						// A native Kiro exception before semantic output must not
+						// commit staged preambles or synthetic WebSearch events.
+						return streamResult(), err
+					}
 					var sseErr *sseStreamErrorEventError
 					if errors.As(err, &sseErr) {
 						// Match upstream's commit boundary: protocol/preamble bytes that

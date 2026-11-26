@@ -10,22 +10,23 @@ import (
 )
 
 const (
-	kiroErrorAuthError              = "auth_error"
-	kiroErrorMonthlyRequest         = "monthly_request_count"
-	kiroErrorProfileError           = "profile_error"
-	kiroErrorQuotaExhausted         = "quota_exhausted"
-	kiroErrorOverageExhausted       = "overage_exhausted"
-	kiroErrorRateLimited            = "rate_limited"
-	kiroErrorSuspended              = "suspended"
-	kiroErrorUsageForbidden         = "usage_forbidden"
-	kiroErrorUpstreamTransient      = "upstream_transient"
-	kiroErrorBadRequestSchema       = "bad_request_schema"
-	kiroErrorBadRequestToolPairing  = "bad_request_tool_pairing"
-	kiroErrorBadRequestInvalidModel = "bad_request_invalid_model"
-	kiroErrorBadRequestAuth         = "bad_request_auth"
-	kiroErrorBadRequestQuota        = "bad_request_quota"
-	kiroErrorBadRequestUnknown      = "bad_request_unknown"
-	kiroErrorRefreshTokenInvalid    = "refresh_token_invalid"
+	kiroErrorAuthError               = "auth_error"
+	kiroErrorMonthlyRequest          = "monthly_request_count"
+	kiroErrorProfileError            = "profile_error"
+	kiroErrorQuotaExhausted          = "quota_exhausted"
+	kiroErrorOverageExhausted        = "overage_exhausted"
+	kiroErrorRateLimited             = "rate_limited"
+	kiroErrorSuspended               = "suspended"
+	kiroErrorUsageForbidden          = "usage_forbidden"
+	kiroErrorUpstreamTransient       = "upstream_transient"
+	kiroErrorBadRequestSchema        = "bad_request_schema"
+	kiroErrorBadRequestContextLength = "bad_request_context_length"
+	kiroErrorBadRequestToolPairing   = "bad_request_tool_pairing"
+	kiroErrorBadRequestInvalidModel  = "bad_request_invalid_model"
+	kiroErrorBadRequestAuth          = "bad_request_auth"
+	kiroErrorBadRequestQuota         = "bad_request_quota"
+	kiroErrorBadRequestUnknown       = "bad_request_unknown"
+	kiroErrorRefreshTokenInvalid     = "refresh_token_invalid"
 
 	kiroQuotaStateNormal           = "normal"
 	kiroQuotaStateOverageActive    = "overage_active"
@@ -105,6 +106,8 @@ func classifyKiroError(err error) kiroErrorClassification {
 
 func classifyKiroBadRequest(trimmed, lower string) kiroErrorClassification {
 	switch {
+	case strings.Contains(lower, strings.ToLower(kiroContextLengthCode)), strings.Contains(lower, "input is too long"):
+		return kiroErrorClassification{Category: kiroErrorBadRequestContextLength, StatusCode: http.StatusBadRequest, Message: trimmed}
 	case looksLikeKiroBadRequestSchemaError(lower):
 		return kiroErrorClassification{Category: kiroErrorBadRequestSchema, StatusCode: http.StatusBadRequest, Message: trimmed}
 	case looksLikeKiroBadRequestToolPairingError(lower):

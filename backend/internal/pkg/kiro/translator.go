@@ -280,8 +280,12 @@ type toolUseState struct {
 }
 
 type eventStreamMessage struct {
-	EventType string
-	Payload   []byte
+	EventType     string
+	messageType   string
+	exceptionType string
+	errorCode     string
+	errorMessage  string
+	Payload       []byte
 }
 
 type kiroSemanticEventType string
@@ -649,6 +653,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	currentMessageID := ""
 	providerPayloadObserved := false
 	providerTerminalObserved := false
+	outputLimitObserved := false
 	var outputTextBuf strings.Builder
 	observeOutputForEstimate := func(text string) error {
 		if text == "" {
@@ -1491,7 +1496,24 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err != nil {
 			return nil, err
 		}
-		if msg == nil || len(msg.Payload) == 0 {
+		if exc := msg.upstreamException(); exc != nil {
+			if providerTerminalObserved {
+				return nil, errors.New("kiro provider emitted an exception after terminal")
+			}
+			if exc.Type == kiroOutputLimitException {
+				outputLimitObserved = true
+				continue
+			}
+			if !messageStartSent {
+				return nil, exc
+			}
+			partial := resolveKiroStreamUsage(usage, inputTokens, outputTextBuf.String(), requestCtx.CacheEmulationUsage)
+			return &StreamResult{Usage: partial, FirstDeltaDur: firstDelta}, exc
+		}
+		if len(msg.Payload) == 0 {
+			if err := validateKiroKnownEventShape(msg.EventType, nil); err != nil {
+				return nil, fmt.Errorf("validate kiro event %q payload: %w", msg.EventType, err)
+			}
 			continue
 		}
 
@@ -1520,7 +1542,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			providerTerminalObserved = true
 		}
 	}
-	if !providerPayloadObserved {
+	if !providerPayloadObserved && !outputLimitObserved {
 		return nil, ErrNoRecognizableProviderPayload
 	}
 
@@ -1557,12 +1579,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := closeThinking(); err != nil {
 		return nil, err
 	}
-	if usage.OutputTokens == 0 && !usage.upstreamOutputTokensPresent {
-		if est := anthropictokenizer.CountTokens(outputTextBuf.String()); est > 0 {
-			usage.OutputTokens = est
-		}
+	usage = resolveKiroStreamUsage(usage, inputTokens, outputTextBuf.String(), nil)
+	if outputLimitObserved && stopReason != "stop_sequence" {
+		stopReason = "max_tokens"
 	}
-	usage = resolveKiroUsage(usage, inputTokens)
 	switch stopReason {
 	case "max_tokens", "stop_sequence":
 	case "":
@@ -1613,8 +1633,15 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		Usage:                    usage,
 		StopReason:               stopReason,
 		FirstDeltaDur:            firstDelta,
-		ProviderTerminalObserved: providerTerminalObserved,
+		ProviderTerminalObserved: providerTerminalObserved || outputLimitObserved,
 	}, nil
+}
+
+func resolveKiroStreamUsage(usage Usage, inputTokens int, outputText string, simulated *Usage) Usage {
+	if usage.OutputTokens == 0 && !usage.upstreamOutputTokensPresent {
+		usage.OutputTokens = anthropictokenizer.CountTokens(outputText)
+	}
+	return mergeKiroCacheEmulationUsage(resolveKiroUsage(usage, inputTokens), simulated)
 }
 
 func extractSystemPrompt(claudeBody []byte) string {
@@ -3178,6 +3205,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 	reasoningOpen := false
 	providerPayloadObserved := false
 	providerTerminalObserved := false
+	outputLimitObserved := false
 	closeReasoning := func() {
 		if reasoningOpen {
 			_, _ = content.WriteString(thinkingEndTag)
@@ -3240,7 +3268,20 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 		if err != nil {
 			return "", nil, usage, stopReason, providerTerminalObserved, err
 		}
-		if msg == nil || len(msg.Payload) == 0 {
+		if exc := msg.upstreamException(); exc != nil {
+			if providerTerminalObserved {
+				return "", nil, usage, stopReason, providerTerminalObserved, errors.New("kiro provider emitted an exception after terminal")
+			}
+			if exc.Type == kiroOutputLimitException {
+				outputLimitObserved = true
+				continue
+			}
+			return "", nil, usage, stopReason, false, exc
+		}
+		if len(msg.Payload) == 0 {
+			if err := validateKiroKnownEventShape(msg.EventType, nil); err != nil {
+				return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("validate kiro event %q payload: %w", msg.EventType, err)
+			}
 			continue
 		}
 
@@ -3315,7 +3356,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 			providerTerminalObserved = true
 		}
 	}
-	if !providerPayloadObserved {
+	if !providerPayloadObserved && !outputLimitObserved {
 		return "", nil, usage, "", providerTerminalObserved, ErrNoRecognizableProviderPayload
 	}
 	closeReasoning()
@@ -3356,6 +3397,9 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 			usage.TotalTokens = total
 		}
 	}
+	if outputLimitObserved && stopReason != "stop_sequence" {
+		stopReason = "max_tokens"
+	}
 	switch stopReason {
 	case "max_tokens", "stop_sequence":
 	default:
@@ -3365,7 +3409,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 			stopReason = "end_turn"
 		}
 	}
-	return cleanText, toolUses, usage, stopReason, providerTerminalObserved, nil
+	return cleanText, toolUses, usage, stopReason, providerTerminalObserved || outputLimitObserved, nil
 }
 
 func kiroProviderPayloadRecognized(eventType string, event map[string]any, semanticEvents []kiroSemanticEvent) bool {
@@ -4248,81 +4292,98 @@ func readEventStreamMessage(reader *bufio.Reader) (*eventStreamMessage, error) {
 	if h.Sum32() != messageCRC {
 		return nil, errors.New("kiro eventstream message CRC mismatch")
 	}
-	eventType, err := extractEventType(remaining[:headersLength])
-	if err != nil {
+	msg := &eventStreamMessage{Payload: remaining[headersLength : len(remaining)-4]}
+	if err := readEventStreamHeaders(remaining[:headersLength], msg); err != nil {
 		return nil, err
 	}
-	if eventType == "" {
-		return nil, errors.New("kiro eventstream frame omitted :event-type")
+	msg.messageType = strings.ToLower(strings.TrimSpace(msg.messageType))
+	switch msg.messageType {
+	case "", "event":
+		if msg.EventType == "" {
+			return nil, errors.New("kiro eventstream frame omitted :event-type")
+		}
+		if msg.exceptionType != "" || msg.errorCode != "" || msg.errorMessage != "" {
+			return nil, errors.New("kiro eventstream frame contains conflicting event and error headers")
+		}
+	case "exception":
+		if msg.EventType != "" || msg.errorCode != "" {
+			return nil, errors.New("kiro eventstream frame contains conflicting exception headers")
+		}
+	case "error":
+		if msg.EventType != "" || msg.exceptionType != "" {
+			return nil, errors.New("kiro eventstream frame contains conflicting error headers")
+		}
+	default:
+		return nil, errors.New("kiro eventstream frame has an unsupported :message-type")
 	}
-	payloadStart := headersLength
-	payloadEnd := uint32(len(remaining)) - 4
-	if payloadStart >= payloadEnd {
-		return &eventStreamMessage{EventType: eventType}, nil
-	}
-	return &eventStreamMessage{
-		EventType: eventType,
-		Payload:   remaining[payloadStart:payloadEnd],
-	}, nil
+	return msg, nil
 }
 
-func extractEventType(headers []byte) (string, error) {
+func readEventStreamHeaders(headers []byte, msg *eventStreamMessage) error {
 	offset := 0
-	eventType := ""
 	seen := make(map[string]struct{})
 	for offset < len(headers) {
 		nameLen := int(headers[offset])
 		offset++
 		if nameLen == 0 {
-			return "", errors.New("invalid kiro eventstream empty header name")
+			return errors.New("invalid kiro eventstream empty header name")
 		}
 		if offset+nameLen > len(headers) {
-			return "", errors.New("invalid kiro eventstream header name")
+			return errors.New("invalid kiro eventstream header name")
 		}
 		name := string(headers[offset : offset+nameLen])
 		if !utf8.ValidString(name) {
-			return "", errors.New("invalid kiro eventstream header name encoding")
+			return errors.New("invalid kiro eventstream header name encoding")
 		}
 		offset += nameLen
 		if _, duplicate := seen[name]; duplicate {
-			return "", fmt.Errorf("duplicate kiro eventstream header %q", name)
+			return fmt.Errorf("duplicate kiro eventstream header %q", name)
 		}
 		seen[name] = struct{}{}
 		if offset >= len(headers) {
-			return "", errors.New("invalid kiro eventstream header type")
+			return errors.New("invalid kiro eventstream header type")
 		}
 		valueType := headers[offset]
 		offset++
 		if strings.HasPrefix(name, ":") && valueType != 7 {
-			return "", fmt.Errorf("invalid kiro eventstream pseudo-header %q type %d", name, valueType)
+			return fmt.Errorf("invalid kiro eventstream pseudo-header %q type %d", name, valueType)
 		}
 		if valueType == 7 {
 			if offset+2 > len(headers) {
-				return "", errors.New("invalid kiro eventstream string header length")
+				return errors.New("invalid kiro eventstream string header length")
 			}
 			valueLen := int(binary.BigEndian.Uint16(headers[offset : offset+2]))
 			offset += 2
 			if offset+valueLen > len(headers) {
-				return "", errors.New("invalid kiro eventstream string header value")
+				return errors.New("invalid kiro eventstream string header value")
 			}
 			valueBytes := headers[offset : offset+valueLen]
 			if !utf8.Valid(valueBytes) {
-				return "", fmt.Errorf("kiro eventstream header %q has invalid UTF-8 value", name)
+				return fmt.Errorf("kiro eventstream header %q has invalid UTF-8 value", name)
 			}
 			value := string(valueBytes)
 			offset += valueLen
-			if name == ":event-type" {
-				eventType = value
+			switch name {
+			case ":event-type":
+				msg.EventType = value
+			case ":message-type":
+				msg.messageType = value
+			case ":exception-type":
+				msg.exceptionType = value
+			case ":error-code":
+				msg.errorCode = value
+			case ":error-message":
+				msg.errorMessage = value
 			}
 			continue
 		}
 		next, ok := skipHeaderValue(headers, offset, valueType)
 		if !ok {
-			return "", fmt.Errorf("invalid kiro eventstream header %q", name)
+			return fmt.Errorf("invalid kiro eventstream header %q", name)
 		}
 		offset = next
 	}
-	return eventType, nil
+	return nil
 }
 
 func skipHeaderValue(headers []byte, offset int, valueType byte) (int, bool) {

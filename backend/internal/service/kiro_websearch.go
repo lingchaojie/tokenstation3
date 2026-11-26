@@ -206,6 +206,11 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		}()
 		finishRawCapture()
 		if streamErr != nil {
+			// The current iteration's chunks are still buffered, so none of
+			// its partial usage can be attributed to downstream output.
+			if failure := s.observeKiroStreamFailure(ctx, account, streamErr, resp, nil); failure != nil {
+				return nil, failure
+			}
 			return streamResult, streamErr
 		}
 
@@ -344,6 +349,9 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 		}()
 		finishRawCapture()
 		if parseErr != nil {
+			if failure := s.observeKiroStreamFailure(ctx, account, parseErr, resp, nil); failure != nil {
+				return nil, s.handleKiroStreamFailure(ctx, c, account, mappedModel, currentBody, failure, writeGatewayErrorResponse)
+			}
 			return nil, newInvalidProviderResponseFailover(resp, "failed to parse KIRO WebSearch provider event stream: "+sanitizeStreamError(parseErr))
 		}
 		if requestID == "" {

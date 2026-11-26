@@ -3905,12 +3905,20 @@ func buildEventStreamFrame(t *testing.T, eventType string, payload any) []byte {
 func buildRawEventStreamFrame(t *testing.T, eventType string, payloadBytes []byte) []byte {
 	t.Helper()
 
+	return buildRawEventStreamFrameWithHeaders(t, payloadBytes, [2]string{":event-type", eventType})
+}
+
+func buildRawEventStreamFrameWithHeaders(t *testing.T, payloadBytes []byte, fields ...[2]string) []byte {
+	t.Helper()
+
 	headers := bytes.NewBuffer(nil)
-	_ = headers.WriteByte(byte(len(":event-type")))
-	_, _ = headers.WriteString(":event-type")
-	_ = headers.WriteByte(7)
-	require.NoError(t, binary.Write(headers, binary.BigEndian, uint16(len(eventType))))
-	_, _ = headers.WriteString(eventType)
+	for _, field := range fields {
+		_ = headers.WriteByte(byte(len(field[0])))
+		_, _ = headers.WriteString(field[0])
+		_ = headers.WriteByte(7)
+		require.NoError(t, binary.Write(headers, binary.BigEndian, uint16(len(field[1]))))
+		_, _ = headers.WriteString(field[1])
+	}
 
 	totalLength := uint32(12 + headers.Len() + len(payloadBytes) + 4)
 	frame := bytes.NewBuffer(nil)
@@ -4088,4 +4096,68 @@ func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testin
 	require.Equal(t, "<system-reminder>\nTRAILING NOTE\n</system-reminder>", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Greater(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int(), int64(0))
 	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "TRAILING NOTE")
+}
+
+func TestKiroAWSOutputLimitFramePreservesTrailingUsageAndTerminal(t *testing.T) {
+	var body bytes.Buffer
+	body.Write(buildRawEventStreamFrameWithHeaders(t, []byte(`{"content":"partial"}`),
+		[2]string{":message-type", "event"}, [2]string{":event-type", "assistantResponseEvent"}))
+	body.Write(buildRawEventStreamFrameWithHeaders(t, nil,
+		[2]string{":message-type", "exception"}, [2]string{":exception-type", "ContentLengthExceededException"}))
+	body.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"tokenUsage": map[string]any{"inputTokens": 31, "outputTokens": 11},
+	}))
+	for _, trailingStop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("regular_stop_%t", trailingStop), func(t *testing.T) {
+			input := append([]byte(nil), body.Bytes()...)
+			if trailingStop {
+				input = append(input, buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"})...)
+			}
+			result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(input), "claude-sonnet-4-6", KiroRequestContext{})
+			require.NoError(t, err)
+			require.True(t, result.ProviderTerminalObserved)
+			require.Equal(t, "max_tokens", result.StopReason)
+			require.Equal(t, 11, result.Usage.OutputTokens)
+
+			var out bytes.Buffer
+			stream, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(input), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
+			require.NoError(t, err)
+			require.True(t, stream.ProviderTerminalObserved)
+			require.Equal(t, "max_tokens", stream.StopReason)
+			require.Equal(t, 11, stream.Usage.OutputTokens)
+			require.Contains(t, out.String(), "event: message_stop")
+		})
+	}
+}
+
+func TestKiroAWSExceptionFramesPreserveStrictDecoding(t *testing.T) {
+	errorFrame := buildRawEventStreamFrameWithHeaders(t, nil,
+		[2]string{":message-type", "error"}, [2]string{":error-code", "InternalServerException"})
+	corrupt := append([]byte(nil), errorFrame...)
+	corrupt[len(corrupt)-1] ^= 0xff
+	terminal := buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"})
+	for _, tc := range []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{"bad_message_crc", corrupt, "message CRC"},
+		{"conflicting_headers", buildRawEventStreamFrameWithHeaders(t, []byte(`{"content":"untrusted"}`),
+			[2]string{":message-type", "exception"}, [2]string{":event-type", "assistantResponseEvent"},
+			[2]string{":exception-type", "ContentLengthExceededException"}), "conflicting"},
+		{"exception_after_terminal", append(terminal, errorFrame...), "after terminal"},
+		{"empty_known_content", buildRawEventStreamFrameWithHeaders(t, nil,
+			[2]string{":message-type", "event"}, [2]string{":event-type", "assistantResponseEvent"}), "payload"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(tc.body), "claude-sonnet-4-6", KiroRequestContext{})
+			require.ErrorContains(t, err, tc.want)
+			require.Nil(t, result)
+			var out bytes.Buffer
+			stream, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(tc.body), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
+			require.ErrorContains(t, err, tc.want)
+			require.Nil(t, stream)
+			require.Empty(t, out.String())
+		})
+	}
 }

@@ -42,6 +42,7 @@ type kiroTranslatedStreamBody struct {
 	stageSyntheticWebSearchEvents bool
 	providerTerminalKnown         atomic.Bool
 	providerTerminalObserved      atomic.Bool
+	streamFailure                 atomic.Pointer[kiroStreamFailure]
 	closeOnce                     sync.Once
 	closeErr                      error
 }
@@ -248,6 +249,24 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				streamResult.responseComplete = providerTerminal
 			}
 		}
+		if failure := kiroStreamFailureFromResponse(resp, err); failure != nil {
+			if !c.Writer.Written() && (streamResult == nil || !streamResult.clientDisconnect) {
+				return nil, s.handleKiroStreamFailure(ctx, c, account, mappedModel, body, failure, writeGatewayErrorResponse)
+			}
+			if streamResult == nil || !streamResult.clientDisconnect {
+				status, _ := failure.statusAndReason()
+				writeGatewayErrorResponse(c, mapUpstreamStatusCode(status), claudeErrorType(status), failure.normalizedMessage(status))
+				MarkResponseCommitted(c)
+			}
+			if streamResult != nil && streamResult.semanticOutput {
+				failure.applyPartialUsage(streamResult.usage)
+			}
+			partial := partialStreamUsageResult(ctx, c, resp, streamResult, originalModel, upstreamModel, startTime, failure)
+			if partial == nil {
+				partial = failedForwardResultWithCapture(c, resp, originalModel, upstreamModel, true, startTime)
+			}
+			return finalizeKiroCapture(c, partial), failure
+		}
 		if err != nil {
 			resultErr := err
 			var failoverErr *UpstreamFailoverError
@@ -407,6 +426,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(bytes.NewReader(providerBody), originalModel, requestCtx)
 	finishRawCapture()
 	if err != nil {
+		if failure := s.observeKiroStreamFailure(ctx, account, err, resp, nil); failure != nil {
+			return nil, s.handleKiroStreamFailure(ctx, c, account, mappedModel, body, failure, writeGatewayErrorResponse)
+		}
 		return nil, newInvalidProviderResponseFailover(resp, "failed to parse KIRO provider event stream: "+sanitizeStreamError(err))
 	}
 
@@ -461,6 +483,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 			streamResult, streamErr := s.streamKiroWebSearchAsAnthropic(translatorCtx, c, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cachePlan)
 			translatedBody.setProviderTerminalObservation(streamResult != nil && streamResult.ProviderTerminalObserved)
 			if streamErr != nil {
+				var failure *kiroStreamFailure
+				if errors.As(streamErr, &failure) {
+					translatedBody.writeStreamFailure(pw, failure)
+				}
 				_ = pw.CloseWithError(streamErr)
 				return
 			}
@@ -533,7 +559,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, c 
 		finishRawCapture()
 		if streamErr != nil {
 			clientCancellation := isClientCausalCancellation(ctx, streamErr, ctx != nil && errors.Is(ctx.Err(), context.Canceled))
-			if !clientCancellation {
+			if failure := s.observeKiroStreamFailure(translatorCtx, account, streamErr, resp, streamResult); failure != nil {
+				translatedBody.writeStreamFailure(pw, failure)
+			} else if !clientCancellation {
 				_, _ = io.WriteString(pw, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"stream interrupted\"}}\n\n")
 			}
 			_ = pw.CloseWithError(streamErr)
@@ -662,9 +690,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				if readErr != nil {
 					return nil, requestCtx, newProviderHTTPError(account, resp, respBody, false)
 				}
-				classification := classifyKiroHTTPError(resp.StatusCode, string(respBody))
-				if classification.Category == kiroErrorMonthlyRequest {
-					s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))
+				if reason := kiroHTTPMonthlyQuotaReason(resp.StatusCode, respBody); reason != "" {
+					s.parkKiroMonthlyQuota(ctx, account, reason)
 				}
 				return nil, requestCtx, &UpstreamFailoverError{
 					StatusCode:              resp.StatusCode,
@@ -948,24 +975,28 @@ func (s *GatewayService) markKiroAuthTemporarilyUnavailable(ctx context.Context,
 	_ = s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason)
 }
 
-func (s *GatewayService) markKiroMonthlyRequestCountRateLimited(ctx context.Context, account *Account, body string) {
-	if s == nil || s.accountRepo == nil || account == nil {
+func (s *GatewayService) parkKiroMonthlyQuota(ctx context.Context, account *Account, reason string) {
+	if s == nil || s.accountRepo == nil || !isKiroDirectModeAccount(account) {
 		return
 	}
 	resetAt := nextKiroMonthlyResetUTC(time.Now())
-	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
-		logger.L().Warn("kiro monthly request count rate-limit failed",
+	var err error
+	if reason == kiroOverageLimitCode {
+		// A concurrent native 2xx clears rate-limit fields and a 429 can
+		// shorten those fields. Overage uses the monotonic scheduler park.
+		err = s.accountRepo.SetTempUnschedulable(ctx, account.ID, resetAt, reason)
+	} else {
+		err = s.accountRepo.SetRateLimited(ctx, account.ID, resetAt)
+	}
+	if err != nil {
+		logger.L().Warn("kiro monthly quota parking failed",
 			zap.Int64("account_id", account.ID),
 			zap.Time("reset_at", resetAt),
 			zap.Error(err),
 		)
 		return
 	}
-	reason := "kiro monthly request count exhausted (402): MONTHLY_REQUEST_COUNT"
-	if trimmed := strings.TrimSpace(body); trimmed != "" {
-		reason = fmt.Sprintf("%s body=%s", reason, truncateForLog([]byte(trimmed), 512))
-	}
-	logger.L().Warn("kiro monthly request count rate-limited",
+	logger.L().Warn("kiro monthly quota parked",
 		zap.Int64("account_id", account.ID),
 		zap.Time("reset_at", resetAt),
 		zap.String("reason", reason),
@@ -1073,9 +1104,6 @@ func (s *GatewayService) handleKiroHTTPErrorBody(ctx context.Context, resp *http
 	if resp.StatusCode == http.StatusBadRequest {
 		logKiroBadRequestClassification(classification, account, "", resp.Header, respBody)
 	}
-	if classification.Category == kiroErrorMonthlyRequest {
-		s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))
-	}
 	if classification.Category == kiroErrorBadRequestInvalidModel && account != nil && account.Type == AccountTypeOAuth {
 		s.markKiroInvalidModelRateLimited(ctx, account, mappedModel)
 		event := s.buildKiroInvalidModelUpstreamEvent(account, resp, upstreamMsg, mappedModel, requestBody, c)
@@ -1097,7 +1125,9 @@ func (s *GatewayService) handleKiroHTTPErrorBody(ctx context.Context, resp *http
 		// 指数退避 + DB rate_limit_reset_at 同步）。这里再走 HandleUpstreamError 会进入
 		// handle429 → apply429FallbackRateLimit，把 DB cooldown 反写成 5s flat，
 		// 直接抹掉我们刚算好的退避时长。所以 429 跳过通用 handler。
-		if s.rateLimitService != nil && resp.StatusCode != http.StatusTooManyRequests {
+		// Native Kiro 402s also own their scheduler state. The generic 402
+		// handler would permanently disable the credential.
+		if s.rateLimitService != nil && resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusPaymentRequired {
 			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		}
 		return newProviderHTTPError(account, resp, respBody, false)
@@ -1120,11 +1150,15 @@ func (s *GatewayService) handleKiroHTTPErrorBody(ctx context.Context, resp *http
 	// twice (once here and once in handleFailoverExhausted).
 	failure := newTerminalProviderHTTPError(account, resp, respBody)
 	if writeClient {
+		message := coalesceKiroErrorMessage(resp.StatusCode, upstreamMsg)
+		if fixed, ok := kiroContextLengthClientMessage(resp.StatusCode, respBody); ok {
+			message = fixed
+		}
 		c.JSON(mapUpstreamStatusCode(resp.StatusCode), gin.H{
 			"type": "error",
 			"error": gin.H{
 				"type":    claudeErrorType(resp.StatusCode),
-				"message": coalesceKiroErrorMessage(resp.StatusCode, upstreamMsg),
+				"message": message,
 			},
 		})
 	}
