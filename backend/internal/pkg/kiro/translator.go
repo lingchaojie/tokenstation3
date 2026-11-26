@@ -1510,6 +1510,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			partial := resolveKiroStreamUsage(usage, inputTokens, outputTextBuf.String(), requestCtx.CacheEmulationUsage)
 			return &StreamResult{Usage: partial, FirstDeltaDur: firstDelta}, exc
 		}
+		if providerTerminalObserved {
+			if isKiroContextUsageTrailer(msg) {
+				continue
+			}
+			return nil, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
+		}
 		if len(msg.Payload) == 0 {
 			if err := validateKiroKnownEventShape(msg.EventType, nil); err != nil {
 				return nil, fmt.Errorf("validate kiro event %q payload: %w", msg.EventType, err)
@@ -1527,9 +1533,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		terminalEvent := kiroProviderTerminalEvent(msg.EventType, event)
-		if providerTerminalObserved {
-			return nil, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
-		}
 		if kiroProviderPayloadRecognized(msg.EventType, event, semanticEvents) {
 			providerPayloadObserved = true
 		}
@@ -3278,6 +3281,12 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 			}
 			return "", nil, usage, stopReason, false, exc
 		}
+		if providerTerminalObserved {
+			if isKiroContextUsageTrailer(msg) {
+				continue
+			}
+			return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
+		}
 		if len(msg.Payload) == 0 {
 			if err := validateKiroKnownEventShape(msg.EventType, nil); err != nil {
 				return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("validate kiro event %q payload: %w", msg.EventType, err)
@@ -3294,9 +3303,6 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 		}
 		semanticEvents := extractSemanticEvents(msg.EventType, event, nil)
 		terminalEvent := kiroProviderTerminalEvent(msg.EventType, event)
-		if providerTerminalObserved {
-			return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
-		}
 		if kiroProviderPayloadRecognized(msg.EventType, event, semanticEvents) {
 			providerPayloadObserved = true
 		}
@@ -3449,6 +3455,35 @@ func kiroProviderTerminalEvent(eventType string, event map[string]any) bool {
 		return true
 	}
 	return readStopReason(event) != "" || readStopReason(nestedEvent(event, eventType)) != ""
+}
+
+// Kiro can send its context-window percentage after the terminal response.
+// This is telemetry and does not affect the final token or credit counters.
+func isKiroContextUsageTrailer(msg *eventStreamMessage) bool {
+	if msg.EventType != "contextUsageEvent" || !json.Valid(msg.Payload) {
+		return false
+	}
+	// Inspect the original object before event narrowing can discard extra fields.
+	singleField := func(object gjson.Result) (name string, value gjson.Result, ok bool) {
+		if !object.IsObject() {
+			return "", gjson.Result{}, false
+		}
+		object.ForEach(func(key, field gjson.Result) bool {
+			if ok {
+				ok = false
+				return false
+			}
+			name, value, ok = key.String(), field, true
+			return true
+		})
+		return name, value, ok
+	}
+	name, value, ok := singleField(gjson.ParseBytes(msg.Payload))
+	if ok && name == msg.EventType {
+		name, value, ok = singleField(value)
+	}
+	return ok && (name == "contextUsagePercentage" || name == "context_usage_percentage") &&
+		value.Type == gjson.Number && isNonNegativeFiniteKiroNumber(value.Num)
 }
 
 var kiroNarrowEventFields = map[string]struct{}{
@@ -4283,6 +4318,9 @@ func readEventStreamMessage(reader *bufio.Reader) (*eventStreamMessage, error) {
 	}
 	remaining := make([]byte, totalLength-12)
 	if _, err := io.ReadFull(reader, remaining); err != nil {
+		if err == io.EOF {
+			return nil, io.ErrUnexpectedEOF
+		}
 		return nil, err
 	}
 	messageCRC := binary.BigEndian.Uint32(remaining[len(remaining)-4:])

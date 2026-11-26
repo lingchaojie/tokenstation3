@@ -3281,7 +3281,38 @@ func TestKiroTranslatorsRejectSemanticPayloadAfterTerminal(t *testing.T) {
 	require.NotContains(t, out.String(), "must-not-leak")
 }
 
-func TestKiroTranslatorsRejectAnyProviderFrameAfterTerminal(t *testing.T) {
+func TestKiroTranslatorsAcceptContextUsageAfterTerminal(t *testing.T) {
+	var body bytes.Buffer
+	body.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "Hello"}))
+	body.Write(buildEventStreamFrame(t, "meteringEvent", map[string]any{"usage": 0.25}))
+	body.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"}))
+	body.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{"contextUsagePercentage": 1.8}))
+	body.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
+		"contextUsageEvent": map[string]any{"contextUsagePercentage": 1.8},
+	}))
+
+	t.Run("nonstream", func(t *testing.T) {
+		result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body.Bytes()), "claude-sonnet-4-6", KiroRequestContext{})
+		require.NoError(t, err)
+		require.True(t, result.ProviderTerminalObserved)
+		require.Equal(t, "end_turn", result.StopReason)
+		require.Equal(t, "Hello", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
+		require.Equal(t, 0.25, result.Usage.KiroCredits)
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		var out bytes.Buffer
+		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body.Bytes()), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
+		require.NoError(t, err)
+		require.True(t, result.ProviderTerminalObserved)
+		require.Equal(t, "end_turn", result.StopReason)
+		require.Contains(t, out.String(), "Hello")
+		require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+		require.Equal(t, 0.25, result.Usage.KiroCredits)
+	})
+}
+
+func TestKiroTranslatorsRejectUnexpectedProviderFramesAfterTerminal(t *testing.T) {
 	tails := []struct {
 		name      string
 		eventType string
@@ -3304,15 +3335,44 @@ func TestKiroTranslatorsRejectAnyProviderFrameAfterTerminal(t *testing.T) {
 			eventType: "futureEvent",
 			payload:   map[string]any{"futureEvent": map[string]any{"value": "tail"}},
 		},
+		{
+			name:      "empty_context_usage",
+			eventType: "contextUsageEvent",
+		},
+		{
+			name:      "invalid_context_usage",
+			eventType: "contextUsageEvent",
+			payload:   map[string]any{"contextUsagePercentage": "1.8"},
+		},
+		{
+			name:      "context_usage_with_late_content",
+			eventType: "contextUsageEvent",
+			payload:   map[string]any{"contextUsagePercentage": 1.8, "content": "late"},
+		},
+		{
+			name:      "wrapped_context_usage_with_outer_credits",
+			eventType: "contextUsageEvent",
+			payload: map[string]any{
+				"contextUsageEvent": map[string]any{"contextUsagePercentage": 1.8},
+				"kiroCredits":       99,
+			},
+		},
+		{
+			name:      "context_usage_with_duplicate_stop",
+			eventType: "contextUsageEvent",
+			payload:   map[string]any{"contextUsagePercentage": 1.8, "stopReason": "end_turn"},
+		},
 	}
 	for _, tt := range tails {
 		t.Run(tt.name, func(t *testing.T) {
-			body := append(
-				buildEventStreamFrame(t, "messageStopEvent", map[string]any{
-					"messageStopEvent": map[string]any{"stopReason": "end_turn"},
-				}),
-				buildEventStreamFrame(t, tt.eventType, tt.payload)...,
-			)
+			body := buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+				"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+			})
+			if tt.payload == nil {
+				body = append(body, buildRawEventStreamFrame(t, tt.eventType, nil)...)
+			} else {
+				body = append(body, buildEventStreamFrame(t, tt.eventType, tt.payload)...)
+			}
 
 			result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), "claude-sonnet-4-6", KiroRequestContext{})
 			require.Nil(t, result)
@@ -3324,6 +3384,21 @@ func TestKiroTranslatorsRejectAnyProviderFrameAfterTerminal(t *testing.T) {
 			require.ErrorContains(t, err, "after terminal")
 		})
 	}
+}
+
+func TestKiroTranslatorsRejectTruncatedFrameAfterTerminal(t *testing.T) {
+	body := buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"})
+	tail := buildEventStreamFrame(t, "contextUsageEvent", map[string]any{"contextUsagePercentage": 1.8})
+	body = append(body, tail[:12]...)
+
+	result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), "claude-sonnet-4-6", KiroRequestContext{})
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Nil(t, result)
+
+	var out bytes.Buffer
+	streamResult, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Nil(t, streamResult)
 }
 
 func TestKiroTranslatorsRejectOrphanOrDuplicateToolStop(t *testing.T) {
