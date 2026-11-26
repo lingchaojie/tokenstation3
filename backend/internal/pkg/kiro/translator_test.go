@@ -4100,11 +4100,11 @@ func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testin
 
 func TestKiroAWSOutputLimitFramePreservesTrailingUsageAndTerminal(t *testing.T) {
 	var body bytes.Buffer
-	body.Write(buildRawEventStreamFrameWithHeaders(t, []byte(`{"content":"partial"}`),
+	_, _ = body.Write(buildRawEventStreamFrameWithHeaders(t, []byte(`{"content":"partial"}`),
 		[2]string{":message-type", "event"}, [2]string{":event-type", "assistantResponseEvent"}))
-	body.Write(buildRawEventStreamFrameWithHeaders(t, nil,
+	_, _ = body.Write(buildRawEventStreamFrameWithHeaders(t, nil,
 		[2]string{":message-type", "exception"}, [2]string{":exception-type", "ContentLengthExceededException"}))
-	body.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+	_, _ = body.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"tokenUsage": map[string]any{"inputTokens": 31, "outputTokens": 11},
 	}))
 	for _, trailingStop := range []bool{false, true} {

@@ -1274,7 +1274,9 @@ func TestSyncUpstreamModelCatalog_KiroDirectPagesAndRegionalFallback(t *testing.
 	require.Equal(t, "profile", req.URL.Query().Get("profileArn"))
 	require.Equal(t, "AI_EDITOR", req.URL.Query().Get("origin"))
 	require.Equal(t, "Bearer test-key", req.Header.Get("Authorization"))
-	require.Equal(t, []string{"API_KEY"}, req.Header["tokentype"])
+	// Kiro expects this raw lowercase name in HTTP/1.1.
+	rawHeaders := map[string][]string(req.Header)
+	require.Equal(t, []string{"API_KEY"}, rawHeaders["tokentype"])
 	require.NotEmpty(t, req.Header.Get("Amz-Sdk-Invocation-Id"))
 	require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
 	require.Equal(t, map[string]string{"public": "claude-sonnet-4.6"}, account.GetModelMapping())
