@@ -127,7 +127,9 @@ func TestBuildKiroPayloadStoresPostTranslationInputEstimate(t *testing.T) {
 }
 
 func TestBuildKiroPayloadEstimateCountsCompactedToolResult(t *testing.T) {
-	largeResult := strings.Repeat("large tool result line\n", 4000)
+	head := strings.Repeat("α", 2000)
+	tail := strings.Repeat("β", 1000)
+	largeResult := head + strings.Repeat("large tool result line\n", 4000) + tail
 	body := []byte(fmt.Sprintf(
 		"{\"model\":\"claude-sonnet-4-6\",\"messages\":["+
 			"{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"read_file\",\"input\":{\"path\":\"/tmp/a\"}}]},"+
@@ -138,7 +140,7 @@ func TestBuildKiroPayloadEstimateCountsCompactedToolResult(t *testing.T) {
 	require.NoError(t, err)
 	translated := gjson.GetBytes(result.Payload,
 		"conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String()
-	require.Contains(t, translated, "[Output truncated for Kiro context:")
+	require.Equal(t, head+"\n\n"+tail, translated)
 	require.Less(t, result.Context.EstimatedInputTokens, anthropictokenizer.CountTokens(largeResult))
 
 	var translatedPayload KiroPayload
@@ -148,6 +150,20 @@ func TestBuildKiroPayloadEstimateCountsCompactedToolResult(t *testing.T) {
 		UserInputMessageContext.ToolResults[0].Content[0].Text = ""
 	withoutCompactedResult := estimateKiroPayloadInputTokens(context.Background(), translatedPayload)
 	require.Greater(t, withCompactedResult, withoutCompactedResult)
+}
+
+func TestBuildKiroPayloadLimitsPDFTextWithoutTruncationNotice(t *testing.T) {
+	firstPage := strings.Repeat("report ", 900)
+	document := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\nBT (" + firstPage + "details) Tj ET\n%%EOF"))
+	body := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[
+		{"type":"document","title":"report.pdf","source":{"type":"base64","media_type":"application/pdf","data":%q}}
+	]}]}`, document))
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	content := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String()
+	require.Contains(t, content, "[Attached PDF document: report.pdf,")
+	require.Contains(t, content, "[Extracted PDF text]\n"+firstPage[:6000]+"\n[/Extracted PDF text]")
 }
 
 func TestBuildRuntimeUserAgentStable(t *testing.T) {
@@ -332,8 +348,7 @@ func TestBuildKiroPayloadOmitsImagesBeyondRecentHistory(t *testing.T) {
 
 	staleUser := gjson.GetBytes(payload, "conversationState.history.4.userInputMessage")
 	require.False(t, staleUser.Get("images").Exists())
-	require.Contains(t, staleUser.Get("content").String(), "stale image")
-	require.Contains(t, staleUser.Get("content").String(), "[This message contained 1 image(s), omitted from older conversation history.]")
+	require.Equal(t, "stale image", staleUser.Get("content").String())
 	require.Equal(t, "current-image", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.images.0.source.bytes").String())
 }
 
@@ -417,6 +432,7 @@ func TestBuildKiroPayloadChunkedWritePolicyIsIdempotentAndTruncated(t *testing.T
 
 	description := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.description").String()
 	require.LessOrEqual(t, len(description), kiroMaxToolDescLen)
+	require.NotContains(t, description, "description truncated")
 	require.Equal(t, 1, strings.Count(description, writeToolDescriptionSuffix))
 	require.Contains(t, description, writeToolDescriptionSuffix)
 }
@@ -463,7 +479,7 @@ func TestBuildKiroPayloadInjectsThinkingIntoHistory(t *testing.T) {
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
 }
 
-func TestBuildKiroPayloadInjectsAdaptiveThinkingForOpus46ThinkingModel(t *testing.T) {
+func TestBuildKiroPayloadUsesNativeAdaptiveThinkingForOpus46ThinkingModel(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-4-6-thinking",
 		"messages":[{"role":"user","content":"hello kiro"}]
@@ -474,7 +490,10 @@ func TestBuildKiroPayloadInjectsAdaptiveThinkingForOpus46ThinkingModel(t *testin
 	payload := kiroBuildResult.Payload
 
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "<thinking_mode>adaptive</thinking_mode>\n<thinking_effort>high</thinking_effort>")
+	require.NotContains(t, systemContent, "<thinking_mode>")
+	require.NotContains(t, systemContent, "<thinking_effort>")
+	require.Equal(t, "high", gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
+	require.True(t, kiroBuildResult.Context.ThinkingEnabled)
 	require.NotContains(t, systemContent, "[Context: Current time is ")
 }
 
@@ -526,6 +545,11 @@ func TestBuildKiroPayloadAddsAdditionalModelRequestFieldsForOutputConfigModels(t
 			require.Equal(t, "adaptive", gjson.GetBytes(payload, "additionalModelRequestFields.thinking.type").String())
 			require.Equal(t, "summarized", gjson.GetBytes(payload, "additionalModelRequestFields.thinking.display").String())
 			require.Equal(t, tc.wantEffort, gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
+			systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
+			require.NotContains(t, systemContent, "<thinking_mode>")
+			require.NotContains(t, systemContent, "<max_thinking_length>")
+			require.NotContains(t, systemContent, "<thinking_effort>")
+			require.True(t, result.Context.ThinkingEnabled)
 		})
 	}
 }
@@ -2874,6 +2898,67 @@ func TestBuildKiroPayloadFiltersCurrentOrphanToolResult(t *testing.T) {
 	require.NoError(t, err)
 	payload := kiroBuildResult.Payload
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults").Exists())
+	require.Equal(t, "Continue", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+}
+
+func TestBuildKiroPayloadPairsToolResultsOnlyWithAdjacentAssistant(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[
+			{"role":"user","content":"Check the repository."},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"toolu_read","name":"read_file","input":{"path":"README.md"}},
+				{"type":"tool_use","id":"toolu_late","name":"list_files","input":{}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"toolu_missing","content":"unrelated"},
+				{"type":"tool_result","tool_use_id":"toolu_read","content":"readme"}
+			]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"toolu_status","name":"git_status","input":{}},
+				{"type":"tool_use","id":"toolu_status","name":"duplicate_call","input":{}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"toolu_late","content":"too late"},
+				{"type":"tool_result","tool_use_id":"toolu_status","content":"clean"},
+				{"type":"tool_result","tool_use_id":"toolu_status","content":"second result"}
+			]}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	conversation := gjson.GetBytes(result.Payload, "conversationState")
+	require.JSONEq(t, `["toolu_read"]`, conversation.Get("history.3.assistantResponseMessage.toolUses.#.toolUseId").Raw)
+	require.JSONEq(t, `["toolu_read"]`, conversation.Get("history.4.userInputMessage.userInputMessageContext.toolResults.#.toolUseId").Raw)
+	require.JSONEq(t, `["git_status"]`, conversation.Get("history.5.assistantResponseMessage.toolUses.#.name").Raw)
+	current := conversation.Get("currentMessage.userInputMessage.userInputMessageContext")
+	require.JSONEq(t, `["toolu_status"]`, current.Get("toolResults.#.toolUseId").Raw)
+	require.Equal(t, "clean", current.Get("toolResults.0.content.0.text").String())
+	require.JSONEq(t, `["read_file","git_status"]`, current.Get("tools.#.toolSpecification.name").Raw)
+}
+
+func TestBuildKiroPayloadPairsToolsAfterAnAlreadyTrimmedReplay(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_before_cut","content":"result whose call was trimmed"}]},
+			{"role":"assistant","content":[{"type":"tool_use","id":"toolu_after_cut","name":"read_file","input":{"path":"README.md"}}]},
+			{"role":"system","content":"Keep answers concise."},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_after_cut","content":"still paired"}]},
+			{"role":"assistant","content":"I have the file."},
+			{"role":"user","content":"Summarize it."}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	history := gjson.GetBytes(result.Payload, "conversationState.history")
+	require.Equal(t, "Continue", history.Get("2.userInputMessage.content").String())
+	require.False(t, history.Get("2.userInputMessage.userInputMessageContext").Exists())
+	require.Equal(t, "toolu_after_cut", history.Get("3.assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "toolu_after_cut", history.Get("4.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "<system-reminder>\nKeep answers concise.\n</system-reminder>", history.Get("4.userInputMessage.content").String())
 }
 
 func TestBuildKiroPayloadRemovesHistoryOrphanToolUse(t *testing.T) {
@@ -3913,9 +3998,9 @@ func TestBuildKiroPayloadTrailingInlineSystemPreservesCurrentUserAndTools(t *tes
 	require.NoError(t, err)
 	payload := result.Payload
 
-	require.Equal(t, "real question", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Equal(t, "real question\n\n<system-reminder>\nSKILL LIST REMINDER\n</system-reminder>", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Equal(t, int64(2), gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int())
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "SKILL LIST REMINDER")
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "SKILL LIST REMINDER")
 }
 
 func TestBuildKiroPayloadMidConversationSystemMergesAndKeepsAlternation(t *testing.T) {
@@ -3932,16 +4017,9 @@ func TestBuildKiroPayloadMidConversationSystemMergesAndKeepsAlternation(t *testi
 	require.NoError(t, err)
 	payload := result.Payload
 
-	// alpha 与 bravo 过滤 system 后相邻，应被合并为当前消息
-	current := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
-	require.Contains(t, current, "alpha")
-	require.Contains(t, current, "bravo")
-	// MID NOTE 折叠进前置注入
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "MID NOTE")
-	// history 中不应出现裸 system 角色
-	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
-		require.NotEqual(t, "system", msg.Get("userInputMessage.role").String())
-	}
+	require.Equal(t, "alpha\n\n<system-reminder>\nMID NOTE\n</system-reminder>\n\nbravo",
+		gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "MID NOTE")
 }
 
 func TestBuildKiroPayloadInlineSystemBlockArrayExtracted(t *testing.T) {
@@ -3957,8 +4035,35 @@ func TestBuildKiroPayloadInlineSystemBlockArrayExtracted(t *testing.T) {
 	require.NoError(t, err)
 	payload := result.Payload
 
-	require.Equal(t, "hi", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "BLOCK NOTE")
+	require.Equal(t, "hi\n\n<system-reminder>\nBLOCK NOTE\n</system-reminder>",
+		gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "BLOCK NOTE")
+}
+
+func TestBuildKiroPayloadMidConversationSystemPreservesCachedPrefix(t *testing.T) {
+	const prefix = `{"model":"claude-sonnet-4-5","system":"Base instructions","messages":[
+		{"role":"user","content":"first question"},
+		{"role":"assistant","content":"first answer"},`
+	baseline, err := BuildKiroPayloadWithContext([]byte(prefix+`{"role":"user","content":"follow up"}]}`),
+		"claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	result, err := BuildKiroPayloadWithContext([]byte(prefix+`
+		{"role":"system","content":{"output_config":{"effort":"max"}}},
+		{"role":"system","content":[{"type":"text","text":"Late instructions"}]},
+		{"role":"user","content":"follow up"},
+		{"role":"assistant","content":"second answer"},
+		{"role":"user","content":"third question"}
+	]}`), "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	prefixHistory := gjson.GetBytes(baseline.Payload, "conversationState.history").Array()
+	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
+	require.Len(t, prefixHistory, 4)
+	require.Len(t, history, 6)
+	for i, before := range prefixHistory {
+		require.Equal(t, before.Raw, history[i].Raw)
+	}
+	require.Equal(t, "<system-reminder>\nLate instructions\n</system-reminder>\n\nfollow up",
+		history[4].Get("userInputMessage.content").String())
 }
 
 func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testing.T) {
@@ -3978,8 +4083,7 @@ func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testin
 	require.NoError(t, err)
 	payload := result.Payload
 
-	// 末尾过滤后变 assistant，走 Continue 兜底，但 tools 仍应挂载
-	require.Equal(t, "Continue", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Equal(t, "<system-reminder>\nTRAILING NOTE\n</system-reminder>", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Greater(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int(), int64(0))
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "TRAILING NOTE")
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "TRAILING NOTE")
 }

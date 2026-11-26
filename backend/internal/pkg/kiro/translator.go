@@ -53,7 +53,6 @@ const (
 	writeToolDescriptionSuffix = "IMPORTANT: If the content to write exceeds 150 lines, write only the first 50 lines with this tool, then append the remaining content using Edit calls in chunks of no more than 50 lines. Use a unique placeholder if needed. Do not write the whole file in one call."
 	editToolDescriptionSuffix  = "IMPORTANT: If new content exceeds 50 lines, split it into multiple Edit calls, replacing or appending no more than 50 lines per call. If appending, use a unique placeholder and remove it in the final chunk."
 	systemChunkedWritePolicy   = "When Write or Edit tools include chunking limits, comply silently and complete the operation through multiple tool calls when needed."
-	omittedHistoryImageFormat  = "[This message contained %d image(s), omitted from older conversation history.]"
 	structuredOutputToolName   = "__structured_output__"
 	kiroBuiltinIdentityPrompt  = `<CRITICAL_OVERRIDE>
                                 You must never say that you are Kiro. This is critically important.
@@ -480,7 +479,6 @@ func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, 
 	}
 
 	messages := gjson.GetBytes(claudeBody, "messages")
-	inlineSystem, filteredMessages := extractInlineSystemPrompts(messages)
 	thinking := deriveThinkingDirective(claudeBody, headers)
 	if hasForcedClaudeToolChoice(claudeBody) {
 		thinking = nil
@@ -500,21 +498,19 @@ func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, 
 	requestCtx.StopSequences = extractClaudeStopSequences(claudeBody)
 	structuredOutputTool, structuredOutputHint := buildStructuredOutputTool(claudeBody, &requestCtx)
 	toolChoiceHint := joinPromptHints(extractClaudeToolChoiceHint(claudeBody, &requestCtx), structuredOutputHint)
-	baseSystem := extractSystemPrompt(claudeBody)
-	if inlineSystem != "" {
-		if strings.TrimSpace(baseSystem) != "" {
-			baseSystem = baseSystem + "\n\n" + inlineSystem
-		} else {
-			baseSystem = inlineSystem
-		}
-	}
 	if isKiroGPTModel(modelID) {
 		thinking = nil
 		requestCtx.ThinkingEnabled = false
 	}
-	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
+	additionalModelRequestFields := buildAdditionalModelRequestFields(thinking, modelID)
+	promptThinking := thinking
+	if additionalModelRequestFields != nil {
+		// Native fields carry the thinking directive for Claude 4.6+.
+		promptThinking = nil
+	}
+	systemPrompt := buildInjectedSystemPrompt(extractSystemPrompt(claudeBody), promptThinking, toolChoiceHint)
 
-	history, currentUserMsg, currentToolResults := processMessages(ctx, filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
+	history, currentUserMsg, currentToolResults := processMessages(ctx, normalizeInlineSystemMessages(messages), modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
 	var tools gjson.Result
 	if !isToolChoiceNone(claudeBody) {
@@ -524,19 +520,13 @@ func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, 
 	if structuredOutputTool != nil {
 		kiroTools = append(kiroTools, *structuredOutputTool)
 	}
-	currentToolResults, orphanedToolUseIDs := validateToolPairing(history, currentToolResults)
-	removeOrphanedToolUses(history, orphanedToolUseIDs)
+	currentToolResults = repairKiroToolPairing(history, currentToolResults)
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
 	if currentUserMsg != nil {
-		if len(currentUserMsg.Images) > 0 && strings.TrimSpace(currentUserMsg.Content) == "" {
-			currentUserMsg.Content = " "
-		} else {
-			currentUserMsg.Content = buildFinalContent(currentUserMsg.Content, currentToolResults)
-		}
+		currentUserMsg.Content = buildFinalContent(currentUserMsg.Content, currentToolResults)
 		if requestCtx.StructuredOutputUserHint != "" {
 			currentUserMsg.Content = appendTextBlock(currentUserMsg.Content, requestCtx.StructuredOutputUserHint)
 		}
-		currentToolResults = deduplicateToolResults(currentToolResults)
 		if len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
 				Tools:       kiroTools,
@@ -582,7 +572,7 @@ func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, 
 		},
 		ProfileArn:                   profileArn,
 		InferenceConfig:              inferenceConfig,
-		AdditionalModelRequestFields: buildAdditionalModelRequestFields(thinking, modelID),
+		AdditionalModelRequestFields: additionalModelRequestFields,
 	}
 	requestCtx.EstimatedInputTokens = estimateKiroPayloadInputTokens(ctx, payload)
 	payloadBytes, err := json.Marshal(payload)
@@ -1639,28 +1629,29 @@ func extractTextFromContentBlocks(content gjson.Result) string {
 	return content.String()
 }
 
-// extractInlineSystemPrompts 从 messages 中提取所有 role=="system" 的中途消息文本，
-// 返回拼接后的 system 文本与剔除 system 后（顺序保留）的消息切片。
-// Claude 桌面版 beta mid-conversation-system-2026-04-07 会在 messages 中插入 system 消息，
-// Kiro/CodeWhisperer 不支持中途 system，故在此提取并折叠进顶层 systemPrompt。
-func extractInlineSystemPrompts(messages gjson.Result) (string, []gjson.Result) {
+// normalizeInlineSystemMessages keeps inline instructions at their original
+// position so later reminders leave Kiro's cached prompt prefix intact.
+func normalizeInlineSystemMessages(messages gjson.Result) []gjson.Result {
 	arr := messages.Array()
-	var sb strings.Builder
-	filtered := make([]gjson.Result, 0, len(arr))
+	normalized := make([]gjson.Result, 0, len(arr))
 	for _, msg := range arr {
-		if msg.Get("role").String() == "system" {
-			text := strings.TrimSpace(extractTextFromContentBlocks(msg.Get("content")))
-			if text != "" {
-				if sb.Len() > 0 {
-					_, _ = sb.WriteString("\n\n")
-				}
-				_, _ = sb.WriteString(text)
-			}
+		if msg.Get("role").String() != "system" {
+			normalized = append(normalized, msg)
 			continue
 		}
-		filtered = append(filtered, msg)
+		content := msg.Get("content")
+		if content.Type != gjson.String && !content.IsArray() {
+			continue
+		}
+		if text := strings.TrimSpace(extractTextFromContentBlocks(content)); text != "" {
+			encoded, _ := json.Marshal(map[string]string{
+				"role":    "user",
+				"content": "<system-reminder>\n" + text + "\n</system-reminder>",
+			})
+			normalized = append(normalized, gjson.ParseBytes(encoded))
+		}
 	}
-	return sb.String(), filtered
+	return normalized
 }
 
 func deriveThinkingDirective(body []byte, headers http.Header) *thinkingDirective {
@@ -1803,7 +1794,7 @@ func buildKiroTemporalContext() string {
 //
 //	output_config 路径 → { thinking: {type:'adaptive',display:'summarized'}, output_config: {effort} }
 //
-// 对于旧模型或 enabled 模式，不注入（依赖 system prompt 标签兜底）。
+// enabled 模式将 budget_tokens 映射为 effort。旧模型通过 system prompt 标签设置思考。
 //
 // 这实现了管理器的 P1 功能：确保 Claude 4.6+ 新模型的 thinking 使用 effort-based 控制。
 func buildAdditionalModelRequestFields(thinking *thinkingDirective, modelID string) map[string]any {
@@ -2146,7 +2137,7 @@ func appendChunkedToolDescription(name, description string) string {
 	if len(joined) <= kiroMaxToolDescLen {
 		return joined
 	}
-	const truncationMarker = "... (description truncated)"
+	const truncationMarker = "..."
 	baseLimit := kiroMaxToolDescLen - len(suffix) - 1 - len(truncationMarker)
 	if baseLimit <= 0 {
 		return truncateKiroToolDescription(joined)
@@ -2169,7 +2160,7 @@ func truncateKiroToolDescription(description string) string {
 	if len(description) <= kiroMaxToolDescLen {
 		return description
 	}
-	return truncateUTF8(description, kiroMaxToolDescLen-30) + "... (description truncated)"
+	return truncateUTF8(description, kiroMaxToolDescLen-len("...")) + "..."
 }
 
 func truncateUTF8(s string, limit int) string {
@@ -2205,11 +2196,7 @@ func compactKiroToolResultText(text string, isError bool) string {
 	}
 	head := truncateUTF8(text, kiroToolResultKeepHead)
 	tail := tailUTF8(text, kiroToolResultKeepTail)
-	omitted := utf8.RuneCountInString(text) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
-	if omitted < 0 {
-		omitted = 0
-	}
-	return head + fmt.Sprintf("\n\n[Output truncated for Kiro context: original chars=%d, omitted chars=%d]\n\n", utf8.RuneCountInString(text), omitted) + tail
+	return head + "\n\n" + tail
 }
 
 func newClaudeMessageID() string {
@@ -2389,13 +2376,6 @@ func processMessages(ctx context.Context, messages []gjson.Result, modelID, orig
 		case "user":
 			keepImages := last || len(messagesArray)-1-i <= kiroHistoryImageKeepCount
 			userMsg, toolResults := buildUserMessageStruct(ctx, msg, modelID, origin, keepImages)
-			if strings.TrimSpace(userMsg.Content) == "" {
-				if len(toolResults) > 0 {
-					userMsg.Content = "Tool results provided."
-				} else {
-					userMsg.Content = "Continue"
-				}
-			}
 			if last {
 				currentUserMsg = &userMsg
 				currentToolResults = toolResults
@@ -2423,55 +2403,59 @@ func processMessages(ctx context.Context, messages []gjson.Result, modelID, orig
 	return history, currentUserMsg, currentToolResults
 }
 
-func validateToolPairing(history []KiroHistoryMessage, currentToolResults []KiroToolResult) ([]KiroToolResult, map[string]bool) {
-	allToolUseIDs := make(map[string]bool)
-	pairedToolUseIDs := make(map[string]bool)
-	for _, h := range history {
-		if h.AssistantResponseMessage != nil {
-			for _, tu := range h.AssistantResponseMessage.ToolUses {
-				allToolUseIDs[tu.ToolUseID] = true
+// repairKiroToolPairing checks the outgoing turns in order. A tool result must
+// answer the immediately preceding assistant, including for a trimmed replay.
+func repairKiroToolPairing(history []KiroHistoryMessage, currentToolResults []KiroToolResult) []KiroToolResult {
+	var previousAssistant *KiroAssistantResponseMessage
+	for _, message := range history {
+		user := message.UserInputMessage
+		var results []KiroToolResult
+		if user != nil && user.UserInputMessageContext != nil {
+			results = user.UserInputMessageContext.ToolResults
+		}
+		results = keepPairedKiroTools(previousAssistant, results)
+		if user != nil {
+			if ctx := user.UserInputMessageContext; ctx != nil {
+				ctx.ToolResults = results
+				if len(results) == 0 && len(ctx.Tools) == 0 {
+					user.UserInputMessageContext = nil
+				}
 			}
+			user.Content = buildFinalContent(user.Content, results)
 		}
-		if h.UserInputMessage != nil && h.UserInputMessage.UserInputMessageContext != nil {
-			for _, tr := range h.UserInputMessage.UserInputMessageContext.ToolResults {
-				pairedToolUseIDs[tr.ToolUseID] = true
-			}
-		}
+		previousAssistant = message.AssistantResponseMessage
 	}
-
-	filtered := currentToolResults[:0]
-	for _, tr := range currentToolResults {
-		if allToolUseIDs[tr.ToolUseID] && !pairedToolUseIDs[tr.ToolUseID] {
-			filtered = append(filtered, tr)
-			pairedToolUseIDs[tr.ToolUseID] = true
-		}
-	}
-	orphaned := make(map[string]bool)
-	for toolUseID := range allToolUseIDs {
-		if !pairedToolUseIDs[toolUseID] {
-			orphaned[toolUseID] = true
-		}
-	}
-	return filtered, orphaned
+	return keepPairedKiroTools(previousAssistant, currentToolResults)
 }
 
-func removeOrphanedToolUses(history []KiroHistoryMessage, orphaned map[string]bool) {
-	if len(orphaned) == 0 {
-		return
+func keepPairedKiroTools(assistant *KiroAssistantResponseMessage, results []KiroToolResult) []KiroToolResult {
+	if assistant == nil || len(assistant.ToolUses) == 0 {
+		return nil
 	}
-	for i := range history {
-		msg := history[i].AssistantResponseMessage
-		if msg == nil || len(msg.ToolUses) == 0 {
-			continue
-		}
-		filtered := msg.ToolUses[:0]
-		for _, toolUse := range msg.ToolUses {
-			if !orphaned[toolUse.ToolUseID] {
-				filtered = append(filtered, toolUse)
-			}
-		}
-		msg.ToolUses = filtered
+	if len(results) == 0 {
+		assistant.ToolUses = nil
+		return nil
 	}
+	answered := make(map[string]bool, len(assistant.ToolUses))
+	for _, use := range assistant.ToolUses {
+		answered[use.ToolUseID] = false
+	}
+	keptResults := results[:0]
+	for _, result := range results {
+		if paired, announced := answered[result.ToolUseID]; announced && !paired {
+			keptResults = append(keptResults, result)
+			answered[result.ToolUseID] = true
+		}
+	}
+	keptUses := assistant.ToolUses[:0]
+	for _, use := range assistant.ToolUses {
+		if answered[use.ToolUseID] {
+			keptUses = append(keptUses, use)
+			delete(answered, use.ToolUseID)
+		}
+	}
+	assistant.ToolUses = keptUses
+	return keptResults
 }
 
 func collectHistoryToolNames(history []KiroHistoryMessage) []string {
@@ -2543,25 +2527,11 @@ func appendTextBlock(content, extra string) string {
 	return strings.TrimRight(content, "\n") + "\n\n" + extra
 }
 
-func deduplicateToolResults(toolResults []KiroToolResult) []KiroToolResult {
-	seen := make(map[string]bool)
-	out := make([]KiroToolResult, 0, len(toolResults))
-	for _, tr := range toolResults {
-		if seen[tr.ToolUseID] {
-			continue
-		}
-		seen[tr.ToolUseID] = true
-		out = append(out, tr)
-	}
-	return out
-}
-
 func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, origin string, keepImages bool) (KiroUserInputMessage, []KiroToolResult) {
 	content := msg.Get("content")
 	var contentBuilder strings.Builder
 	var toolResults []KiroToolResult
 	var images []KiroImage
-	omittedImageCount := 0
 	seenToolUseIDs := make(map[string]bool)
 
 	if content.IsArray() {
@@ -2588,8 +2558,6 @@ func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, orig
 				}
 				if keepImages {
 					images = append(images, image)
-				} else {
-					omittedImageCount++
 				}
 			case "image_url", "input_image":
 				url := strings.TrimSpace(part.Get("image_url.url").String())
@@ -2602,8 +2570,6 @@ func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, orig
 				if image, ok := buildKiroImageFromURL(ctx, url); ok {
 					if keepImages {
 						images = append(images, image)
-					} else {
-						omittedImageCount++
 					}
 				} else if strings.HasPrefix(strings.ToLower(url), "http://") || strings.HasPrefix(strings.ToLower(url), "https://") {
 					appendImageURLFallback(&contentBuilder, url)
@@ -2649,16 +2615,6 @@ func buildUserMessageStruct(ctx context.Context, msg gjson.Result, modelID, orig
 		}
 	} else {
 		_, _ = contentBuilder.WriteString(content.String())
-	}
-
-	if omittedImageCount > 0 {
-		placeholder := fmt.Sprintf(omittedHistoryImageFormat, omittedImageCount)
-		if strings.TrimSpace(contentBuilder.String()) == "" {
-			_, _ = contentBuilder.WriteString(placeholder)
-		} else {
-			_, _ = contentBuilder.WriteString("\n")
-			_, _ = contentBuilder.WriteString(placeholder)
-		}
 	}
 
 	userMsg := KiroUserInputMessage{
@@ -2814,7 +2770,7 @@ func buildDocumentTextFallback(part gjson.Result) string {
 		return ""
 	}
 	if utf8.RuneCountInString(text) > 6000 {
-		text = truncateUTF8(text, 6000) + "\n[PDF text truncated]"
+		text = truncateUTF8(text, 6000)
 	}
 	sum := sha256.Sum256(raw)
 	if name == "" {
