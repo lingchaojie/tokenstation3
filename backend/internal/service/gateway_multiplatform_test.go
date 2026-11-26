@@ -3548,6 +3548,7 @@ func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
 		relay           bool
 		secondSaturated bool
 		stickyOnlyRPM   bool
+		secondDisabled  bool
 		wantAccount     int64
 		wantWait        bool
 	}{
@@ -3557,7 +3558,8 @@ func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
 		{name: "routed relay keeps sticky wait", routed: true, relay: true, wantAccount: 1, wantWait: true},
 		{name: "legacy direct keeps sticky wait", legacy: true, wantAccount: 1, wantWait: true},
 		{name: "all saturated still returns a wait plan", secondSaturated: true, wantAccount: 1, wantWait: true},
-		{name: "sticky-only RPM still allows waiting", stickyOnlyRPM: true, wantAccount: 1, wantWait: true},
+		{name: "sticky-only RPM still allows waiting", stickyOnlyRPM: true, secondDisabled: true, wantAccount: 1, wantWait: true},
+		{name: "routed sticky-only RPM still allows waiting", stickyOnlyRPM: true, routed: true, secondSaturated: true, wantAccount: 1, wantWait: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			groupID := int64(42)
@@ -3572,6 +3574,8 @@ func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
 			if tc.stickyOnlyRPM {
 				accounts[0].Extra["base_rpm"] = 10
 				accounts[0].Extra["rpm_strategy"] = "sticky_exempt"
+			}
+			if tc.secondDisabled {
 				accounts[1].Schedulable = false
 			}
 			repo := &mockAccountRepoForPlatform{accounts: accounts, accountsByID: map[int64]*Account{
