@@ -321,7 +321,7 @@ func TestBuildKiroPayloadForAccountPropagatesThinkingHeaders(t *testing.T) {
 	require.NotContains(t, string(payload), "CHUNKED WRITE PROTOCOL")
 	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "<thinking_mode>")
 	require.Equal(t, "adaptive", gjson.GetBytes(payload, "additionalModelRequestFields.thinking.type").String())
-	require.Equal(t, "high", gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
+	require.Equal(t, "medium", gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
 }
 
 func TestBuildKiroPayloadForAccountPreservesThinkingAliasAfterMapping(t *testing.T) {
