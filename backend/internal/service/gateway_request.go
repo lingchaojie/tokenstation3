@@ -670,10 +670,10 @@ func isClaude55SignedThinkingModel(model string) bool {
 	return claude.IsOpus55(model) || claude.IsSonnet55(model) || claude.IsHaiku55(model) || claude.IsFable52(model) || claude.IsMythos52(model)
 }
 
-// validateClaude55RequestForAccount applies the Anthropic-specific constraints
-// after account selection. Direct Kiro requests use the Kiro thinking translator.
-func validateClaude55RequestForAccount(body []byte, account *Account, model string) error {
-	if account == nil || account.Platform != PlatformAnthropic {
+// The compatibility bridge bypasses Claude 5.5 validation only for direct
+// Kiro accounts, whose translator handles the native thinking controls.
+func validateClaude55BridgeRequest(body []byte, account *Account, model string) error {
+	if isKiroDirectModeAccount(account) {
 		return nil
 	}
 	return validateClaude55Request(body, model)

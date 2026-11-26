@@ -91,7 +91,7 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = compactModel
 		}
 	}
-	if err := validateClaude55RequestForAccount(body, account, mappedModel); err != nil {
+	if err := validateClaude55BridgeRequest(body, account, mappedModel); err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
