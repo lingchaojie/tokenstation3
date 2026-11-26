@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -30,8 +31,16 @@ func TestBuildLoginHeadersUsesProvidedMachineID(t *testing.T) {
 
 	require.Equal(t, headers1["User-Agent"], headers2["User-Agent"])
 	require.NotEqual(t, headers1["User-Agent"], headers3["User-Agent"])
-	require.Contains(t, headers1["User-Agent"], "KiroIDE-0.11.")
-	require.Contains(t, headers1["User-Agent"], machineIDA)
+	require.Equal(t, "KiroIDE-1.4.121-"+machineIDA, headers1["User-Agent"])
+}
+
+func TestBuildKiroIDERuntimeUserAgentVersion(t *testing.T) {
+	version := strings.TrimSpace(os.Getenv("KIRO_IDE_VERSION"))
+	if version == "" {
+		version = "1.4.121"
+	}
+	machineID := BuildMachineID("refresh-a", "", "")
+	require.Equal(t, "KiroIDE "+version+" "+machineID, BuildKiroIDERuntimeUserAgent("account-a", machineID))
 }
 
 func TestBuildOIDCHeadersUsesProvidedAccountKey(t *testing.T) {
