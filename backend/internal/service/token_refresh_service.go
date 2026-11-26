@@ -1243,7 +1243,7 @@ func (s *TokenRefreshService) postRefreshStateSync(ctx context.Context, account 
 	}
 	// Kiro credential persistence already publishes the row read from the
 	// repository. The refresh snapshot may precede a concurrent quota park.
-	if s.schedulerCache != nil && !(account.Platform == PlatformKiro && account.Type == AccountTypeOAuth) {
+	if s.schedulerCache != nil && (account.Platform != PlatformKiro || account.Type != AccountTypeOAuth) {
 		if err := s.schedulerCache.SetAccount(ctx, account); err != nil {
 			slog.Warn("token_refresh.sync_scheduler_cache_failed",
 				"account_id", account.ID,
