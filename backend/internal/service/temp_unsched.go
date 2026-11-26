@@ -27,6 +27,20 @@ type TempUnschedCache interface {
 	DeleteTempUnsched(ctx context.Context, accountID int64) error
 }
 
+// TempUnschedulableGuardedClearer clears the stored cooldown unless its live
+// deadline is in the future and its reason matches the protected reason.
+type TempUnschedulableGuardedClearer interface {
+	ClearTempUnschedulableUnlessActiveReason(ctx context.Context, id int64, protectedReason string) (bool, error)
+}
+
+func clearTempUnschedulableUnlessKiroOverage(ctx context.Context, repo AccountRepository, id int64) (bool, error) {
+	clearer, ok := repo.(TempUnschedulableGuardedClearer)
+	if !ok {
+		return false, nil
+	}
+	return clearer.ClearTempUnschedulableUnlessActiveReason(ctx, id, kiroOverageLimitCode)
+}
+
 // OpenAIAPIKeyHealthCache is an optional TempUnschedCache extension used to
 // aggregate pool API-key failures across gateway instances.
 type OpenAIAPIKeyHealthCache interface {

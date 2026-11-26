@@ -58,7 +58,8 @@ type SuccessfulTestRecoveryResult struct {
 
 // AccountRecoveryOptions 控制账号恢复时的附加行为。
 type AccountRecoveryOptions struct {
-	InvalidateToken bool
+	InvalidateToken     bool
+	preserveKiroOverage bool
 }
 
 type geminiUsageCacheEntry struct {
@@ -2279,19 +2280,44 @@ func (s *RateLimitService) samplePassiveUsageFromHeaders(ctx context.Context, ac
 
 // ClearRateLimit 清除账号的限流状态
 func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) error {
-	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
-		return err
-	}
-	if err := s.accountRepo.ClearAntigravityQuotaScopes(ctx, accountID); err != nil {
-		return err
-	}
-	if err := s.accountRepo.ClearModelRateLimits(ctx, accountID); err != nil {
+	if err := s.clearRateLimitFields(ctx, accountID); err != nil {
 		return err
 	}
 	// 清除限流时一并清理临时不可调度状态，避免周限/窗口重置后仍被本地临时状态阻断。
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
 		return err
 	}
+	s.afterClearRateLimit(ctx, accountID)
+	return nil
+}
+
+func (s *RateLimitService) clearRateLimitFields(ctx context.Context, accountID int64) error {
+	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
+		return err
+	}
+	if err := s.accountRepo.ClearAntigravityQuotaScopes(ctx, accountID); err != nil {
+		return err
+	}
+	return s.accountRepo.ClearModelRateLimits(ctx, accountID)
+}
+
+func (s *RateLimitService) recoverKiroScheduledRateLimit(ctx context.Context, accountID int64, hasRateLimitState bool) (bool, error) {
+	if hasRateLimitState {
+		if err := s.clearRateLimitFields(ctx, accountID); err != nil {
+			return false, err
+		}
+	}
+	cleared, err := clearTempUnschedulableUnlessKiroOverage(ctx, s.accountRepo, accountID)
+	if err != nil {
+		return false, err
+	}
+	if cleared {
+		s.afterClearRateLimit(ctx, accountID)
+	}
+	return hasRateLimitState || cleared, nil
+}
+
+func (s *RateLimitService) afterClearRateLimit(ctx context.Context, accountID int64) {
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.DeleteTempUnsched(ctx, accountID); err != nil {
 			slog.Warn("temp_unsched_cache_delete_failed", "account_id", accountID, "error", err)
@@ -2299,7 +2325,6 @@ func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) 
 	}
 	s.ResetOpenAI403Counter(ctx, accountID)
 	s.notifyAccountSchedulingBlockCleared(accountID)
-	return nil
 }
 
 func (s *RateLimitService) ResetOpenAI403Counter(ctx context.Context, accountID int64) {
@@ -2331,15 +2356,22 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 		}
 	}
 
-	if hasRecoverableRuntimeState(account) {
-		if err := s.ClearRateLimit(ctx, accountID); err != nil {
+	hasRateLimitState := hasRecoverableRateLimitState(account)
+	hasRuntimeState := hasRateLimitState || account.TempUnschedulableUntil != nil
+	if hasRuntimeState {
+		if options.preserveKiroOverage && isKiroDirectModeAccount(account) {
+			result.ClearedRateLimit, err = s.recoverKiroScheduledRateLimit(ctx, accountID, hasRateLimitState)
+		} else {
+			err = s.ClearRateLimit(ctx, accountID)
+			result.ClearedRateLimit = err == nil
+		}
+		if err != nil {
 			return nil, err
 		}
-		result.ClearedRateLimit = true
 	}
 	if result.ClearedError || result.ClearedRateLimit {
 		s.ResetOpenAI403Counter(ctx, accountID)
-		if result.ClearedError && !result.ClearedRateLimit {
+		if result.ClearedError && !hasRuntimeState {
 			s.notifyAccountSchedulingBlockCleared(accountID)
 		}
 	}
@@ -2370,17 +2402,9 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	return nil
 }
 
-func hasRecoverableRuntimeState(account *Account) bool {
-	if account == nil {
-		return false
-	}
-	if account.RateLimitedAt != nil || account.RateLimitResetAt != nil || account.OverloadUntil != nil || account.TempUnschedulableUntil != nil {
-		return true
-	}
-	if len(account.Extra) == 0 {
-		return false
-	}
-	return hasNonEmptyMapValue(account.Extra, "model_rate_limits") ||
+func hasRecoverableRateLimitState(account *Account) bool {
+	return account.RateLimitedAt != nil || account.RateLimitResetAt != nil || account.OverloadUntil != nil ||
+		hasNonEmptyMapValue(account.Extra, "model_rate_limits") ||
 		hasNonEmptyMapValue(account.Extra, "antigravity_quota_scopes")
 }
 

@@ -2575,6 +2575,40 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 	return true, nil
 }
 
+var _ service.TempUnschedulableGuardedClearer = (*accountRepository)(nil)
+
+func (r *accountRepository) ClearTempUnschedulableUnlessActiveReason(ctx context.Context, id int64, protectedReason string) (bool, error) {
+	if scoped := r.accountTransactionScope(ctx); scoped != r {
+		return scoped.ClearTempUnschedulableUnlessActiveReason(ctx, id, protectedReason)
+	}
+
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts
+			SET temp_unschedulable_until = NULL,
+				temp_unschedulable_reason = NULL,
+				updated_at = NOW()
+			WHERE id = $1 AND deleted_at IS NULL
+				AND (temp_unschedulable_until IS NOT NULL OR temp_unschedulable_reason IS NOT NULL)
+				AND (temp_unschedulable_reason IS DISTINCT FROM $2
+					OR temp_unschedulable_until IS NULL
+					OR temp_unschedulable_until <= NOW())
+			RETURNING id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $3, updated.id, NULL, NULL FROM updated
+	`, id, protectedReason, service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return true, nil
+}
+
 func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64) error {
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ClearTempUnschedulable(ctx, id)

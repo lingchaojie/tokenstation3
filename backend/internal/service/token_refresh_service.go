@@ -1180,17 +1180,26 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 	}
 	// 刷新成功后清除临时不可调度状态（处理 OAuth 401 恢复场景）
 	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
-		if clearErr := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); clearErr != nil {
+		kiroOAuth := account.Platform == PlatformKiro && account.Type == AccountTypeOAuth
+		var cleared bool
+		var clearErr error
+		if kiroOAuth {
+			cleared, clearErr = clearTempUnschedulableUnlessKiroOverage(ctx, s.accountRepo, account.ID)
+		} else {
+			clearErr = s.accountRepo.ClearTempUnschedulable(ctx, account.ID)
+			cleared = clearErr == nil
+		}
+		if clearErr != nil {
 			slog.Warn("token_refresh.clear_temp_unschedulable_failed",
 				"account_id", account.ID,
 				"error", clearErr,
 			)
-		} else {
+		} else if cleared {
 			slog.Info("token_refresh.cleared_temp_unschedulable", "account_id", account.ID)
 			s.notifyAccountSchedulingBlockCleared(account.ID)
 		}
 		// 同步清除 Redis 缓存，避免调度器读到过期的临时不可调度状态
-		if s.tempUnschedCache != nil {
+		if s.tempUnschedCache != nil && (cleared || !kiroOAuth) {
 			if clearErr := s.tempUnschedCache.DeleteTempUnsched(ctx, account.ID); clearErr != nil {
 				slog.Warn("token_refresh.clear_temp_unsched_cache_failed",
 					"account_id", account.ID,
@@ -1232,8 +1241,9 @@ func (s *TokenRefreshService) postRefreshStateSync(ctx context.Context, account 
 			slog.Debug("token_refresh.token_cache_invalidated", "account_id", account.ID)
 		}
 	}
-	// 同步更新调度器缓存，确保调度获取的 Account 对象包含最新的 credentials
-	if s.schedulerCache != nil {
+	// Kiro credential persistence already publishes the row read from the
+	// repository. The refresh snapshot may precede a concurrent quota park.
+	if s.schedulerCache != nil && !(account.Platform == PlatformKiro && account.Type == AccountTypeOAuth) {
 		if err := s.schedulerCache.SetAccount(ctx, account); err != nil {
 			slog.Warn("token_refresh.sync_scheduler_cache_failed",
 				"account_id", account.ID,
