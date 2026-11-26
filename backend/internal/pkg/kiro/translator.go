@@ -3478,6 +3478,7 @@ func consumeKiroUsageTrailer(msg *eventStreamMessage, usage *Usage) (bool, error
 	}
 	var amount gjson.Result
 	hasUnit := false
+	hasUnitPlural := false
 	valid := true
 	fields.ForEach(func(key, field gjson.Result) bool {
 		switch key.String() {
@@ -3490,6 +3491,9 @@ func consumeKiroUsageTrailer(msg *eventStreamMessage, usage *Usage) (bool, error
 		case "unit":
 			valid = metering && !hasUnit && field.Type == gjson.String && strings.EqualFold(field.Str, "credit")
 			hasUnit = true
+		case "unitPlural":
+			valid = metering && !hasUnitPlural && field.Type == gjson.String && strings.EqualFold(field.Str, "credits")
+			hasUnitPlural = true
 		default:
 			valid = false
 		}
