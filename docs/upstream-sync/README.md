@@ -1,9 +1,8 @@
 # 上游同步与审计历史（Upstream Sync and Audit History）
 
 本目录保存两类可回溯记录：将通用产品上游 `Wei-Shaw/sub2api` 合入本地
-`dev` 的同步归档，以及针对 KIRO 参考分支 `nianzs/sub2api` 的语义审计归档。
-前者记录实际合并内容；后者记录固定参考范围、能力分类和取舍，不表示已合并
-nianzs 分支或已推进 KIRO 参考点。
+`dev` 的同步归档，以及针对 KIRO 参考分支 `nianzs/sub2api` 的语义审计与同步归档。
+KIRO 归档记录固定范围、能力取舍和参考点推进状态。
 
 文件命名约定：
 
@@ -19,6 +18,7 @@ nianzs 分支或已推进 KIRO 参考点。
 
 | 日期 | 上游版本或审计范围 | 文档 |
 |---|---|---|
+| 2026-11-26 | KIRO 语义同步（`6ba76ea1` → `1f5a9f2e`） | [2026-11-26-kiro-6ba76ea1-1f5a9f2e.md](./2026-11-26-kiro-6ba76ea1-1f5a9f2e.md) |
 | 2026-11-19 | v0.2.23 后续节点 `2af3f1e15c98`（11 月 21 日已推送至 `dev`，合并提交七项检查通过） | [2026-11-19-sub2api-0.2.23-2af3.md](./2026-11-19-sub2api-0.2.23-2af3.md) |
 | 2026-11-19 | v0.2.23 定向接入 GPT-6.2 Sol/Astra 与 Codex Headers（无全量合并、未部署） | [2026-11-19-gpt62-focused-integration.md](./2026-11-19-gpt62-focused-integration.md) |
 | 2026-10-12 | 0.2.15 后续节点 `9591136d45ce`（Fable 默认恢复 1 倍、安全巡检修复；push/CI 待完成） | [2026-10-12-sub2api-0.2.15-9591.md](./2026-10-12-sub2api-0.2.15-9591.md) |
