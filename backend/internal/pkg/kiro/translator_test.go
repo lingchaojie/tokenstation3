@@ -3285,13 +3285,13 @@ func TestKiroTranslatorsAcceptUsageTrailersAfterTerminal(t *testing.T) {
 	body := bytes.Join([][]byte{
 		buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "Hello"}),
 		buildEventStreamFrame(t, "meteringEvent", map[string]any{"usage": 0.25}),
-		buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"}),
+		buildEventStreamFrame(t, "metadataEvent", map[string]any{"stopReason": "END_TURN"}),
 		buildEventStreamFrame(t, "contextUsageEvent", map[string]any{"contextUsagePercentage": 1.8}),
 		buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
 			"contextUsageEvent": map[string]any{"contextUsagePercentage": 1.8},
 		}),
 		buildEventStreamFrame(t, "meteringEvent", map[string]any{
-			"meteringEvent": map[string]any{"unit": "credit", "usage": 0.125},
+			"unit": "credit", "unitPlural": "credits", "usage": 0.125,
 		}),
 	}, nil)
 
@@ -3299,7 +3299,7 @@ func TestKiroTranslatorsAcceptUsageTrailersAfterTerminal(t *testing.T) {
 		result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), "claude-sonnet-4-6", KiroRequestContext{})
 		require.NoError(t, err)
 		require.True(t, result.ProviderTerminalObserved)
-		require.Equal(t, "end_turn", result.StopReason)
+		require.Equal(t, "END_TURN", result.StopReason)
 		require.Equal(t, "Hello", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
 		require.Equal(t, 0.375, result.Usage.KiroCredits)
 	})
