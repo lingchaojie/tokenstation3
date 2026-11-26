@@ -3281,34 +3281,38 @@ func TestKiroTranslatorsRejectSemanticPayloadAfterTerminal(t *testing.T) {
 	require.NotContains(t, out.String(), "must-not-leak")
 }
 
-func TestKiroTranslatorsAcceptContextUsageAfterTerminal(t *testing.T) {
-	var body bytes.Buffer
-	body.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "Hello"}))
-	body.Write(buildEventStreamFrame(t, "meteringEvent", map[string]any{"usage": 0.25}))
-	body.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"}))
-	body.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{"contextUsagePercentage": 1.8}))
-	body.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
-		"contextUsageEvent": map[string]any{"contextUsagePercentage": 1.8},
-	}))
+func TestKiroTranslatorsAcceptUsageTrailersAfterTerminal(t *testing.T) {
+	body := bytes.Join([][]byte{
+		buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "Hello"}),
+		buildEventStreamFrame(t, "meteringEvent", map[string]any{"usage": 0.25}),
+		buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"}),
+		buildEventStreamFrame(t, "contextUsageEvent", map[string]any{"contextUsagePercentage": 1.8}),
+		buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
+			"contextUsageEvent": map[string]any{"contextUsagePercentage": 1.8},
+		}),
+		buildEventStreamFrame(t, "meteringEvent", map[string]any{
+			"meteringEvent": map[string]any{"unit": "credit", "usage": 0.125},
+		}),
+	}, nil)
 
 	t.Run("nonstream", func(t *testing.T) {
-		result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body.Bytes()), "claude-sonnet-4-6", KiroRequestContext{})
+		result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), "claude-sonnet-4-6", KiroRequestContext{})
 		require.NoError(t, err)
 		require.True(t, result.ProviderTerminalObserved)
 		require.Equal(t, "end_turn", result.StopReason)
 		require.Equal(t, "Hello", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
-		require.Equal(t, 0.25, result.Usage.KiroCredits)
+		require.Equal(t, 0.375, result.Usage.KiroCredits)
 	})
 
 	t.Run("stream", func(t *testing.T) {
 		var out bytes.Buffer
-		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body.Bytes()), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
+		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
 		require.NoError(t, err)
 		require.True(t, result.ProviderTerminalObserved)
 		require.Equal(t, "end_turn", result.StopReason)
 		require.Contains(t, out.String(), "Hello")
 		require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
-		require.Equal(t, 0.25, result.Usage.KiroCredits)
+		require.Equal(t, 0.375, result.Usage.KiroCredits)
 	})
 }
 
@@ -3326,9 +3330,14 @@ func TestKiroTranslatorsRejectUnexpectedProviderFramesAfterTerminal(t *testing.T
 			}},
 		},
 		{
-			name:      "metering",
+			name:      "metering_with_late_content",
 			eventType: "meteringEvent",
-			payload:   map[string]any{"meteringEvent": map[string]any{"usage": 1.25}},
+			payload:   map[string]any{"meteringEvent": map[string]any{"usage": 1.25, "content": "late"}},
+		},
+		{
+			name:      "negative_metering",
+			eventType: "meteringEvent",
+			payload:   map[string]any{"usage": -1},
 		},
 		{
 			name:      "unknown",
