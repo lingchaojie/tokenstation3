@@ -3547,6 +3547,7 @@ func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
 		legacy          bool
 		relay           bool
 		secondSaturated bool
+		stickyOnlyRPM   bool
 		wantAccount     int64
 		wantWait        bool
 	}{
@@ -3556,6 +3557,7 @@ func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
 		{name: "routed relay keeps sticky wait", routed: true, relay: true, wantAccount: 1, wantWait: true},
 		{name: "legacy direct keeps sticky wait", legacy: true, wantAccount: 1, wantWait: true},
 		{name: "all saturated still returns a wait plan", secondSaturated: true, wantAccount: 1, wantWait: true},
+		{name: "sticky-only RPM still allows waiting", stickyOnlyRPM: true, wantAccount: 1, wantWait: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			groupID := int64(42)
@@ -3566,6 +3568,11 @@ func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
 			if tc.relay {
 				accounts[0].Type = AccountTypeAPIKey
 				accounts[0].Credentials = map[string]any{"base_url": "https://relay.example.com"}
+			}
+			if tc.stickyOnlyRPM {
+				accounts[0].Extra["base_rpm"] = 10
+				accounts[0].Extra["rpm_strategy"] = "sticky_exempt"
+				accounts[1].Schedulable = false
 			}
 			repo := &mockAccountRepoForPlatform{accounts: accounts, accountsByID: map[int64]*Account{
 				1: &accounts[0], 2: &accounts[1],
@@ -3587,6 +3594,7 @@ func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
 			svc := &GatewayService{
 				accountRepo: repo, groupRepo: groupRepo, cache: cache, cfg: cfg,
 				concurrencyService: NewConcurrencyService(concurrencyCache),
+				rpmCache:           &stubRPMCacheForAccountRPMTest{counts: map[int64]int{1: 10}},
 			}
 			result, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, sessionHash, model, nil, "", 0)
 			require.NoError(t, err)
