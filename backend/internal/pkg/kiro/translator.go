@@ -1511,7 +1511,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return &StreamResult{Usage: partial, FirstDeltaDur: firstDelta}, exc
 		}
 		if providerTerminalObserved {
-			if isKiroContextUsageTrailer(msg) {
+			handled, err := consumeKiroUsageTrailer(msg, &usage)
+			if err != nil {
+				return nil, err
+			}
+			if handled {
 				continue
 			}
 			return nil, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
@@ -3282,7 +3286,11 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 			return "", nil, usage, stopReason, false, exc
 		}
 		if providerTerminalObserved {
-			if isKiroContextUsageTrailer(msg) {
+			handled, err := consumeKiroUsageTrailer(msg, &usage)
+			if err != nil {
+				return "", nil, usage, stopReason, providerTerminalObserved, err
+			}
+			if handled {
 				continue
 			}
 			return "", nil, usage, stopReason, providerTerminalObserved, fmt.Errorf("kiro provider emitted event %q after terminal", msg.EventType)
@@ -3457,33 +3465,68 @@ func kiroProviderTerminalEvent(eventType string, event map[string]any) bool {
 	return readStopReason(event) != "" || readStopReason(nestedEvent(event, eventType)) != ""
 }
 
-// Kiro can send its context-window percentage after the terminal response.
-// This is telemetry and does not affect the final token or credit counters.
-func isKiroContextUsageTrailer(msg *eventStreamMessage) bool {
-	if msg.EventType != "contextUsageEvent" || !json.Valid(msg.Payload) {
-		return false
+// Kiro can send context telemetry and credit metering after the terminal response.
+// Inspect the original payload so extra fields cannot hide content or change token usage.
+func consumeKiroUsageTrailer(msg *eventStreamMessage, usage *Usage) (bool, error) {
+	metering := msg.EventType == "meteringEvent"
+	if !metering && msg.EventType != "contextUsageEvent" {
+		return false, nil
 	}
-	// Inspect the original object before event narrowing can discard extra fields.
-	singleField := func(object gjson.Result) (name string, value gjson.Result, ok bool) {
-		if !object.IsObject() {
-			return "", gjson.Result{}, false
+	fields := kiroUsageTrailerPayload(msg)
+	if !fields.IsObject() {
+		return false, nil
+	}
+	var amount gjson.Result
+	hasUnit := false
+	valid := true
+	fields.ForEach(func(key, field gjson.Result) bool {
+		switch key.String() {
+		case "contextUsagePercentage", "context_usage_percentage":
+			valid = !metering && !amount.Exists() && field.Type == gjson.Number
+			amount = field
+		case "usage":
+			valid = metering && !amount.Exists() && (field.Type == gjson.Number || field.Type == gjson.String)
+			amount = field
+		case "unit":
+			valid = metering && !hasUnit && field.Type == gjson.String && strings.EqualFold(field.Str, "credit")
+			hasUnit = true
+		default:
+			valid = false
 		}
-		object.ForEach(func(key, field gjson.Result) bool {
-			if ok {
-				ok = false
-				return false
-			}
-			name, value, ok = key.String(), field, true
-			return true
+		return valid
+	})
+	if !valid || !amount.Exists() {
+		return false, nil
+	}
+	value := amount.Value()
+	if !isNonNegativeFiniteKiroNumber(value) {
+		return false, nil
+	}
+	if metering {
+		if credits, positive := toPositiveFiniteFloat(value); positive {
+			return true, addKiroCreditsChecked(usage, credits)
+		}
+	}
+	return true, nil
+}
+
+func kiroUsageTrailerPayload(msg *eventStreamMessage) gjson.Result {
+	if !json.Valid(msg.Payload) {
+		return gjson.Result{}
+	}
+	payload := gjson.ParseBytes(msg.Payload)
+	if wrapped := payload.Get(msg.EventType); wrapped.Exists() {
+		fieldCount := 0
+		payload.ForEach(func(_, _ gjson.Result) bool {
+			fieldCount++
+			return fieldCount == 1
 		})
-		return name, value, ok
+		if fieldCount != 1 {
+			return gjson.Result{}
+		}
+		return wrapped
 	}
-	name, value, ok := singleField(gjson.ParseBytes(msg.Payload))
-	if ok && name == msg.EventType {
-		name, value, ok = singleField(value)
-	}
-	return ok && (name == "contextUsagePercentage" || name == "context_usage_percentage") &&
-		value.Type == gjson.Number && isNonNegativeFiniteKiroNumber(value.Num)
+	return payload
 }
 
 var kiroNarrowEventFields = map[string]struct{}{
