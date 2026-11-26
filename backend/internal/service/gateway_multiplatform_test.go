@@ -3537,3 +3537,66 @@ func TestGatewayService_SelectAccountForModelWithPlatform_RoutedOpenAIGroup(t *t
 	require.NotNil(t, acc)
 	require.Equal(t, int64(2), acc.ID, "routed account must win over the higher-priority unrouted one")
 }
+
+func TestGatewayKiroStickySelectionWhenSaturated(t *testing.T) {
+	const model = "claude-sonnet-4-6"
+	const sessionHash = "kiro-sticky"
+	for _, tc := range []struct {
+		name            string
+		routed          bool
+		legacy          bool
+		relay           bool
+		secondSaturated bool
+		wantAccount     int64
+		wantWait        bool
+	}{
+		{name: "direct switches to free account", wantAccount: 2},
+		{name: "routed direct switches to free account", routed: true, wantAccount: 2},
+		{name: "relay keeps sticky wait", relay: true, wantAccount: 1, wantWait: true},
+		{name: "routed relay keeps sticky wait", routed: true, relay: true, wantAccount: 1, wantWait: true},
+		{name: "legacy direct keeps sticky wait", legacy: true, wantAccount: 1, wantWait: true},
+		{name: "all saturated still returns a wait plan", secondSaturated: true, wantAccount: 1, wantWait: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			groupID := int64(42)
+			accounts := []Account{
+				{ID: 1, Platform: PlatformKiro, Type: AccountTypeOAuth, Priority: 1, Status: StatusActive, Schedulable: true, Concurrency: 5, AccountGroups: []AccountGroup{{GroupID: groupID}}, Extra: map[string]any{"mixed_scheduling": true}},
+				{ID: 2, Platform: PlatformKiro, Type: AccountTypeOAuth, Priority: 2, Status: StatusActive, Schedulable: true, Concurrency: 5, AccountGroups: []AccountGroup{{GroupID: groupID}}, Extra: map[string]any{"mixed_scheduling": true}},
+			}
+			if tc.relay {
+				accounts[0].Type = AccountTypeAPIKey
+				accounts[0].Credentials = map[string]any{"base_url": "https://relay.example.com"}
+			}
+			repo := &mockAccountRepoForPlatform{accounts: accounts, accountsByID: map[int64]*Account{
+				1: &accounts[0], 2: &accounts[1],
+			}}
+			cache := &mockGatewayCacheForPlatform{sessionBindings: map[string]int64{sessionHash: 1}}
+			groupRepo := &mockGroupRepoForGateway{groups: map[int64]*Group{
+				groupID: {
+					ID: groupID, Platform: PlatformAnthropic, Status: StatusActive, Hydrated: true,
+					ModelRoutingEnabled: tc.routed,
+					ModelRouting:        map[string][]int64{model: {1, 2}},
+				},
+			}}
+			cfg := testConfig()
+			cfg.Gateway.Scheduling.LoadBatchEnabled = !tc.legacy
+			cfg.Gateway.Scheduling.StickySessionMaxWaiting = 3
+			cfg.Gateway.Scheduling.FallbackMaxWaiting = 10
+			concurrencyCache := &mockConcurrencyCache{acquireResults: map[int64]bool{1: false, 2: !tc.secondSaturated}}
+
+			svc := &GatewayService{
+				accountRepo: repo, groupRepo: groupRepo, cache: cache, cfg: cfg,
+				concurrencyService: NewConcurrencyService(concurrencyCache),
+			}
+			result, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, sessionHash, model, nil, "", 0)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, tc.wantAccount, result.Account.ID)
+			require.Equal(t, tc.wantWait, result.WaitPlan != nil)
+			if !tc.wantWait {
+				require.True(t, result.Acquired)
+				require.Equal(t, tc.wantAccount, cache.sessionBindings[sessionHash])
+			}
+		})
+	}
+}

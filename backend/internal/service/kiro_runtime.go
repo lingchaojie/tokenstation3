@@ -752,6 +752,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				}
 				classification := classifyKiroHTTPError(resp.StatusCode, string(respBody))
 				logKiroBadRequestClassification(classification, account, mappedModel, resp.Header, respBody)
+				if classification.Category == kiroErrorBadRequestContextLength {
+					logKiroOversizedPayload(account, mappedModel, payload)
+				}
 				resetHTTPResponseBody(resp, respBody)
 				return resp, requestCtx, nil
 			}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -434,7 +435,7 @@ func TestAccountUsageService_GetUsage_KiroActiveUsesCachedSnapshotWithinTTL(t *t
 	require.Empty(t, usage.ErrorCode)
 }
 
-func TestAccountUsageService_GetUsage_KiroBuilderIDWithoutProfileArnOmitsProfileArn(t *testing.T) {
+func TestAccountUsageService_GetUsage_KiroBuilderIDUsesFallbackProfileArn(t *testing.T) {
 	account := Account{
 		ID:       703,
 		Platform: PlatformKiro,
@@ -451,7 +452,8 @@ func TestAccountUsageService_GetUsage_KiroBuilderIDWithoutProfileArnOmitsProfile
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
-		require.Empty(t, r.URL.Query().Get("profileArn"))
+		require.Equal(t, kiroBuilderIDProfileARN, r.URL.Query().Get("profileArn"))
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+"},
@@ -571,7 +573,7 @@ func TestAccountUsageService_GetUsage_KiroUsesAPIRegionForUsageRequest(t *testin
 	require.Equal(t, []string{"eu-west-1"}, gotRegions)
 }
 
-func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndIgnoresIDCRegionWithoutAPIRegion(t *testing.T) {
+func TestAccountUsageService_GetUsage_KiroLegacyIDCUsesFallbackProfileArnAndDefaultAPIRegion(t *testing.T) {
 	account := Account{
 		ID:       710,
 		Platform: PlatformKiro,
@@ -590,7 +592,8 @@ func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndIgnoresIDCRegionWith
 	gotRegions := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
-		require.Empty(t, r.URL.Query().Get("profileArn"))
+		require.Equal(t, kiroBuilderIDProfileARN, r.URL.Query().Get("profileArn"))
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+"},
@@ -817,4 +820,116 @@ func TestAccountUsageService_EnrichAccountWithKiroRuntimeStateIncludesCachedQuot
 	require.Equal(t, kiroQuotaStateOverageActive, target.KiroQuotaState)
 	require.Equal(t, "overages_enabled", target.KiroQuotaReason)
 	require.NotNil(t, target.KiroQuotaResetAt)
+}
+
+func TestMapKiroUsageToInfo_AdditionalCreditPools(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields string
+		state  string
+	}{
+		{
+			name: "active promo with remaining credits", state: kiroQuotaStateNormal,
+			fields: `,"bonuses":[{"bonusCode":"private-promo-code","displayName":"Promo credits","status":"ACTIVE","currentUsage":1,"usageLimit":20}]`,
+		},
+		{
+			name: "expired promo with apparent balance", state: kiroQuotaStateCreditsExhausted,
+			fields: `,"bonuses":[{"status":"ACTIVE","currentUsage":0,"usageLimit":20,"expiresAt":"2000-01-01T00:00:00Z"}]`,
+		},
+		{
+			name: "exhausted promo with apparent balance", state: kiroQuotaStateCreditsExhausted,
+			fields: `,"bonuses":[{"status":"EXHAUSTED","currentUsage":0,"usageLimit":20}]`,
+		},
+		{
+			name: "active trial with balance", state: kiroQuotaStateNormal,
+			fields: `,"freeTrialInfo":{"freeTrialStatus":"ACTIVE","currentUsage":1,"usageLimit":20}`,
+		},
+		{
+			name: "expired trial with apparent balance", state: kiroQuotaStateCreditsExhausted,
+			fields: `,"freeTrialInfo":{"freeTrialStatus":"ACTIVE","currentUsage":0,"usageLimit":20,"freeTrialExpiry":"2000-01-01T00:00:00Z"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":50,"usageLimit":50` + tc.fields + `}]}`
+			var upstream kiroUsageLimitsResponse
+			require.NoError(t, json.Unmarshal([]byte(body), &upstream))
+			info := mapKiroUsageToInfo(&upstream)
+			require.Equal(t, tc.state, info.KiroQuotaState)
+			if tc.name == "active promo with remaining credits" {
+				wire, err := json.Marshal(info)
+				require.NoError(t, err)
+				require.Contains(t, string(wire), `"kiro_bonuses":[{"name":"Promo credits","status":"ACTIVE","current_usage":1,"usage_limit":20,"percentage_used":5}]`)
+				require.NotContains(t, string(wire), "private-promo-code")
+			}
+		})
+	}
+}
+
+func TestAccountUsageService_GetUsage_KiroAPIKeyOmitsProfileArn(t *testing.T) {
+	account := Account{ID: 712, Platform: PlatformKiro, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"api_key":     "kiro-api-key",
+		"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/stale",
+	}}
+	svc := NewAccountUsageService(&stubOpenAIAccountRepo{accounts: []Account{account}}, nil, nil, nil, nil, NewUsageCache(), nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NotContains(t, r.URL.Query(), "profileArn")
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
+		_, _ = w.Write([]byte(`{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":2,"usageLimit":50}]}`))
+	}))
+	defer server.Close()
+	previous := resolveKiroRuntimeEndpoint
+	resolveKiroRuntimeEndpoint = func(string) string { return server.URL }
+	t.Cleanup(func() { resolveKiroRuntimeEndpoint = previous })
+
+	usage, err := svc.GetUsage(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.NotNil(t, usage.KiroCredit)
+	require.Equal(t, 2.0, usage.KiroCredit.CurrentUsage)
+}
+
+func TestIsKiroPersonalProfileLoginPreservesEnterpriseAndLegacyProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		credentials map[string]any
+		personal    bool
+	}{
+		{name: "known Builder ID", credentials: map[string]any{"provider": "BuilderId", "auth_method": "idc"}, personal: true},
+		{name: "Social without provider", credentials: map[string]any{"auth_method": "social"}, personal: true},
+		{name: "enterprise provider", credentials: map[string]any{"provider": "Enterprise", "auth_method": "idc"}},
+		{name: "enterprise external auth", credentials: map[string]any{"provider": "Google", "auth_method": "external_idp"}},
+		{name: "legacy custom identity center", credentials: map[string]any{"provider": "AWS", "start_url": "https://d-example.awsapps.com/start"}},
+		{name: "legacy unknown identity", credentials: map[string]any{"provider": "AWS", "auth_method": "idc"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.personal, isKiroPersonalProfileLogin(&Account{Credentials: tc.credentials}))
+		})
+	}
+}
+
+func TestKiroOverageParkAppearsInUsageAndAccountState(t *testing.T) {
+	now := time.Now()
+	resetAt := nextKiroMonthlyResetUTC(now)
+	account := Account{
+		ID: 713, Platform: PlatformKiro, Type: AccountTypeOAuth,
+		TempUnschedulableUntil: &resetAt, TempUnschedulableReason: kiroOverageLimitCode,
+	}
+	repo := &stubOpenAIAccountRepo{accounts: []Account{account}}
+	svc := NewAccountUsageService(repo, nil, nil, nil, nil, NewUsageCache(), nil, nil)
+	svc.storeKiroUsageSnapshot(account.ID, &UsageInfo{KiroQuotaState: kiroQuotaStateNormal})
+
+	usage, err := svc.GetUsage(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Equal(t, kiroQuotaStateOverageExhausted, usage.KiroQuotaState)
+	require.Equal(t, kiroOverageLimitCode, usage.KiroQuotaReason)
+	require.Equal(t, &resetAt, usage.KiroQuotaResetAt)
+
+	svc.EnrichAccountWithKiroRuntimeState(context.Background(), &account)
+	require.Equal(t, kiroQuotaStateOverageExhausted, account.KiroQuotaState)
+	require.Equal(t, &resetAt, account.KiroQuotaResetAt)
+
+	past := now.Add(-time.Minute)
+	account.TempUnschedulableUntil = &past
+	svc.EnrichAccountWithKiroRuntimeState(context.Background(), &account)
+	require.Equal(t, kiroQuotaStateNormal, account.KiroQuotaState)
+	require.Nil(t, account.KiroQuotaResetAt)
 }

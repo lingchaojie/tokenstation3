@@ -541,6 +541,7 @@ export default {
       usageWindow: {
         kiroCredits: 'Credits',
         kiroBonus: 'Bonus',
+        kiroPromoCredits: '赠送额度',
         kiroReset: '重置',
         kiroOverage: '超额',
         kiroDaysLeft: '剩余 {days} 天',

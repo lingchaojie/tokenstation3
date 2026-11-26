@@ -107,6 +107,25 @@ func kiroListAvailableProfiles(ctx context.Context, account *Account, token stri
 	return &parsed, nil
 }
 
+// ListAvailableProfiles only serves enterprise identities. For legacy
+// accounts with ambiguous metadata, keep probing for a real profile.
+func isKiroPersonalProfileLogin(account *Account) bool {
+	provider := strings.TrimSpace(account.GetCredential("provider"))
+	if strings.EqualFold(provider, kiropkg.ProviderEnterprise) ||
+		strings.EqualFold(provider, kiropkg.ProviderExternalIdp) ||
+		strings.EqualFold(strings.TrimSpace(account.GetCredential("auth_method")), "external_idp") {
+		return false
+	}
+	if kiroIsSocialLogin(account) ||
+		strings.EqualFold(provider, kiropkg.ProviderBuilderId) ||
+		strings.EqualFold(provider, kiropkg.ProviderGoogle) ||
+		strings.EqualFold(provider, kiropkg.ProviderGithub) {
+		return true
+	}
+	startURL := strings.TrimRight(strings.TrimSpace(account.GetCredential("start_url")), "/")
+	return strings.EqualFold(startURL, strings.TrimRight(kiropkg.BuilderIDStartURL, "/"))
+}
+
 // kiroResolveAndPersistProfileArn 解析并回填 Enterprise/IdC 账号的真实 profileArn（包级共用函数）。
 //
 // 流式端点（generateAssistantResponse）强制要求 profileArn：不带 → 400
@@ -116,7 +135,7 @@ func kiroListAvailableProfiles(ctx context.Context, account *Account, token stri
 //
 // 行为：
 //   - API Key 凭据 / 已有真实（非占位符）profileArn → 直接返回，不发起网络请求
-//   - 否则调用 ListAvailableProfiles，命中真实 ARN 时写回凭据并持久化到 DB
+//   - 明确的个人账号直接使用默认 ARN，其他账号才查询 ListAvailableProfiles
 //   - 上游无 profile（如 Social/BuilderID 账号）→ 回填默认 ARN（Social → Social ARN，其余 → BuilderID 占位符）并持久化
 //   - 进程内去重：同一账号仅首次请求时触发 API 调用，避免重复查询
 func kiroResolveAndPersistProfileArn(ctx context.Context, repo AccountRepository, account *Account, token string) string {
@@ -151,22 +170,17 @@ func kiroResolveAndPersistProfileArn(ctx context.Context, repo AccountRepository
 	once.Do(func() {
 		arn := kiroDefaultProfileARN(account)
 
-		profiles, err := kiroListAvailableProfiles(ctx, account, token)
-		if err != nil {
-			// API 失败（如 BuilderID 账号不支持 ListAvailableProfiles），fallback 到默认 ARN
-			logger.L().Warn("kiro profileArn resolution failed, using default",
-				zap.Int64("account_id", accountID),
-				zap.String("profile_arn", arn),
-				zap.Error(err),
-			)
-		} else if real := profiles.firstARN(); real != "" {
-			arn = real
-		} else {
-			// 上游无 Enterprise profile（Social/BuilderID 等），使用默认 ARN 回填
-			logger.L().Debug("kiro profileArn resolution: no enterprise profile found, using default",
-				zap.Int64("account_id", accountID),
-				zap.String("profile_arn", arn),
-			)
+		if !isKiroPersonalProfileLogin(account) {
+			profiles, err := kiroListAvailableProfiles(ctx, account, token)
+			if err != nil {
+				logger.L().Warn("kiro profileArn resolution failed, using default",
+					zap.Int64("account_id", accountID),
+					zap.String("profile_arn", arn),
+					zap.Error(err),
+				)
+			} else if real := profiles.firstARN(); real != "" {
+				arn = real
+			}
 		}
 
 		resolvedARN = arn

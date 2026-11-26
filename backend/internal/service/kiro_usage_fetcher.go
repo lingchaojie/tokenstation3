@@ -51,11 +51,21 @@ type kiroUsageBreakdown struct {
 	DisplayName                  string             `json:"displayName"`
 	DisplayNamePlural            string             `json:"displayNamePlural"`
 	FreeTrialInfo                *kiroFreeTrialInfo `json:"freeTrialInfo"`
+	Bonuses                      []kiroBonusEntry   `json:"bonuses"`
 	NextDateReset                any                `json:"nextDateReset"`
 	OverageCharges               *float64           `json:"overageCharges"`
 	ResourceType                 string             `json:"resourceType"`
 	UsageLimit                   *float64           `json:"usageLimit"`
 	UsageLimitWithPrecision      *float64           `json:"usageLimitWithPrecision"`
+}
+
+type kiroBonusEntry struct {
+	DisplayName  string   `json:"displayName"`
+	Status       string   `json:"status"`
+	CurrentUsage *float64 `json:"currentUsage"`
+	UsageLimit   *float64 `json:"usageLimit"`
+	ExpiresAt    any      `json:"expiresAt"`
+	RedeemedAt   any      `json:"redeemedAt"`
 }
 
 type kiroFreeTrialInfo struct {
@@ -126,6 +136,7 @@ func (s *AccountUsageService) getKiroUsage(ctx context.Context, account *Account
 	})
 	if fetchErr == nil {
 		if usage, ok := result.(*UsageInfo); ok && usage != nil {
+			usage = cloneUsageInfo(usage)
 			usage.Source = source
 			s.attachKiroRuntimeState(ctx, account, usage)
 			if source == "active" {
@@ -164,7 +175,10 @@ func (s *AccountUsageService) fetchAndCacheKiroUsage(ctx context.Context, accoun
 	}
 
 	region := kiroAPIRegion(account)
-	profileArn := resolveKiroPayloadProfileArn(account)
+	var profileArn string
+	if account.Type == AccountTypeOAuth {
+		profileArn = kiroResolveProfileArnForKRS(account)
+	}
 
 	resp, err := s.requestKiroUsageLimits(ctx, account, region, profileArn, token)
 	if err != nil {
@@ -271,6 +285,7 @@ func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, accoun
 		q.Set("profileArn", profileArn)
 	}
 	q.Set("resourceType", kiroUsageResourceType)
+	q.Set("isEmailRequired", "true")
 	reqURL.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
@@ -413,31 +428,45 @@ func mapKiroUsageToInfo(resp *kiroUsageLimitsResponse) *UsageInfo {
 			CurrencySymbol:  kiroCurrencySymbol(strings.TrimSpace(credit.Currency)),
 		}
 		if ft := credit.FreeTrialInfo; ft != nil && strings.EqualFold(strings.TrimSpace(ft.FreeTrialStatus), "ACTIVE") {
-			expiry := parseKiroTimestamp(ft.FreeTrialExpiry)
-			daysRemaining := 0
-			if expiry != nil {
-				daysRemaining = int(time.Until(*expiry).Hours() / 24)
-				if time.Until(*expiry)%(24*time.Hour) != 0 {
-					daysRemaining++
-				}
-				if daysRemaining < 0 {
-					daysRemaining = 0
-				}
+			progress := newKiroBonusProgress(
+				selectKiroFloat(ft.CurrentUsageWithPrecision, ft.CurrentUsage),
+				selectKiroFloat(ft.UsageLimitWithPrecision, ft.UsageLimit),
+				parseKiroTimestamp(ft.FreeTrialExpiry), now,
+			)
+			info.KiroBonus = &progress
+		}
+	}
+	for _, breakdown := range resp.UsageBreakdownList {
+		for _, bonus := range breakdown.Bonuses {
+			status := strings.ToUpper(strings.TrimSpace(bonus.Status))
+			if status != "ACTIVE" && status != "EXHAUSTED" {
+				continue
 			}
-			current := selectKiroFloat(ft.CurrentUsageWithPrecision, ft.CurrentUsage)
-			limit := selectKiroFloat(ft.UsageLimitWithPrecision, ft.UsageLimit)
-			info.KiroBonus = &KiroCreditProgress{
-				CurrentUsage:   current,
-				UsageLimit:     limit,
-				PercentageUsed: percentageOrZero(current, limit),
-				DaysRemaining:  daysRemaining,
-				ExpiryDate:     expiry,
-			}
+			info.KiroBonuses = append(info.KiroBonuses, KiroBonusProgress{
+				Name:   strings.TrimSpace(bonus.DisplayName),
+				Status: status,
+				KiroCreditProgress: newKiroBonusProgress(
+					selectKiroFloat(bonus.CurrentUsage, nil), selectKiroFloat(bonus.UsageLimit, nil),
+					parseKiroTimestamp(bonus.ExpiresAt), now,
+				),
+				RedeemedAt: parseKiroTimestamp(bonus.RedeemedAt),
+			})
 		}
 	}
 	info.KiroResetAt = resetAt
-	setKiroQuotaStateFromUsage(info)
+	setKiroQuotaStateFromUsage(info, now)
 	return info
+}
+
+func newKiroBonusProgress(current, limit float64, expiry *time.Time, now time.Time) KiroCreditProgress {
+	progress := KiroCreditProgress{
+		CurrentUsage: current, UsageLimit: limit, PercentageUsed: percentageOrZero(current, limit),
+		ExpiryDate: expiry,
+	}
+	if expiry != nil && expiry.After(now) {
+		progress.DaysRemaining = int((expiry.Sub(now)-time.Nanosecond)/(24*time.Hour)) + 1
+	}
+	return progress
 }
 
 func selectKiroCreditBreakdown(items []kiroUsageBreakdown) *kiroUsageBreakdown {
@@ -576,7 +605,15 @@ func buildKiroDegradedUsage(err error) *UsageInfo {
 }
 
 func (s *AccountUsageService) attachKiroRuntimeState(ctx context.Context, account *Account, usage *UsageInfo) {
-	if s == nil || usage == nil || account == nil || account.Platform != PlatformKiro || s.kiroCooldownStore == nil {
+	if s == nil || usage == nil || !isKiroDirectModeAccount(account) {
+		return
+	}
+	if resetAt := activeKiroOverageParkResetAt(account); resetAt != nil {
+		usage.KiroQuotaState = kiroQuotaStateOverageExhausted
+		usage.KiroQuotaReason = kiroOverageLimitCode
+		usage.KiroQuotaResetAt = resetAt
+	}
+	if s.kiroCooldownStore == nil {
 		return
 	}
 	usage.KiroRuntimeState = ""
@@ -604,6 +641,11 @@ func (s *AccountUsageService) EnrichAccountWithKiroRuntimeState(ctx context.Cont
 		account.KiroQuotaReason = usage.KiroQuotaReason
 		account.KiroQuotaResetAt = usage.KiroQuotaResetAt
 	}
+	if resetAt := activeKiroOverageParkResetAt(account); resetAt != nil {
+		account.KiroQuotaState = kiroQuotaStateOverageExhausted
+		account.KiroQuotaReason = kiroOverageLimitCode
+		account.KiroQuotaResetAt = resetAt
+	}
 	if s.kiroCooldownStore == nil {
 		return
 	}
@@ -614,7 +656,15 @@ func (s *AccountUsageService) EnrichAccountWithKiroRuntimeState(ctx context.Cont
 	account.KiroRuntimeState, account.KiroRuntimeReason, account.KiroRuntimeResetAt = kiroRuntimeStateSnapshot(state)
 }
 
-func setKiroQuotaStateFromUsage(info *UsageInfo) {
+func activeKiroOverageParkResetAt(account *Account) *time.Time {
+	resetAt := account.TempUnschedulableUntil
+	if resetAt == nil || !resetAt.After(time.Now()) || account.TempUnschedulableReason != kiroOverageLimitCode {
+		return nil
+	}
+	return resetAt
+}
+
+func setKiroQuotaStateFromUsage(info *UsageInfo, now time.Time) {
 	if info == nil {
 		return
 	}
@@ -624,7 +674,7 @@ func setKiroQuotaStateFromUsage(info *UsageInfo) {
 
 	creditExhausted := false
 	if info.KiroCredit != nil && info.KiroCredit.UsageLimit > 0 {
-		creditExhausted = info.KiroCredit.CurrentUsage >= info.KiroCredit.UsageLimit
+		creditExhausted = info.KiroCredit.CurrentUsage >= info.KiroCredit.UsageLimit && !kiroHasAvailableBonus(info, now)
 	}
 	overageActive := info.KiroOverage != nil &&
 		(info.KiroOverage.CurrentOverages > 0 || info.KiroOverage.OverageCharges > 0)
@@ -641,4 +691,20 @@ func setKiroQuotaStateFromUsage(info *UsageInfo) {
 	default:
 		info.KiroQuotaState = kiroQuotaStateNormal
 	}
+}
+
+func kiroHasAvailableBonus(info *UsageInfo, now time.Time) bool {
+	hasBalance := func(progress KiroCreditProgress) bool {
+		return progress.UsageLimit > 0 && progress.CurrentUsage < progress.UsageLimit &&
+			(progress.ExpiryDate == nil || progress.ExpiryDate.After(now))
+	}
+	if info.KiroBonus != nil && hasBalance(*info.KiroBonus) {
+		return true
+	}
+	for _, bonus := range info.KiroBonuses {
+		if bonus.Status == "ACTIVE" && hasBalance(bonus.KiroCreditProgress) {
+			return true
+		}
+	}
+	return false
 }

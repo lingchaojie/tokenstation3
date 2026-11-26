@@ -179,6 +179,27 @@ describe('AccountUsageCell', () => {
     expect(relay.text()).not.toContain('admin.accounts.usageWindow.kiroCredits')
   })
 
+  it('renders each Kiro promo pool independently from the trial', async () => {
+    getUsage.mockResolvedValueOnce({
+      kiro_bonus: { current_usage: 1, usage_limit: 10, percentage_used: 10 },
+      kiro_bonuses: [
+        { name: 'Launch promo', status: 'ACTIVE', current_usage: 3, usage_limit: 40, percentage_used: 7.5 },
+        { status: 'EXHAUSTED', current_usage: 20, usage_limit: 20, percentage_used: 100 }
+      ]
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 1012, platform: 'kiro', type: 'oauth' }) },
+      global: { stubs: { UsageProgressBar: true, AccountQuotaInfo: true } }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1 / 10')
+    expect(wrapper.text()).toContain('Launch promo')
+    expect(wrapper.text()).toContain('3 / 40')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.kiroPromoCredits')
+    expect(wrapper.text()).toContain('20 / 20')
+  })
+
   it('keeps cached KIRO credits and the retry button after an active query fails', async () => {
     getUsage
       .mockResolvedValueOnce({ kiro_credit: { current_usage: 12, usage_limit: 50, percentage_used: 24 } })
