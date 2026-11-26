@@ -2503,16 +2503,42 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 	return nil
 }
 
+var _ service.KiroOverageParkReader = (*accountRepository)(nil)
+
+func (r *accountRepository) GetActiveKiroOveragePark(ctx context.Context, id int64) (*time.Time, error) {
+	var until time.Time
+	err := scanSingleRow(ctx, r.sql, `
+		SELECT temp_unschedulable_until
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL AND platform = $2
+			AND temp_unschedulable_reason = $3 AND temp_unschedulable_until > NOW()
+	`, []any{id, service.PlatformKiro, service.KiroOverageLimitCode}, &until)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &until, nil
+}
+
 func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	// One deadline stores both restrictions. Keep the later deadline and give the
+	// active Kiro overage reason precedence so automatic recovery still guards it.
 	result, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts
-		SET temp_unschedulable_until = $1,
-			temp_unschedulable_reason = $2,
+		SET temp_unschedulable_until = GREATEST(temp_unschedulable_until, $1),
+			temp_unschedulable_reason = CASE
+				WHEN platform = $4 AND temp_unschedulable_reason = $5 AND temp_unschedulable_until > NOW()
+					THEN temp_unschedulable_reason
+				ELSE $2
+			END,
 			updated_at = NOW()
 		WHERE id = $3
 			AND deleted_at IS NULL
-			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
-	`, until, reason, id)
+			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1
+				OR (platform = $4 AND $2 = $5 AND $1 > NOW() AND temp_unschedulable_reason IS DISTINCT FROM $5))
+	`, until, reason, id, service.PlatformKiro, service.KiroOverageLimitCode)
 	if err != nil {
 		return err
 	}
@@ -2572,6 +2598,40 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 		return false, err
 	}
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+var _ service.TempUnschedulableGuardedClearer = (*accountRepository)(nil)
+
+func (r *accountRepository) ClearTempUnschedulableUnlessActiveReason(ctx context.Context, id int64, protectedReason string) (bool, error) {
+	if scoped := r.accountTransactionScope(ctx); scoped != r {
+		return scoped.ClearTempUnschedulableUnlessActiveReason(ctx, id, protectedReason)
+	}
+
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts
+			SET temp_unschedulable_until = NULL,
+				temp_unschedulable_reason = NULL,
+				updated_at = NOW()
+			WHERE id = $1 AND deleted_at IS NULL
+				AND (temp_unschedulable_until IS NOT NULL OR temp_unschedulable_reason IS NOT NULL)
+				AND (temp_unschedulable_reason IS DISTINCT FROM $2
+					OR temp_unschedulable_until IS NULL
+					OR temp_unschedulable_until <= NOW())
+			RETURNING id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $3, updated.id, NULL, NULL FROM updated
+	`, id, protectedReason, service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
 	return true, nil
 }
 

@@ -6,7 +6,7 @@ KIRO gateway work in this repository tracks `https://github.com/nianzs/sub2api`.
 Use the nianzs fork as the reference for KIRO forwarding, request translation,
 response parsing, OAuth/IDC login, refresh behavior, cache emulation, cooldown,
 usage/credits, and admin account workflows. The current reference commit is
-`6ba76ea105e065a5aa8dd2b8d2957528ed58935b`; update this line only when
+`1f5a9f2ee66697219e5e75f0ceea7f52ec49d9ab`; update this line only when
 intentionally adopting a newer KIRO implementation.
 
 ## Dual-Upstream Provenance

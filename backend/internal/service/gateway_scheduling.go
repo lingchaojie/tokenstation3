@@ -295,6 +295,28 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 	}
 
+	var saturatedKiroSticky *Account
+	tryStickyWait := func(account *Account) (*AccountSelectionResult, error) {
+		if account == nil {
+			return nil, nil
+		}
+		waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, account.ID)
+		if waitingCount >= cfg.StickySessionMaxWaiting || !s.checkAndRegisterSession(ctx, account, sessionHash) {
+			return nil, nil
+		}
+		slog.Debug("sticky.wait_plan",
+			"account_id", account.ID,
+			"session", shortSessionHash(sessionHash),
+			"result", "wait_plan",
+		)
+		return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+			AccountID:      account.ID,
+			MaxConcurrency: account.Concurrency,
+			Timeout:        cfg.StickySessionWaitTimeout,
+			MaxWaiting:     cfg.StickySessionMaxWaiting,
+		})
+	}
+
 	// ============ Layer 1: 模型路由优先选择（优先级高于粘性会话） ============
 	if len(routingAccountIDs) > 0 && s.concurrencyService != nil {
 		// 1. 过滤出路由列表中可调度的账号
@@ -408,6 +430,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 								}
 							}
 
+							if err == nil && !result.Acquired && isKiroDirectModeAccount(stickyAccount) {
+								stickyCacheMissReason = "direct_kiro_busy"
+								saturatedKiroSticky = stickyAccount
+							}
 							if stickyCacheMissReason == "" {
 								waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, stickyAccountID)
 								if waitingCount < cfg.StickySessionMaxWaiting {
@@ -519,6 +545,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					}
 				}
 
+				if selection, waitErr := tryStickyWait(saturatedKiroSticky); selection != nil || waitErr != nil {
+					return selection, waitErr
+				}
+
 				// 5. 所有路由账号槽位满，尝试返回等待计划（选择负载最低的）
 				// 遍历找到第一个满足会话限制的账号
 				for _, item := range routingAvailable {
@@ -616,24 +646,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						)
 					}
 
-					waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, accountID)
-					if waitingCount < cfg.StickySessionMaxWaiting {
-						// 会话数量限制检查（等待计划也需要占用会话配额）
-						if !s.checkAndRegisterSession(ctx, account, sessionHash) {
-							// 会话限制已满，继续到 Layer 2
-						} else {
-							slog.Debug("sticky.layer1_5_no_routing_hit",
-								"account_id", accountID,
-								"session", shortSessionHash(sessionHash),
-								"result", "wait_plan",
-							)
-							return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
-								AccountID:      accountID,
-								MaxConcurrency: account.Concurrency,
-								Timeout:        cfg.StickySessionWaitTimeout,
-								MaxWaiting:     cfg.StickySessionMaxWaiting,
-							})
-						}
+					if err == nil && !result.Acquired && isKiroDirectModeAccount(account) {
+						saturatedKiroSticky = account
+					} else if selection, waitErr := tryStickyWait(account); selection != nil || waitErr != nil {
+						return selection, waitErr
 					}
 				} else if !clearSticky {
 					slog.Debug("sticky.layer1_5_no_routing_miss",
@@ -716,6 +732,11 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	if len(candidates) == 0 {
+		// The bound account can pass sticky-only RPM admission even when it
+		// cannot enter the general pool.
+		if selection, waitErr := tryStickyWait(saturatedKiroSticky); selection != nil || waitErr != nil {
+			return selection, waitErr
+		}
 		// Cooldown recovery has a state-changing side effect. Apply channel
 		// admission before it, including accounts skipped above for cooldown.
 		// Keep the full pool so recovery's existing mixed-platform guards remain
@@ -819,6 +840,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	// ============ Layer 3: 兜底排队 ============
+	if selection, waitErr := tryStickyWait(saturatedKiroSticky); selection != nil || waitErr != nil {
+		return selection, waitErr
+	}
 	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
 	for _, acc := range candidates {
 		// 会话数量限制检查（等待计划也需要占用会话配额）

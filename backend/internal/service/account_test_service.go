@@ -685,7 +685,7 @@ func formatKiroTestError(statusCode int, body []byte, requestedModel string, acc
 }
 
 func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, token string) (*http.Response, kiropkg.KiroRequestContext, error) {
-	modelID := kiropkg.MapModel(mappedModel)
+	modelID := resolveKiroUpstreamModel(mappedModel)
 	currentToken := token
 	profileArn := kiroResolveProfileArnForPayload(account, KiroEndpointModeQ)
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)

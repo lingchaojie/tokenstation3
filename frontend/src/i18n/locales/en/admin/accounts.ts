@@ -1768,6 +1768,7 @@ export default {
       usageWindow: {
         kiroCredits: 'Credits',
         kiroBonus: 'Bonus',
+        kiroPromoCredits: 'Promo credits',
         kiroReset: 'Reset',
         kiroOverage: 'Overage',
         kiroDaysLeft: '{days}d left',

@@ -44,10 +44,9 @@ var (
 		"win32":  {"10.0.22631"},
 	}
 	nodeVersions = []string{"22.22.0"}
-	kiroVersions = []string{
-		"0.11.132", "0.11.131", "0.11.130",
-	}
 )
+
+const defaultKiroIDEVersion = "1.4.121"
 
 func globalRuntimeFingerprints() *runtimeFingerprintManager {
 	globalRuntimeFingerprintManagerOnce.Do(func() {
@@ -100,7 +99,7 @@ func generateRuntimeFingerprint(accountKey, machineID string) *RuntimeFingerprin
 		OSType:              osType,
 		OSVersion:           osVersionPool[rng.Intn(len(osVersionPool))],
 		NodeVersion:         nodeVersions[rng.Intn(len(nodeVersions))],
-		KiroVersion:         kiroVersions[rng.Intn(len(kiroVersions))],
+		KiroVersion:         defaultKiroIDEVersion,
 		KiroHash:            machineID,
 	}
 }
@@ -205,7 +204,7 @@ var kiroIDEUserAgentVersion = func() string {
 	if v := strings.TrimSpace(os.Getenv("KIRO_IDE_VERSION")); v != "" {
 		return v
 	}
-	return "0.12.301"
+	return defaultKiroIDEVersion
 }()
 
 // BuildKiroIDERuntimeUserAgent 构造 KRS endpoint 的 User-Agent，格式为

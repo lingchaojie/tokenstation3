@@ -39,12 +39,16 @@ func setupAvailableModelsRouter(adminSvc service.AdminService) *gin.Engine {
 }
 
 type syncUpstreamHTTPUpstream struct {
-	resp      *http.Response
-	responses []*http.Response
-	err       error
+	lastRequest  *http.Request
+	lastProxyURL string
+	resp         *http.Response
+	responses    []*http.Response
+	err          error
 }
 
 func (u *syncUpstreamHTTPUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	u.lastRequest = req
+	u.lastProxyURL = proxyURL
 	if u.err != nil {
 		return nil, u.err
 	}
@@ -604,4 +608,29 @@ func TestAccountHandlerGetAvailableModels_TypeSafeOnlyReturnsJev(t *testing.T) {
 		require.Len(t, resp.Data, 1)
 		require.Equal(t, "jev-latest", resp.Data[0].ID)
 	}
+}
+
+func TestAccountHandlerSyncUpstreamModelsPreview_KiroAPIRegionAndProxy(t *testing.T) {
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-5.5"}]}`)),
+	}}
+	admin := newStubAdminService()
+	admin.proxies = []service.Proxy{{ID: 9, Protocol: "http", Host: "proxy.example", Port: 8080}}
+	router := setupSyncUpstreamModelsRouter(admin, upstream)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/models/sync-upstream-preview",
+		strings.NewReader(`{"platform":"kiro","type":"apikey","api_key":"test-key","api_region":"eu-central-1","proxy_id":9}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "q.eu-central-1.amazonaws.com", upstream.lastRequest.URL.Host)
+	require.Equal(t, "http://proxy.example:8080", upstream.lastProxyURL)
+	var resp struct {
+		Data service.UpstreamModelCatalog `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, []string{"claude-sonnet-5-5", "claude-sonnet-5-5-thinking"}, resp.Data.Models)
+	require.Equal(t, "claude-sonnet-5.5", resp.Data.Metadata["claude-sonnet-5-5"].ID)
 }

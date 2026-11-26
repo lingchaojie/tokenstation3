@@ -334,6 +334,15 @@ func kiroResolveProfileArnForKRS(account *Account) string {
 	return kiroDefaultProfileARN(account)
 }
 
+// kiroResolveProfileArnForQuery selects the profile for native usage and model
+// list queries. API keys have no profile, even if older credentials stored one.
+func kiroResolveProfileArnForQuery(account *Account) string {
+	if account == nil || account.Type != AccountTypeOAuth {
+		return ""
+	}
+	return kiroResolveProfileArnForKRS(account)
+}
+
 func isKiroMCPEndpoint(endpointURL string) bool {
 	return strings.HasPrefix(endpointURL, "https://q.") && strings.HasSuffix(endpointURL, ".amazonaws.com/mcp")
 }

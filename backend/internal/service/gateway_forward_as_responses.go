@@ -91,7 +91,7 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = compactModel
 		}
 	}
-	if err := validateClaude55Request(body, mappedModel); err != nil {
+	if err := validateClaude55BridgeRequest(body, account, mappedModel); err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -283,7 +283,11 @@ func (s *GatewayService) ForwardAsResponses(
 
 		// Non-failover error: return Responses-formatted error to client
 		s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody, responseComplete)
-		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		if message, ok := kiroContextLengthClientMessage(resp.StatusCode, respBody); kiroDirectMode && ok {
+			writeKiroResponsesError(c, http.StatusBadRequest, "invalid_request_error", message, isCompaction)
+		} else {
+			writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		}
 		failure := newTerminalProviderHTTPError(account, resp, respBody)
 		failure.CaptureResponseIncomplete = !responseComplete
 		return nil, failure
@@ -301,6 +305,20 @@ func (s *GatewayService) ForwardAsResponses(
 		forwardResult, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode, clientToolMapping)
 	}
 
+	if failure := kiroStreamFailureFromResponse(resp, handleErr); failure != nil {
+		if forwardResult == nil {
+			err := s.handleKiroStreamFailure(ctx, c, account, mappedModel, anthropicBody, failure, func(c *gin.Context, status int, code, message string) {
+				writeKiroResponsesError(c, status, code, message, isCompaction)
+			})
+			var failover *UpstreamFailoverError
+			if errors.As(err, &failover) {
+				s.submitWebChatTerminalCapture(ctx, c, account, failover)
+			}
+			return nil, err
+		}
+		failure.applyPartialUsage(&forwardResult.Usage)
+		return finalizeForwardResult(c, forwardResult), failure
+	}
 	var sseErr *sseStreamErrorEventError
 	if errors.As(handleErr, &sseErr) {
 		failure := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream || (forwardResult != nil && forwardResult.ClientDisconnect))
@@ -799,6 +817,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	}
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
+	stagedKiroWebSearchBlocks := newKiroWebSearchStagedBlocks(resp)
 
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = originalModel
@@ -867,7 +886,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			providerPayloadObserved = true
 			mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage)
 		}
-		if anthropicSSEEventHasSemanticOutput(payload) {
+		if stagedKiroWebSearchBlocks.hasSemanticOutput(payload) {
 			semanticOutput = true
 		}
 		if event.Type == "message_stop" {
@@ -1148,6 +1167,13 @@ func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
 }
 
 // writeResponsesError writes an error response in OpenAI Responses API format.
+func writeKiroResponsesError(c *gin.Context, status int, code, message string, compaction bool) {
+	if compaction && (message == kiroContextWindowFullMessage || message == kiroInputTooLongMessage) {
+		code = "context_length_exceeded"
+	}
+	writeResponsesError(c, status, code, message)
+}
+
 func writeResponsesError(c *gin.Context, statusCode int, code, message string) {
 	if StopOpenAICompactSSEKeepaliveCommitted(c) {
 		writeOpenAICompactSSEFailureMessage(c, statusCode, code, message)

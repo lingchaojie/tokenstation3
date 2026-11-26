@@ -3148,6 +3148,8 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		Type         string            `json:"type" binding:"required"`
 		BaseURL      string            `json:"base_url"`
 		APIKey       string            `json:"api_key" binding:"required"`
+		APIRegion    string            `json:"api_region"`
+		ProxyID      *int64            `json:"proxy_id" binding:"omitempty,gt=0"`
 		ModelMapping map[string]string `json:"model_mapping"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -3174,6 +3176,18 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		return
 	}
 
+	if req.Platform == service.PlatformKiro {
+		tempAccount.Credentials["api_region"] = req.APIRegion
+		if req.ProxyID != nil {
+			proxy, err := h.adminService.GetProxy(c.Request.Context(), *req.ProxyID)
+			if err != nil || proxy == nil {
+				response.BadRequest(c, "Kiro preview proxy was not found")
+				return
+			}
+			tempAccount.ProxyID = req.ProxyID
+			tempAccount.Proxy = proxy
+		}
+	}
 	catalog, err := h.accountTestService.SyncUpstreamModelCatalog(c.Request.Context(), tempAccount)
 	if err != nil {
 		var syncErr *service.UpstreamModelSyncError

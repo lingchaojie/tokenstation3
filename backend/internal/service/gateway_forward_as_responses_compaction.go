@@ -143,6 +143,12 @@ func (s *GatewayService) collectResponsesCompactionAnthropicSSE(
 		}
 
 		switch event.Type {
+		case "error":
+			streamErr := &sseStreamErrorEventError{RawData: payload}
+			if kiroStreamFailureFromResponse(resp, streamErr) != nil {
+				lineReader.DrainCaptureOnParserFailure(ginRequestContext(c))
+				return nil, usage, streamErr
+			}
 		case "message_start":
 			if event.Message != nil {
 				finalResp = event.Message

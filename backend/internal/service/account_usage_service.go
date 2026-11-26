@@ -219,6 +219,14 @@ type KiroCreditProgress struct {
 	ExpiryDate     *time.Time `json:"expiry_date,omitempty"`
 }
 
+// KiroBonusProgress describes one promotional credit pool.
+type KiroBonusProgress struct {
+	Name   string `json:"name,omitempty"`
+	Status string `json:"status"`
+	KiroCreditProgress
+	RedeemedAt *time.Time `json:"redeemed_at,omitempty"`
+}
+
 // KiroOverageInfo 表示 Kiro 账号的 overage 状态。
 type KiroOverageInfo struct {
 	CurrentOverages float64 `json:"current_overages"`
@@ -283,6 +291,7 @@ type UsageInfo struct {
 	KiroOveragesEnabled  bool                `json:"kiro_overages_enabled,omitempty"`
 	KiroCredit           *KiroCreditProgress `json:"kiro_credit,omitempty"`
 	KiroBonus            *KiroCreditProgress `json:"kiro_bonus,omitempty"`
+	KiroBonuses          []KiroBonusProgress `json:"kiro_bonuses,omitempty"`
 	KiroOverage          *KiroOverageInfo    `json:"kiro_overage,omitempty"`
 	KiroQuotaState       string              `json:"kiro_quota_state,omitempty"`
 	KiroQuotaReason      string              `json:"kiro_quota_reason,omitempty"`

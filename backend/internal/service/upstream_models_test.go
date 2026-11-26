@@ -1242,3 +1242,102 @@ func TestMatchModelsDevProviderOfficialHostsWithoutAPI(t *testing.T) {
 	}}
 	require.False(t, upstreamCatalogNeedsRegistry(capabilitySyncModelIDs([]string{"gpt-6-astra", "gpt-image-2"}), metadata))
 }
+
+func TestSyncUpstreamModelCatalog_KiroDirectPagesAndRegionalFallback(t *testing.T) {
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{}`))},
+		{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-opus-6.1.2"},{"modelId":"claude-haiku-4.5"}],"nextToken":"page/+2"}`))},
+		{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-opus-6.1.2"},{"modelId":"grok-4.7"}]}`))},
+	}}
+	proxyID := int64(10)
+	account := &Account{
+		ID: 51, Platform: PlatformKiro, Type: AccountTypeAPIKey,
+		ProxyID: &proxyID, Proxy: &Proxy{Protocol: "http", Host: "proxy.example", Port: 8080},
+		Credentials: map[string]any{
+			"api_key": "test-key", "api_region": "us-east-1", "profile_arn": "stale-profile",
+			"model_mapping": map[string]any{"public": "claude-sonnet-4.6"},
+		},
+	}
+	svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+	catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"claude-opus-6-1-2", "claude-opus-6-1-2-thinking", "claude-haiku-4-5", "claude-haiku-4-5-thinking", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001-thinking", "grok-4.7"}, catalog.Models)
+	require.Equal(t, "claude-opus-6.1.2", catalog.Metadata["claude-opus-6-1-2-thinking"].ID)
+	require.Equal(t, "claude-haiku-4.5", catalog.Metadata["claude-haiku-4-5-20251001"].ID)
+	require.Len(t, upstream.requests, 3)
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "q.eu-central-1.amazonaws.com", upstream.requests[1].URL.Host)
+	require.Equal(t, "page/+2", upstream.requests[2].URL.Query().Get("nextToken"))
+	req := upstream.requests[2]
+	require.Equal(t, http.MethodGet, req.Method)
+	require.Equal(t, "/ListAvailableModels", req.URL.Path)
+	for _, request := range upstream.requests {
+		require.NotContains(t, request.URL.Query(), "profileArn")
+	}
+	require.Equal(t, "AI_EDITOR", req.URL.Query().Get("origin"))
+	require.Equal(t, "Bearer test-key", req.Header.Get("Authorization"))
+	// Kiro expects this raw lowercase name in HTTP/1.1.
+	rawHeaders := map[string][]string(req.Header)
+	require.Equal(t, []string{"API_KEY"}, rawHeaders["tokentype"])
+	require.NotEmpty(t, req.Header.Get("Amz-Sdk-Invocation-Id"))
+	require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
+	require.Equal(t, map[string]string{"public": "claude-sonnet-4.6"}, account.GetModelMapping())
+}
+
+func TestSyncUpstreamModelCatalog_KiroOAuthProfileArn(t *testing.T) {
+	for _, tc := range []struct {
+		name, authMethod, profileArn, wantArn string
+	}{
+		{name: "legacy social", authMethod: "social", wantArn: kiroSocialProfileARN},
+		{name: "legacy Builder ID", authMethod: "idc", wantArn: kiroBuilderIDProfileARN},
+		{name: "stored ARN", authMethod: "social", profileArn: " stored-profile ", wantArn: "stored-profile"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-5.5"}]}`)),
+			}}
+			account := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"access_token": "test-token", "auth_method": tc.authMethod, "profile_arn": tc.profileArn,
+			}}
+			svc := &AccountTestService{
+				httpUpstream: upstream, cfg: upstreamModelSyncTestConfig(),
+				kiroTokenProvider: NewKiroTokenProvider(nil, nil, nil),
+			}
+			_, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantArn, upstream.lastReq.URL.Query().Get("profileArn"))
+		})
+	}
+}
+
+func TestSyncUpstreamModelCatalog_KiroRelayPreservesModelIDs(t *testing.T) {
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-opus-6.1.2"},{"id":"relay-custom"}]}`)),
+	}}
+	account := &Account{Platform: PlatformKiro, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"base_url": "https://relay.example/v1/", "api_key": "test-key",
+	}}
+	svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+	catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"claude-opus-6.1.2", "relay-custom"}, catalog.Models)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "https://relay.example/v1/models", upstream.lastReq.URL.String())
+	require.Equal(t, "test-key", upstream.lastReq.Header.Get("x-api-key"))
+	require.Equal(t, "2023-06-01", upstream.lastReq.Header.Get("anthropic-version"))
+}
+
+func TestSyncUpstreamModelCatalog_KiroRejectsInvalidRegionBeforeSendingToken(t *testing.T) {
+	upstream := &httpUpstreamRecorder{}
+	account := &Account{Platform: PlatformKiro, Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"api_key": "test-key", "api_region": "us-east-1.example/#",
+	}}
+	svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+	_, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+	var syncErr *UpstreamModelSyncError
+	require.ErrorAs(t, err, &syncErr)
+	require.Equal(t, UpstreamModelSyncErrorConfiguration, syncErr.Kind)
+	require.Empty(t, upstream.requests)
+}

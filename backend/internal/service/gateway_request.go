@@ -670,6 +670,15 @@ func isClaude55SignedThinkingModel(model string) bool {
 	return claude.IsOpus55(model) || claude.IsSonnet55(model) || claude.IsHaiku55(model) || claude.IsFable52(model) || claude.IsMythos52(model)
 }
 
+// The compatibility bridge bypasses Claude 5.5 validation only for direct
+// Kiro accounts, whose translator handles the native thinking controls.
+func validateClaude55BridgeRequest(body []byte, account *Account, model string) error {
+	if isKiroDirectModeAccount(account) {
+		return nil
+	}
+	return validateClaude55Request(body, model)
+}
+
 // validateClaude55Request rejects settings that the upstream cannot honor.
 // Call before OAuth mimicry can remove tool_choice or alter thinking defaults.
 func validateClaude55Request(body []byte, model string) error {

@@ -1045,3 +1045,90 @@ func TestClaude55BridgeUsesMappedModelBeforeThinkingConversion(t *testing.T) {
 		}
 	}
 }
+
+// Direct Kiro converts the client thinking options to native adaptive thinking.
+func TestClaude55BridgeAllowsKiroDirectThinkingControls(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	thinkingFields := map[string]string{
+		"enabled":  `"thinking":{"type":"enabled","budget_tokens":16000}`,
+		"disabled": `"thinking":{"type":"disabled"}`,
+	}
+	for _, channel := range []struct {
+		name     string
+		platform string
+		baseURL  string
+		direct   bool
+	}{
+		{name: "kiro-direct", platform: PlatformKiro, direct: true},
+		{name: "kiro-relay", platform: PlatformKiro, baseURL: "https://relay.example.test"},
+		{name: "anthropic", platform: PlatformAnthropic},
+	} {
+		for thinkingType, thinkingField := range thinkingFields {
+			for _, chat := range []bool{false, true} {
+				endpoint := "responses"
+				if chat {
+					endpoint = "chat"
+				}
+				t.Run(channel.name+"/"+thinkingType+"/"+endpoint, func(t *testing.T) {
+					path := "/v1/responses"
+					body := `{"model":"public-claude","input":"hello",` + thinkingField + `}`
+					if chat {
+						path = "/v1/chat/completions"
+						body = `{"model":"public-claude","messages":[{"role":"user","content":"hello"}],` + thinkingField + `}`
+					}
+					rec := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(rec)
+					c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+					c.Request.Header.Set("Content-Type", "application/json")
+
+					upstream := &httpUpstreamRecorder{resp: &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+						Body:       io.NopCloser(bytes.NewReader(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "ok", "stopReason": "end_turn"}))),
+					}}
+					svc := &GatewayService{
+						cfg: &config.Config{Gateway: config.GatewayConfig{
+							MaxLineSize: defaultMaxLineSize,
+						}},
+						httpUpstream:        upstream,
+						kiroCooldownStore:   &stubKiroCooldownStore{},
+						tlsFPProfileService: &TLSFingerprintProfileService{},
+					}
+					account := &Account{
+						ID:          802,
+						Name:        "claude55-bridge",
+						Platform:    channel.platform,
+						Type:        AccountTypeAPIKey,
+						Concurrency: 1,
+						Credentials: map[string]any{
+							"api_key":       "ksk_test",
+							"base_url":      channel.baseURL,
+							"model_mapping": map[string]any{"public-claude": "claude-opus-5-5"},
+						},
+					}
+
+					var err error
+					if chat {
+						_, err = svc.ForwardAsChatCompletions(context.Background(), c, account, []byte(body), &ParsedRequest{})
+					} else {
+						_, err = svc.ForwardAsResponses(context.Background(), c, account, []byte(body), &ParsedRequest{})
+					}
+
+					if !channel.direct {
+						require.Error(t, err)
+						require.Equal(t, http.StatusBadRequest, rec.Code)
+						require.Contains(t, rec.Body.String(), "claude-opus-5-5 requires adaptive thinking")
+						require.Nil(t, upstream.lastReq)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, http.StatusOK, rec.Code)
+					require.Len(t, upstream.requests, 1)
+					require.Equal(t, "claude-opus-5.5", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
+					require.Equal(t, "adaptive", gjson.GetBytes(upstream.lastBody, "additionalModelRequestFields.thinking.type").String())
+					require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "additionalModelRequestFields.output_config.effort").String())
+				})
+			}
+		}
+	}
+}

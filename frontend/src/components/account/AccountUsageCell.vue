@@ -257,16 +257,16 @@
           </div>
         </div>
 
-        <div v-if="usageInfo?.kiro_bonus" class="space-y-1">
+        <div v-for="(pool, index) in kiroBonusPools" :key="index" class="space-y-1">
           <div class="flex items-baseline justify-between gap-2 text-[11px] text-gray-600 dark:text-gray-300">
-            <span class="font-medium tracking-[0.01em]">{{ t('admin.accounts.usageWindow.kiroBonus') }}</span>
-            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">{{ formatKiroAmount(usageInfo.kiro_bonus.current_usage) }} / {{ formatKiroAmount(usageInfo.kiro_bonus.usage_limit) }}</span>
+            <span class="font-medium tracking-[0.01em]">{{ pool.label }}</span>
+            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">{{ formatKiroAmount(pool.current_usage) }} / {{ formatKiroAmount(pool.usage_limit) }}</span>
           </div>
           <div class="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div class="h-full rounded-full bg-emerald-500 transition-all" :style="{ width: `${kiroBonusPercent}%` }"></div>
+            <div class="h-full rounded-full bg-emerald-500 transition-all" :style="{ width: `${clampPercent(pool.percentage_used)}%` }"></div>
           </div>
-          <div v-if="kiroBonusMeta" class="text-[9px] leading-tight text-gray-500 dark:text-gray-400">
-            {{ kiroBonusMeta }}
+          <div v-if="pool.meta" class="text-[9px] leading-tight text-gray-500 dark:text-gray-400">
+            {{ pool.meta }}
           </div>
         </div>
 
@@ -861,7 +861,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, GeminiCredentials, KiroCreditProgress, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { isKiroDirectApiKeyAccount } from '@/utils/kiroAccount'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
@@ -1670,6 +1670,7 @@ const kiroUsageAvailable = computed(() => {
   return !!(
     usageInfo.value?.kiro_credit ||
     usageInfo.value?.kiro_bonus ||
+    usageInfo.value?.kiro_bonuses?.length ||
     usageInfo.value?.kiro_overage ||
     usageInfo.value?.kiro_reset_at ||
     usageInfo.value?.kiro_overages_enabled
@@ -1697,7 +1698,6 @@ const clampPercent = (value?: number | null) => {
 }
 
 const kiroCreditPercent = computed(() => clampPercent(usageInfo.value?.kiro_credit?.percentage_used))
-const kiroBonusPercent = computed(() => clampPercent(usageInfo.value?.kiro_bonus?.percentage_used))
 
 const formatKiroAmount = (value?: number | null) => {
   if (value == null || !Number.isFinite(value)) return '0'
@@ -1715,9 +1715,7 @@ const kiroResetDisplay = computed(() => {
   return parsed.toLocaleDateString()
 })
 
-const kiroBonusMeta = computed(() => {
-  const bonus = usageInfo.value?.kiro_bonus
-  if (!bonus) return ''
+const formatKiroBonusExpiry = (bonus: KiroCreditProgress) => {
   if ((bonus.days_remaining ?? 0) > 0) {
     return t('admin.accounts.usageWindow.kiroDaysLeft', { days: bonus.days_remaining })
   }
@@ -1728,6 +1726,22 @@ const kiroBonusMeta = computed(() => {
     }
   }
   return ''
+}
+
+const kiroBonusPools = computed(() => {
+  const trial = usageInfo.value?.kiro_bonus
+  const promos = usageInfo.value?.kiro_bonuses ?? []
+  const pools = promos.map((promo) => ({
+    ...promo,
+    label: promo.name || t('admin.accounts.usageWindow.kiroPromoCredits'),
+    meta: formatKiroBonusExpiry(promo)
+  }))
+  if (!trial) return pools
+  return [{
+    ...trial,
+    label: t('admin.accounts.usageWindow.kiroBonus'),
+    meta: formatKiroBonusExpiry(trial)
+  }, ...pools]
 })
 
 const kiroRuntimeResetDisplay = computed(() => {

@@ -75,7 +75,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			mappedModel = normalized
 		}
 	}
-	if err := validateClaude55Request(body, mappedModel); err != nil {
+	if err := validateClaude55BridgeRequest(body, account, mappedModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -259,7 +259,11 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		}
 
 		s.submitWebChatFinalGatewayErrorCapture(ctx, c, account, originalModel, mappedModel, "/v1/messages", clientStream, resp, respBody, responseComplete)
-		writeGatewayCCError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		if message, ok := kiroContextLengthClientMessage(resp.StatusCode, respBody); kiroDirectMode && ok {
+			writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", message)
+		} else {
+			writeGatewayCCError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		}
 		failure := newTerminalProviderHTTPError(account, resp, respBody)
 		failure.CaptureResponseIncomplete = !responseComplete
 		return nil, failure
@@ -275,6 +279,18 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		result, handleErr = s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, kiroDirectMode)
 	}
 
+	if failure := kiroStreamFailureFromResponse(resp, handleErr); failure != nil {
+		if result == nil {
+			err := s.handleKiroStreamFailure(ctx, c, account, mappedModel, anthropicBody, failure, writeGatewayCCError)
+			var failover *UpstreamFailoverError
+			if errors.As(err, &failover) {
+				s.submitWebChatTerminalCapture(ctx, c, account, failover)
+			}
+			return nil, err
+		}
+		failure.applyPartialUsage(&result.Usage)
+		return finalizeForwardResult(c, result), failure
+	}
 	var sseErr *sseStreamErrorEventError
 	if errors.As(handleErr, &sseErr) {
 		failure := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream || (result != nil && result.ClientDisconnect))
@@ -513,6 +529,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
+	stagedKiroWebSearchBlocks := newKiroWebSearchStagedBlocks(resp)
 
 	// Use Anthropic→Responses state machine, then convert Responses→CC
 	anthState := apicompat.NewAnthropicEventToResponsesState()
@@ -635,7 +652,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			providerPayloadObserved = true
 			mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage)
 		}
-		if anthropicSSEEventHasSemanticOutput(payload) {
+		if stagedKiroWebSearchBlocks.hasSemanticOutput(payload) {
 			semanticOutput = true
 		}
 		if event.Type == "message_stop" {

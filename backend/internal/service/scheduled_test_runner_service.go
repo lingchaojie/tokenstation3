@@ -152,7 +152,7 @@ func (s *ScheduledTestRunnerService) tryRecoverAccount(ctx context.Context, acco
 		return
 	}
 
-	recovery, err := s.rateLimitSvc.RecoverAccountAfterSuccessfulTest(ctx, accountID)
+	recovery, err := s.rateLimitSvc.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{preserveKiroOverage: true})
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d auto-recover failed: %v", planID, err)
 		return

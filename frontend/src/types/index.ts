@@ -1465,6 +1465,12 @@ export interface KiroCreditProgress {
   expiry_date?: string | null
 }
 
+export interface KiroBonusProgress extends KiroCreditProgress {
+  name?: string
+  status: 'ACTIVE' | 'EXHAUSTED'
+  redeemed_at?: string | null
+}
+
 export interface KiroOverageInfo {
   current_overages: number
   overage_charges: number
@@ -1516,6 +1522,7 @@ export interface AccountUsageInfo {
   kiro_overages_enabled?: boolean
   kiro_credit?: KiroCreditProgress | null
   kiro_bonus?: KiroCreditProgress | null
+  kiro_bonuses?: KiroBonusProgress[] | null
   kiro_overage?: KiroOverageInfo | null
   kiro_quota_state?: string | null
   kiro_quota_reason?: string | null
