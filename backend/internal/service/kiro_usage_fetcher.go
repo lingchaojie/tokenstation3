@@ -175,10 +175,7 @@ func (s *AccountUsageService) fetchAndCacheKiroUsage(ctx context.Context, accoun
 	}
 
 	region := kiroAPIRegion(account)
-	var profileArn string
-	if account.Type == AccountTypeOAuth {
-		profileArn = kiroResolveProfileArnForKRS(account)
-	}
+	profileArn := kiroResolveProfileArnForQuery(account)
 
 	resp, err := s.requestKiroUsageLimits(ctx, account, region, profileArn, token)
 	if err != nil {

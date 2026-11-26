@@ -1254,7 +1254,7 @@ func TestSyncUpstreamModelCatalog_KiroDirectPagesAndRegionalFallback(t *testing.
 		ID: 51, Platform: PlatformKiro, Type: AccountTypeAPIKey,
 		ProxyID: &proxyID, Proxy: &Proxy{Protocol: "http", Host: "proxy.example", Port: 8080},
 		Credentials: map[string]any{
-			"api_key": "test-key", "api_region": "us-east-1", "profile_arn": "profile",
+			"api_key": "test-key", "api_region": "us-east-1", "profile_arn": "stale-profile",
 			"model_mapping": map[string]any{"public": "claude-sonnet-4.6"},
 		},
 	}
@@ -1271,7 +1271,9 @@ func TestSyncUpstreamModelCatalog_KiroDirectPagesAndRegionalFallback(t *testing.
 	req := upstream.requests[2]
 	require.Equal(t, http.MethodGet, req.Method)
 	require.Equal(t, "/ListAvailableModels", req.URL.Path)
-	require.Equal(t, "profile", req.URL.Query().Get("profileArn"))
+	for _, request := range upstream.requests {
+		require.NotContains(t, request.URL.Query(), "profileArn")
+	}
 	require.Equal(t, "AI_EDITOR", req.URL.Query().Get("origin"))
 	require.Equal(t, "Bearer test-key", req.Header.Get("Authorization"))
 	// Kiro expects this raw lowercase name in HTTP/1.1.
@@ -1280,6 +1282,33 @@ func TestSyncUpstreamModelCatalog_KiroDirectPagesAndRegionalFallback(t *testing.
 	require.NotEmpty(t, req.Header.Get("Amz-Sdk-Invocation-Id"))
 	require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
 	require.Equal(t, map[string]string{"public": "claude-sonnet-4.6"}, account.GetModelMapping())
+}
+
+func TestSyncUpstreamModelCatalog_KiroOAuthProfileArn(t *testing.T) {
+	for _, tc := range []struct {
+		name, authMethod, profileArn, wantArn string
+	}{
+		{name: "legacy social", authMethod: "social", wantArn: kiroSocialProfileARN},
+		{name: "legacy Builder ID", authMethod: "idc", wantArn: kiroBuilderIDProfileARN},
+		{name: "stored ARN", authMethod: "social", profileArn: " stored-profile ", wantArn: "stored-profile"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-5.5"}]}`)),
+			}}
+			account := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"access_token": "test-token", "auth_method": tc.authMethod, "profile_arn": tc.profileArn,
+			}}
+			svc := &AccountTestService{
+				httpUpstream: upstream, cfg: upstreamModelSyncTestConfig(),
+				kiroTokenProvider: NewKiroTokenProvider(nil, nil, nil),
+			}
+			_, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantArn, upstream.lastReq.URL.Query().Get("profileArn"))
+		})
+	}
 }
 
 func TestSyncUpstreamModelCatalog_KiroRelayPreservesModelIDs(t *testing.T) {

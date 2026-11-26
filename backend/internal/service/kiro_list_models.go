@@ -84,7 +84,7 @@ func (s *AccountTestService) kiroModelListToken(ctx context.Context, account *Ac
 func (s *AccountTestService) listKiroNativeModels(ctx context.Context, account *Account, region, token string) (*UpstreamModelCatalog, error) {
 	catalog := &UpstreamModelCatalog{Metadata: make(map[string]UpstreamModelMetadata)}
 	query := url.Values{"origin": {"AI_EDITOR"}, "maxResults": {"50"}}
-	if profileARN := resolveKiroPayloadProfileArn(account); profileARN != "" {
+	if profileARN := kiroResolveProfileArnForQuery(account); profileARN != "" {
 		query.Set("profileArn", profileARN)
 	}
 	accountKey := buildKiroAccountKey(account)
