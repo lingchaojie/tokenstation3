@@ -935,13 +935,12 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	semanticOutput := false
 	sawTerminalEvent := false
 	providerPayloadObserved := false
-	kiroTranslatedBody, providerNativeCapture := resp.Body.(*kiroTranslatedStreamBody)
+	_, providerNativeCapture := resp.Body.(*kiroTranslatedStreamBody)
 	kiroAccount := account != nil && account.IsKiro()
 	_, legacyRawProviderCapture := resp.Body.(*captureBodyReadCloser)
 	_, streamingAttemptCapture := resp.Body.(*captureResponseReader)
 	rawProviderCapture := legacyRawProviderCapture || streamingAttemptCapture || captureStreamingAttemptPath(c)
-	stageSyntheticKiroWebSearchEvents := providerNativeCapture && kiroTranslatedBody.stageSyntheticWebSearchEvents
-	stagedKiroWebSearchBlockIndexes := make(map[int]struct{})
+	stagedKiroWebSearchBlocks := newKiroWebSearchStagedBlocks(resp)
 	if !rawProviderCapture && s.cfg != nil && s.cfg.Gateway.Capture.Enabled && account != nil && CaptureMayApplyFor(c, string(account.Platform)) {
 		setCapturePlatform(c, string(account.Platform))
 		tee = newSSETee(s.cfg.Gateway.Capture.MaxBodyBytes)
@@ -1140,24 +1139,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		eventHasSemanticOutput := anthropicSSEEventHasSemanticOutput(dataLine)
 		eventIndex := event.Get("index")
 		hasEventIndex := eventIndex.Exists() && nonNegativeIntegerGJSON(eventIndex)
-		if stageSyntheticKiroWebSearchEvents {
-			if hasEventIndex {
-				index := int(eventIndex.Int())
-				switch eventType {
-				case "content_block_start":
-					blockType := event.Get("content_block.type").String()
-					blockName := event.Get("content_block.name").String()
-					if blockType == "web_search_tool_result" ||
-						(blockType == "server_tool_use" && strings.EqualFold(strings.TrimSpace(blockName), "web_search")) {
-						stagedKiroWebSearchBlockIndexes[index] = struct{}{}
-					}
-				case "content_block_stop":
-					defer delete(stagedKiroWebSearchBlockIndexes, index)
-				}
-				if _, staged := stagedKiroWebSearchBlockIndexes[index]; staged {
-					eventHasSemanticOutput = false
-				}
-			}
+		if stagedKiroWebSearchBlocks.isSynthetic(event) {
+			eventHasSemanticOutput = false
 		}
 		observer.ObserveAnthropic([]byte(dataLine))
 		if eventName == "" {
@@ -1367,9 +1350,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					return streamResult(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 				}
 				if !outputCommitted && !semanticOutput {
-					if stageSyntheticKiroWebSearchEvents && isKiroOverageGateFailure(ev.err) {
-						return nil, ev.err
-					}
 					// Adapter-owned pipe bodies may carry a fully classified terminal
 					// provider HTTP failure (for example KIRO only-WebSearch after the
 					// final AWS request). Preserve that typed error and its final-attempt

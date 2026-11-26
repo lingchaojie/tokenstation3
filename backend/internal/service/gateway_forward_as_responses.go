@@ -817,6 +817,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	}
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
+	stagedKiroWebSearchBlocks := newKiroWebSearchStagedBlocks(resp)
 
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = originalModel
@@ -885,7 +886,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			providerPayloadObserved = true
 			mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage)
 		}
-		if anthropicSSEEventHasSemanticOutput(payload) {
+		if stagedKiroWebSearchBlocks.hasSemanticOutput(payload) {
 			semanticOutput = true
 		}
 		if event.Type == "message_stop" {

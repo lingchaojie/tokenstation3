@@ -529,6 +529,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 	var staged stagedConvertedStream
 	defer func() { _ = staged.close() }()
+	stagedKiroWebSearchBlocks := newKiroWebSearchStagedBlocks(resp)
 
 	// Use Anthropic→Responses state machine, then convert Responses→CC
 	anthState := apicompat.NewAnthropicEventToResponsesState()
@@ -651,7 +652,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			providerPayloadObserved = true
 			mergeAnthropicUsageFromPayload(&usage, event.Message.Usage, payload, allowKiroMarkedFinalUsage)
 		}
-		if anthropicSSEEventHasSemanticOutput(payload) {
+		if stagedKiroWebSearchBlocks.hasSemanticOutput(payload) {
 			semanticOutput = true
 		}
 		if event.Type == "message_stop" {

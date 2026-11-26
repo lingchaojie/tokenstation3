@@ -54,8 +54,11 @@ func (s *GatewayService) checkKiroOveragePark(ctx context.Context, account *Acco
 	}
 }
 
-func isKiroOverageGateFailure(err error) bool {
+func asKiroOverageGateFailure(err error) *UpstreamFailoverError {
 	var failure *UpstreamFailoverError
-	return errors.As(err, &failure) &&
-		(failure.Reason == kiroOverageLimitCode || failure.Reason == kiroOverageLookupFailed)
+	if errors.As(err, &failure) && !failure.HasUpstreamHTTPResponse &&
+		(failure.Reason == kiroOverageLimitCode || failure.Reason == kiroOverageLookupFailed) {
+		return failure
+	}
+	return nil
 }

@@ -42,10 +42,16 @@ func kiroContextLengthClientMessage(status int, body []byte) (string, bool) {
 type kiroStreamFailure struct {
 	exception *kiropkg.UpstreamException
 	response  *http.Response
+	admission *UpstreamFailoverError
 	partial   *kiropkg.StreamResult
 }
 
-func (f *kiroStreamFailure) Error() string { return f.exception.Error() }
+func (f *kiroStreamFailure) Error() string {
+	if f.admission != nil {
+		return f.admission.ClientMessage
+	}
+	return f.exception.Error()
+}
 
 // observeKiroStreamFailure runs at the native parser boundary, before the
 // downstream decides whether it can retry, must terminate, or disconnected.
@@ -111,6 +117,9 @@ func kiroHTTPMonthlyQuotaReason(status int, body []byte) string {
 }
 
 func (f *kiroStreamFailure) statusAndReason() (int, string) {
+	if f.admission != nil {
+		return f.admission.StatusCode, string(f.admission.Reason)
+	}
 	exc := f.exception
 	if reason := kiroQuotaReason(exc.Type, exc.Reason, exc.Code); reason != "" {
 		return http.StatusPaymentRequired, reason
@@ -135,6 +144,9 @@ func kiroExceptionHasContextLengthCode(exc *kiropkg.UpstreamException) bool {
 }
 
 func (f *kiroStreamFailure) normalizedMessage(status int) string {
+	if f.admission != nil {
+		return f.admission.ClientMessage
+	}
 	switch status {
 	case http.StatusBadRequest:
 		if kiroExceptionHasContextLengthCode(f.exception) {
@@ -166,6 +178,14 @@ func (b *kiroTranslatedStreamBody) writeStreamFailure(w io.Writer, failure *kiro
 type kiroErrorWriter func(*gin.Context, int, string, string)
 
 func (s *GatewayService) handleKiroStreamFailure(ctx context.Context, c *gin.Context, account *Account, mappedModel string, requestBody []byte, failure *kiroStreamFailure, writeError kiroErrorWriter) error {
+	if failure.admission != nil {
+		// An admission decision has no provider response. A buffered earlier
+		// attempt must not become the capture for this pre-output failover.
+		AbortCaptureAttempt(c)
+		_, _ = takeCaptureResult(c)
+		clearUncommittedKiroSSEHeaders(c)
+		return failure.admission
+	}
 	status, reason := failure.statusAndReason()
 	message := failure.normalizedMessage(status)
 	data := map[string]string{"message": message}
@@ -184,16 +204,20 @@ func (s *GatewayService) handleKiroStreamFailure(ctx context.Context, c *gin.Con
 		failover.UpstreamHTTPStatus = failure.response.StatusCode
 		failover.CaptureResponseIncomplete = true
 		if !failover.ShouldRetryNextAccount() {
-			if !c.Writer.Written() {
-				for _, key := range []string{"Content-Type", "Cache-Control", "Connection", "X-Accel-Buffering"} {
-					c.Writer.Header().Del(key)
-				}
-			}
+			clearUncommittedKiroSSEHeaders(c)
 			writeError(c, mapUpstreamStatusCode(status), claudeErrorType(status), message)
 			MarkResponseCommitted(c)
 		}
 	}
 	return err
+}
+
+func clearUncommittedKiroSSEHeaders(c *gin.Context) {
+	if !c.Writer.Written() {
+		for _, key := range []string{"Content-Type", "Cache-Control", "Connection", "X-Accel-Buffering"} {
+			c.Writer.Header().Del(key)
+		}
+	}
 }
 
 func (f *kiroStreamFailure) applyPartialUsage(usage *ClaudeUsage) {

@@ -13,6 +13,7 @@ import (
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 const kiroMaxWebSearchIterations = 5
@@ -27,6 +28,45 @@ type kiroWebSearchExecution struct {
 	Usage                    ClaudeUsage
 	RequestID                string
 	ProviderTerminalObserved bool
+}
+
+// kiroWebSearchStagedBlocks tracks synthetic search events so the gateway
+// can keep them staged until model output or a successful terminal event.
+type kiroWebSearchStagedBlocks map[int64]struct{}
+
+func newKiroWebSearchStagedBlocks(resp *http.Response) kiroWebSearchStagedBlocks {
+	if body, ok := resp.Body.(*kiroTranslatedStreamBody); ok && body.stageSyntheticWebSearchEvents {
+		return make(kiroWebSearchStagedBlocks)
+	}
+	return nil
+}
+
+func (blocks kiroWebSearchStagedBlocks) isSynthetic(event gjson.Result) bool {
+	if blocks == nil {
+		return false
+	}
+	index := event.Get("index")
+	if !index.Exists() || !nonNegativeIntegerGJSON(index) {
+		return false
+	}
+	i := index.Int()
+	switch event.Get("type").String() {
+	case "content_block_start":
+		blockType := event.Get("content_block.type").String()
+		blockName := event.Get("content_block.name").String()
+		if blockType == "web_search_tool_result" ||
+			(blockType == "server_tool_use" && strings.EqualFold(strings.TrimSpace(blockName), "web_search")) {
+			blocks[i] = struct{}{}
+		}
+	case "content_block_stop":
+		delete(blocks, i)
+	}
+	_, synthetic := blocks[i]
+	return synthetic
+}
+
+func (blocks kiroWebSearchStagedBlocks) hasSemanticOutput(payload string) bool {
+	return (blocks == nil || !blocks.isSynthetic(gjson.Parse(payload))) && anthropicSSEEventHasSemanticOutput(payload)
 }
 
 type kiroStreamChunkCollector struct {
@@ -141,8 +181,8 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		s.prefetchKiroWebSearchDescription(ctx, account, token)
 
 		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
-		if isKiroOverageGateFailure(mcpErr) {
-			return nil, mcpErr
+		if admission := asKiroOverageGateFailure(mcpErr); admission != nil {
+			return nil, &kiroStreamFailure{admission: admission, partial: lastEmittedResult}
 		}
 		if strings.TrimSpace(nextToken) != "" {
 			token = nextToken
@@ -163,6 +203,9 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 
 		resp, _, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
 		if err != nil {
+			if admission := asKiroOverageGateFailure(err); admission != nil {
+				return nil, &kiroStreamFailure{admission: admission, partial: lastEmittedResult}
+			}
 			return nil, err
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -298,7 +341,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 		s.prefetchKiroWebSearchDescription(ctx, account, token)
 
 		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
-		if isKiroOverageGateFailure(mcpErr) {
+		if asKiroOverageGateFailure(mcpErr) != nil {
 			return nil, mcpErr
 		}
 		if strings.TrimSpace(nextToken) != "" {
