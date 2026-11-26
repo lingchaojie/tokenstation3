@@ -2426,13 +2426,21 @@ func hasNonEmptyMapValue(extra map[string]any, key string) bool {
 }
 
 func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID int64) (*TempUnschedState, error) {
+	overageUntil, err := readActiveKiroOveragePark(ctx, s.accountRepo, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if overageUntil != nil {
+		return &TempUnschedState{UntilUnix: overageUntil.Unix(), ErrorMessage: kiroOverageLimitCode}, nil
+	}
+
 	now := time.Now().Unix()
 	if s.tempUnschedCache != nil {
 		state, err := s.tempUnschedCache.GetTempUnsched(ctx, accountID)
 		if err != nil {
 			return nil, err
 		}
-		if state != nil && state.UntilUnix > now {
+		if state != nil && state.UntilUnix > now && state.ErrorMessage != kiroOverageLimitCode {
 			return state, nil
 		}
 	}
@@ -2464,7 +2472,7 @@ func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID i
 		}
 	}
 
-	if s.tempUnschedCache != nil {
+	if s.tempUnschedCache != nil && account.TempUnschedulableReason != kiroOverageLimitCode {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, accountID, state); err != nil {
 			slog.Warn("temp_unsched_cache_set_failed", "account_id", accountID, "error", err)
 		}

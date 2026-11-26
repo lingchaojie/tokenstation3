@@ -1367,6 +1367,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					return streamResult(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 				}
 				if !outputCommitted && !semanticOutput {
+					if stageSyntheticKiroWebSearchEvents && isKiroOverageGateFailure(ev.err) {
+						return nil, ev.err
+					}
 					// Adapter-owned pipe bodies may carry a fully classified terminal
 					// provider HTTP failure (for example KIRO only-WebSearch after the
 					// final AWS request). Preserve that typed error and its final-attempt

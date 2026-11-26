@@ -141,6 +141,9 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		s.prefetchKiroWebSearchDescription(ctx, account, token)
 
 		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
+		if isKiroOverageGateFailure(mcpErr) {
+			return nil, mcpErr
+		}
 		if strings.TrimSpace(nextToken) != "" {
 			token = nextToken
 		}
@@ -295,6 +298,9 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, c *gin.Contex
 		s.prefetchKiroWebSearchDescription(ctx, account, token)
 
 		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
+		if isKiroOverageGateFailure(mcpErr) {
+			return nil, mcpErr
+		}
 		if strings.TrimSpace(nextToken) != "" {
 			token = nextToken
 		}
@@ -506,6 +512,9 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			return nil, currentToken, err
 		}
 
+		if err := s.checkKiroOveragePark(ctx, account); err != nil {
+			return nil, currentToken, err
+		}
 		if s.capturePool != nil {
 			s.beginKiroNativeCaptureAttempt(ctx, account, req, payload)
 		} else {

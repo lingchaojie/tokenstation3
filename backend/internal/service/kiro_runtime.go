@@ -642,6 +642,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				return nil, requestCtx, err
 			}
 
+			if err := s.checkKiroOveragePark(ctx, account); err != nil {
+				return nil, requestCtx, err
+			}
 			s.beginKiroNativeCaptureAttempt(ctx, account, req, payload)
 			resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			s.beginKiroNativeCaptureResponse(ctx, resp)
