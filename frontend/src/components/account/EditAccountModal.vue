@@ -342,6 +342,13 @@
               + {{ preset.label }}
             </button>
           </div>
+
+          <KiroModelSyncButton
+            v-if="show"
+            v-model="modelMappings"
+            :account-id="account.id"
+            :direct="!isKiroRelay"
+          />
         </div>
 
         <!-- Model Restriction Section (不适用于 Antigravity / Kiro) -->
@@ -1017,6 +1024,13 @@
               + {{ preset.label }}
             </button>
           </div>
+
+          <KiroModelSyncButton
+            v-if="show"
+            v-model="modelMappings"
+            :account-id="account.id"
+            direct
+          />
         </template>
 
         <template v-else>
@@ -3716,6 +3730,7 @@ import {
   resolveKiroAPIRegionFromCredentials
 } from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
+import KiroModelSyncButton from './KiroModelSyncButton.vue'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -4417,13 +4432,12 @@ const applyKiroModelMappings = (entries: Array<[string, string]>) => {
   allowedModels.value = []
 }
 
-const loadDefaultKiroModelMappings = () => {
-  fetchKiroDefaultMappings().then(mappings => {
-    if (!isKiroOAuthAccount.value) return
-    modelRestrictionMode.value = 'mapping'
-    modelMappings.value = mappings.map(({ from, to }) => ({ from, to }))
-    allowedModels.value = []
-  })
+const loadDefaultKiroModelMappings = async (account: Account) => {
+  applyKiroModelMappings([])
+  const mappings = await fetchKiroDefaultMappings()
+  if (props.show && props.account === account && modelMappings.value.length === 0) {
+    applyKiroModelMappings(mappings.map(({ from, to }) => [from, to]))
+  }
 }
 
 const showMixedChannelWarning = ref(false)
@@ -5325,14 +5339,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
         applyKiroModelMappings(Object.entries(existingMappings))
       } else {
-        fetchKiroDefaultMappings().then(mappings => {
-          if (props.account?.id !== newAccount.id || props.account?.type !== 'apikey' || props.account?.platform !== 'kiro') {
-            return
-          }
-          modelRestrictionMode.value = 'mapping'
-          modelMappings.value = mappings.map(({ from, to }) => ({ from, to }))
-          allowedModels.value = []
-        })
+        void loadDefaultKiroModelMappings(newAccount)
       }
     } else {
       loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
@@ -5415,7 +5422,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
         applyKiroModelMappings(Object.entries(existingMappings))
       } else {
-        loadDefaultKiroModelMappings()
+        void loadDefaultKiroModelMappings(newAccount)
       }
     } else if ((newAccount.platform === 'openai' || newAccount.platform === 'grok') && newAccount.credentials) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>

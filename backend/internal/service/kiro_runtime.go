@@ -568,7 +568,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	mode := kiroEndpointModeForRequest(account, parsed)
 	s.ensureKiroProfileArnForRequest(ctx, account, token, mode)
 
-	modelID := kiropkg.MapModel(mappedModel)
+	modelID := resolveKiroUpstreamModel(mappedModel)
 	currentToken := token
 	endpoints := buildKiroEndpoints(account, mode)
 	proxyURL := kiroProxyURL(account)
@@ -996,7 +996,7 @@ func estimateKiroInputTokensForRequest(ctx context.Context, body []byte, mappedM
 		return 0
 	}
 	preparedBody := prepareKiroPayloadBodyForRequestModel(body, requestModel)
-	modelID := kiropkg.MapModel(mappedModel)
+	modelID := resolveKiroUpstreamModel(mappedModel)
 	if tokens, err := estimateKiroClaudeInputTokens(ctx, preparedBody, modelID, "AI_EDITOR", headers); err == nil {
 		return tokens
 	}
@@ -1207,7 +1207,7 @@ func (s *GatewayService) buildKiroInvalidModelUpstreamEvent(account *Account, re
 		Message:             upstreamMsg,
 		RequestedModel:      requestedModel,
 		MappedModel:         strings.TrimSpace(mappedModel),
-		KiroModelID:         kiropkg.MapModel(mappedModel),
+		KiroModelID:         resolveKiroUpstreamModel(mappedModel),
 		HasTools:            hasTools,
 		HasAdaptiveThinking: hasAdaptiveThinking,
 		HasContext1MBeta:    hasContext1MBeta,

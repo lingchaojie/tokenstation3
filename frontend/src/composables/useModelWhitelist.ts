@@ -140,14 +140,25 @@ const antigravityModels = [
 ]
 
 const kiroModels = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'kimi-k3',
+  'codex-auto-review',
   'claude-opus-4-8',
   'claude-opus-4-8-thinking',
   'claude-opus-4-7',
   'claude-opus-4-7-thinking',
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
+  'claude-opus-5',
+  'claude-opus-5-thinking',
+  'claude-opus-5-5',
+  'claude-opus-5-5-thinking',
   'claude-sonnet-5',
   'claude-sonnet-5-thinking',
+  'claude-sonnet-5-5',
+  'claude-sonnet-5-5-thinking',
   'claude-sonnet-4-6',
   'claude-sonnet-4-6-thinking',
   'claude-opus-4-5-20251101',
@@ -155,7 +166,10 @@ const kiroModels = [
   'claude-sonnet-4-5-20250929',
   'claude-sonnet-4-5-20250929-thinking',
   'claude-haiku-4-5-20251001',
-  'claude-haiku-4-5-20251001-thinking'
+  'claude-haiku-4-5-20251001-thinking',
+  'claude-haiku-5-5',
+  'claude-haiku-5-5-thinking',
+  'grok-4.7'
 ]
 
 // 智谱 GLM
@@ -409,14 +423,25 @@ const geminiPresetMappings = [
 ]
 
 const kiroPresetMappings = [
+  { label: 'GPT-5.6 Sol', from: 'gpt-5.6-sol', to: 'gpt-5.6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
+  { label: 'GPT-5.6 Terra', from: 'gpt-5.6-terra', to: 'gpt-5.6-terra', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-300' },
+  { label: 'GPT-5.6 Luna', from: 'gpt-5.6-luna', to: 'gpt-5.6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
+  { label: 'Kimi K3', from: 'kimi-k3', to: 'kimi-k3', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
+  { label: 'Codex Auto Review→Luna', from: 'codex-auto-review', to: 'gpt-5.6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4.8', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 4.8 Thinking', from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4.7', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 4.7 Thinking', from: 'claude-opus-4-7-thinking', to: 'claude-opus-4.7', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'claude-opus-4.6', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 4.6 Thinking', from: 'claude-opus-4-6-thinking', to: 'claude-opus-4.6', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 5', from: 'claude-opus-5', to: 'claude-opus-5', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 5 Thinking', from: 'claude-opus-5-thinking', to: 'claude-opus-5', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 5.5', from: 'claude-opus-5-5', to: 'claude-opus-5.5', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
+  { label: 'Opus 5.5 Thinking', from: 'claude-opus-5-5-thinking', to: 'claude-opus-5.5', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Sonnet 5 Thinking', from: 'claude-sonnet-5-thinking', to: 'claude-sonnet-5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
+  { label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5.5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
+  { label: 'Sonnet 5.5 Thinking', from: 'claude-sonnet-5-5-thinking', to: 'claude-sonnet-5.5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4.6', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Sonnet 4.6 Thinking', from: 'claude-sonnet-4-6-thinking', to: 'claude-sonnet-4.6', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Opus 4.5', from: 'claude-opus-4-5-20251101', to: 'claude-opus-4.5', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-300' },
@@ -424,7 +449,10 @@ const kiroPresetMappings = [
   { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4.5', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300' },
   { label: 'Sonnet 4.5 Thinking', from: 'claude-sonnet-4-5-20250929-thinking', to: 'claude-sonnet-4.5', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300' },
   { label: 'Haiku 4.5', from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' },
-  { label: 'Haiku 4.5 Thinking', from: 'claude-haiku-4-5-20251001-thinking', to: 'claude-haiku-4.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' }
+  { label: 'Haiku 4.5 Thinking', from: 'claude-haiku-4-5-20251001-thinking', to: 'claude-haiku-4.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' },
+  { label: 'Haiku 5.5', from: 'claude-haiku-5-5', to: 'claude-haiku-5.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' },
+  { label: 'Haiku 5.5 Thinking', from: 'claude-haiku-5-5-thinking', to: 'claude-haiku-5.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' },
+  { label: 'Grok 4.7', from: 'grok-4.7', to: 'grok-4.7', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' }
 ]
 
 const grokPresetMappings = [
@@ -651,6 +679,36 @@ export type ModelRestrictionMode = 'whitelist' | 'mapping' | 'combined'
 export interface ModelMappingEntry {
   from: string
   to: string
+}
+
+// Discovery adds only uncovered models. An exact row would take precedence over an
+// existing wildcard, so treat valid wildcard matches as already configured.
+export function appendKiroSyncedMappings(
+  rows: ModelMappingEntry[],
+  models: string[],
+  metadata?: Record<string, { id: string }>,
+  direct = false
+): ModelMappingEntry[] {
+  const merged = [...rows]
+  const sources = new Set(rows.map(row => row.from.trim()))
+  const aliasKey = (model: string) => {
+    const lower = model.toLowerCase()
+    return direct && /^claude-(?:opus|sonnet|haiku|fable|mythos)-[0-9]+(?:[.-][0-9]+)*(?:-thinking)?$/.test(lower)
+      ? lower.replace(/\./g, '-')
+      : model
+  }
+  const aliases = new Set([...sources].map(aliasKey))
+  const prefixes = [...sources].filter(source => source.endsWith('*') && isValidWildcardPattern(source))
+    .map(source => source.slice(0, -1))
+  for (const model of models) {
+    const from = model.trim()
+    if (!from || from.includes('*') || aliases.has(aliasKey(from)) || prefixes.some(prefix => from.startsWith(prefix))) continue
+    const to = metadata && Object.prototype.hasOwnProperty.call(metadata, from) ? metadata[from]?.id?.trim() || from : from
+    if (to.includes('*')) continue
+    merged.push({ from, to })
+    aliases.add(aliasKey(from))
+  }
+  return merged
 }
 
 export function splitModelMappingObject(

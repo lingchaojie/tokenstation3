@@ -568,7 +568,7 @@ func TestBuildKiroPayloadSkipsAdditionalModelRequestFieldsForLegacyThinkingModel
 
 // 客户端未请求 thinking 但模型是 Opus 4.7/4.8 时,解析器仍需开启 <thinking> tag 抽取,
 // 否则上游 CoT 文本会原样泄漏到 assistant 正文。
-func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47Opus48AndOpus5(t *testing.T) {
+func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForSupportedModels(t *testing.T) {
 	cases := []struct {
 		name    string
 		model   string
@@ -578,6 +578,8 @@ func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47Opus48AndOp
 		{name: "opus-4.7 plain", model: "claude-opus-4-7", mapped: "claude-opus-4.7", wantStr: true},
 		{name: "opus-4.8 plain", model: "claude-opus-4-8", mapped: "claude-opus-4.8", wantStr: true},
 		{name: "opus-5 plain", model: "claude-opus-5", mapped: "claude-opus-5", wantStr: true},
+		{name: "opus-5.5 plain", model: "claude-opus-5-5", mapped: "claude-opus-5.5", wantStr: true},
+		{name: "sonnet-5.5 plain", model: "claude-sonnet-5-5", mapped: "claude-sonnet-5.5", wantStr: true},
 		{name: "sonnet-4.5 plain stays disabled", model: "claude-sonnet-4-5", mapped: "claude-sonnet-4.5", wantStr: false},
 	}
 	for _, tc := range cases {

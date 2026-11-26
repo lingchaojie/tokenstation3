@@ -314,9 +314,10 @@ type kiroSemanticEvent struct {
 }
 
 func MapModel(model string) string {
-	switch strings.TrimSpace(strings.ToLower(model)) {
-	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
-		return strings.TrimSpace(strings.ToLower(model))
+	normalized := strings.TrimSpace(strings.ToLower(model))
+	switch normalized {
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "grok-4.7", "kimi-k3":
+		return normalized
 	case "claude-opus-4-8", "claude-opus-4-8-thinking", "claude-opus-4.8":
 		return "claude-opus-4.8"
 	case "claude-opus-4-7", "claude-opus-4-7-thinking", "claude-opus-4.7":
@@ -325,8 +326,12 @@ func MapModel(model string) string {
 		return "claude-opus-4.6"
 	case "claude-opus-5", "claude-opus-5-thinking":
 		return "claude-opus-5"
+	case "claude-opus-5-5", "claude-opus-5-5-thinking", "claude-opus-5.5", "claude-opus-5.5-thinking":
+		return "claude-opus-5.5"
 	case "claude-sonnet-5", "claude-sonnet-5-thinking":
 		return "claude-sonnet-5"
+	case "claude-sonnet-5-5", "claude-sonnet-5-5-thinking", "claude-sonnet-5.5", "claude-sonnet-5.5-thinking":
+		return "claude-sonnet-5.5"
 	case "claude-sonnet-4-6", "claude-sonnet-4-6-thinking", "claude-sonnet-4.6":
 		return "claude-sonnet-4.6"
 	case "claude-opus-4-5-20251101", "claude-opus-4-5-20251101-thinking", "claude-opus-4.5":
@@ -335,14 +340,15 @@ func MapModel(model string) string {
 		return "claude-sonnet-4.5"
 	case "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001-thinking", "claude-haiku-4.5":
 		return "claude-haiku-4.5"
+	case "claude-haiku-5-5", "claude-haiku-5-5-thinking", "claude-haiku-5.5", "claude-haiku-5.5-thinking":
+		return "claude-haiku-5.5"
 	default:
 		// P3: 通用 Claude 版本号归一化 — 将 claude-{family}-{major}-{minor} 中的
 		// 最后一段短横线转为点号（如 claude-opus-4-9 → claude-opus-4.9），
 		// 兼容不支持 "." 的客户端（如 Claude Code 会把 "4.6" 写成 "4-6"）。
 		// 仅对 version >= 4.6 做归一化（4.5 及以下有带日期后缀的 case，不应该歧义匹配）。
-		normalized := normalizeClaudeVersionNumber(strings.TrimSpace(strings.ToLower(model)))
-		if normalized != strings.TrimSpace(strings.ToLower(model)) {
-			return normalized
+		if dotted := normalizeClaudeVersionNumber(normalized); dotted != normalized {
+			return dotted
 		}
 		return ""
 	}
@@ -378,7 +384,7 @@ func normalizeClaudeVersionNumber(model string) string {
 // requiresImplicitThinkingTagStripping 判断是否需要在客户端未显式请求 thinking 时
 // 仍开启流式/非流式解析器的 <thinking> tag 抽取。
 //
-// Opus 4.7/4.8/5 的内部 CoT 在 Kiro 上游以 <thinking>...</thinking> 文本形式流出,
+// 部分 Opus 及 Sonnet 5.5 的内部 CoT 在 Kiro 上游以 <thinking>...</thinking> 文本形式流出,
 // 不开启抽取会让标签和思考内容直接落到 assistant 正文,客户端看到形如
 // "<thinking>...</thinking>final" 的乱码。
 //
@@ -388,7 +394,9 @@ func requiresImplicitThinkingTagStripping(modelID string) bool {
 	switch strings.TrimSpace(strings.ToLower(modelID)) {
 	case "claude-opus-4.7", "claude-opus-4-7", "claude-opus-4-7-thinking",
 		"claude-opus-4.8", "claude-opus-4-8", "claude-opus-4-8-thinking",
-		"claude-opus-5", "claude-opus-5-thinking":
+		"claude-opus-5", "claude-opus-5-thinking",
+		"claude-opus-5.5", "claude-opus-5-5", "claude-opus-5.5-thinking", "claude-opus-5-5-thinking",
+		"claude-sonnet-5.5", "claude-sonnet-5-5", "claude-sonnet-5.5-thinking", "claude-sonnet-5-5-thinking":
 		return true
 	}
 	return false

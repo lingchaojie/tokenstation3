@@ -1844,6 +1844,13 @@
               + {{ preset.label }}
             </button>
           </div>
+
+          <KiroModelSyncButton
+            v-if="show && (accountCategory === 'apikey' || accountCategory === 'apikey-relay')"
+            v-model="kiroModelMappings"
+            :credentials="kiroSyncPreviewCredentials"
+            :direct="accountCategory === 'apikey'"
+          />
         </div>
       </div>
 
@@ -4688,6 +4695,7 @@ import {
 } from '@/utils/openaiWsMode'
 import type { KiroTokenInfo } from '@/api/admin/kiro'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
+import KiroModelSyncButton from './KiroModelSyncButton.vue'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types
@@ -5272,6 +5280,25 @@ const kiroImportTokenPlaceholder = computed(() => {
     : `{"accessToken":"...","refreshToken":"...","authMethod":"social","provider":"${kiroImportProvider.value}"}`
 })
 const kiroModelMappings = ref<ModelMapping[]>([])
+const kiroSyncPreviewCredentials = computed<SyncUpstreamPreviewParams | undefined>(() => {
+  const apiKey = apiKeyValue.value.trim()
+  const relay = accountCategory.value === 'apikey-relay'
+  const baseURL = apiKeyBaseUrl.value.trim()
+  if (!apiKey || (relay && !baseURL)) return undefined
+  return {
+    platform: 'kiro',
+    type: 'apikey',
+    api_key: apiKey,
+    proxy_id: form.proxy_id ?? undefined,
+    ...(relay ? { base_url: baseURL } : { api_region: kiroAPIRegion.value }),
+  }
+})
+const loadKiroDefaultMappings = async () => {
+  const mappings = await fetchKiroDefaultMappings()
+  if (props.show && form.platform === 'kiro' && kiroModelMappings.value.length === 0) {
+    kiroModelMappings.value = [...mappings]
+  }
+}
 const kiroCreditUnitPriceUsd = ref(0)
 const kiroPresetMappings = computed(() => getPresetMappingsByPlatform('kiro'))
 const localizedKiroRegionOptions = (currentValue: string) =>
@@ -5711,9 +5738,7 @@ watch(
         })
         antigravityWhitelistModels.value = []
       } else if (form.platform === 'kiro') {
-        fetchKiroDefaultMappings().then(mappings => {
-          kiroModelMappings.value = [...mappings]
-        })
+        void loadKiroDefaultMappings()
       } else {
         antigravityWhitelistModels.value = []
         antigravityModelMappings.value = []
@@ -5797,9 +5822,7 @@ watch(
       accountCategory.value = 'oauth-based'
       antigravityAccountType.value = 'oauth'
     } else if (newPlatform === 'kiro') {
-      fetchKiroDefaultMappings().then(mappings => {
-        kiroModelMappings.value = [...mappings]
-      })
+      void loadKiroDefaultMappings()
       accountCategory.value = 'oauth-based'
       kiroAccountType.value = 'oauth'
       kiroOAuthProvider.value = 'google'

@@ -670,6 +670,15 @@ func isClaude55SignedThinkingModel(model string) bool {
 	return claude.IsOpus55(model) || claude.IsSonnet55(model) || claude.IsHaiku55(model) || claude.IsFable52(model) || claude.IsMythos52(model)
 }
 
+// validateClaude55RequestForAccount applies the Anthropic-specific constraints
+// after account selection. Direct Kiro requests use the Kiro thinking translator.
+func validateClaude55RequestForAccount(body []byte, account *Account, model string) error {
+	if account == nil || account.Platform != PlatformAnthropic {
+		return nil
+	}
+	return validateClaude55Request(body, model)
+}
+
 // validateClaude55Request rejects settings that the upstream cannot honor.
 // Call before OAuth mimicry can remove tool_choice or alter thinking defaults.
 func validateClaude55Request(body []byte, model string) error {

@@ -86,3 +86,30 @@ func TestKiroModelNotSupportedError_Type(t *testing.T) {
 	require.Equal(t, "claude-future", typed.RequestedModel)
 	require.Contains(t, err.Error(), "model_mapping")
 }
+
+func TestKiroDirectClaudeAliasesFollowExplicitMappingKeys(t *testing.T) {
+	account := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth, Credentials: map[string]any{
+		"model_mapping": map[string]any{
+			"claude-opus-6-1-2": "claude-opus-6.1.2",
+			"claude-sonnet-5-5": "exact",
+			"claude-sonnet-5.*": "wildcard",
+			"claude-haiku-5-5":  "claude-haiku-5.5",
+			"private-model":     "claude-opus-99.1",
+		},
+	}}
+	for _, tc := range []struct{ requested, target string }{
+		{"claude-opus-6.1.2", "claude-opus-6.1.2"},
+		{"claude-sonnet-5-5", "exact"},
+		{"claude-sonnet-5.5", "wildcard"},
+	} {
+		mapped, matched := account.ResolveMappedModel(tc.requested)
+		require.True(t, matched, tc.requested)
+		require.Equal(t, tc.target, mapped)
+	}
+	require.False(t, account.SupportsModelInMapping("claude-opus-99.1"))
+	require.False(t, account.SupportsModelInMapping("claude-haiku-5.5-thinking"))
+
+	account.Type = AccountTypeAPIKey
+	account.Credentials["base_url"] = "https://relay.example"
+	require.False(t, account.SupportsModelInMapping("claude-opus-6.1.2"))
+}

@@ -16,6 +16,8 @@ func TestDefaultModels_MatchesKiroReferenceModels(t *testing.T) {
 		"gpt-5.6-sol",
 		"gpt-5.6-terra",
 		"gpt-5.6-luna",
+		"grok-4.7",
+		"kimi-k3",
 		"claude-opus-4-8",
 		"claude-opus-4-8-thinking",
 		"claude-opus-4-7",
@@ -24,8 +26,12 @@ func TestDefaultModels_MatchesKiroReferenceModels(t *testing.T) {
 		"claude-opus-4-6-thinking",
 		"claude-opus-5",
 		"claude-opus-5-thinking",
+		"claude-opus-5-5",
+		"claude-opus-5-5-thinking",
 		"claude-sonnet-5",
 		"claude-sonnet-5-thinking",
+		"claude-sonnet-5-5",
+		"claude-sonnet-5-5-thinking",
 		"claude-sonnet-4-6",
 		"claude-sonnet-4-6-thinking",
 		"claude-opus-4-5-20251101",
@@ -34,6 +40,8 @@ func TestDefaultModels_MatchesKiroReferenceModels(t *testing.T) {
 		"claude-sonnet-4-5-20250929-thinking",
 		"claude-haiku-4-5-20251001",
 		"claude-haiku-4-5-20251001-thinking",
+		"claude-haiku-5-5",
+		"claude-haiku-5-5-thinking",
 	}, ids)
 
 	require.Contains(t, ids, "claude-sonnet-4-6")
@@ -59,4 +67,25 @@ func TestDefaultModels_MatchesKiroReferenceModels(t *testing.T) {
 		require.NotContains(t, id, "-agentic")
 		require.NotContains(t, id, "-chat")
 	}
+}
+
+func TestKiroCatalogIncludesSupported55AndNonClaudeModels(t *testing.T) {
+	ids := make([]string, 0, len(DefaultModels))
+	for _, model := range DefaultModels {
+		ids = append(ids, model.ID)
+	}
+	for public, upstream := range map[string]string{
+		"claude-opus-5-5":            "claude-opus-5.5",
+		"claude-opus-5-5-thinking":   "claude-opus-5.5",
+		"claude-sonnet-5-5":          "claude-sonnet-5.5",
+		"claude-sonnet-5-5-thinking": "claude-sonnet-5.5",
+		"claude-haiku-5-5":           "claude-haiku-5.5",
+		"claude-haiku-5-5-thinking":  "claude-haiku-5.5",
+		"kimi-k3":                    "kimi-k3",
+		"grok-4.7":                   "grok-4.7",
+	} {
+		require.Contains(t, ids, public)
+		require.Equal(t, upstream, MapModel(public))
+	}
+	require.Equal(t, "claude-haiku-5.5", MapModel("claude-haiku-5.5-thinking"))
 }

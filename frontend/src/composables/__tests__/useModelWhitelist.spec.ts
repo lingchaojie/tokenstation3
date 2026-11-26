@@ -6,6 +6,7 @@ vi.mock('@/api/admin/accounts', () => ({
 }))
 
 import {
+  appendKiroSyncedMappings,
   buildModelMappingObject,
   fetchKiroDefaultMappings,
   getModelsByPlatform,
@@ -377,5 +378,46 @@ describe('useModelWhitelist', () => {
       allowedModels: ['gpt-5.4'],
       modelMappings: [{ from: 'gpt-latest', to: 'gpt-5.4' }]
     })
+  })
+})
+
+describe('Kiro upstream model sync', () => {
+  it('keeps original upstream IDs and preserves configured routing', () => {
+    const current = [
+      { from: 'claude-opus-*', to: 'custom-opus' },
+      { from: 'kimi-k3', to: 'custom-kimi' },
+    ]
+    const result = appendKiroSyncedMappings(
+      current,
+      ['claude-opus-5-5', 'kimi-k3', 'claude-sonnet-6-1-2-thinking', 'relay.model', 'relay.model'],
+      { 'claude-opus-5-5': { id: 'claude-opus-5.5' }, 'claude-sonnet-6-1-2-thinking': { id: 'claude-sonnet-6.1.2' } }
+    )
+    expect(result).toEqual([
+      ...current,
+      { from: 'claude-sonnet-6-1-2-thinking', to: 'claude-sonnet-6.1.2' },
+      { from: 'relay.model', to: 'relay.model' },
+    ])
+  })
+
+  it('treats dotted and hyphenated Claude keys as equivalent for direct accounts', () => {
+    const current = [{ from: 'claude-sonnet-5.5', to: 'custom-sonnet' }]
+    const models = ['claude-sonnet-5-5']
+    const metadata = { 'claude-sonnet-5-5': { id: 'claude-sonnet-5.5' } }
+    expect(appendKiroSyncedMappings(current, models, metadata, true)).toEqual(current)
+    expect(appendKiroSyncedMappings(current, models, undefined, false)).toHaveLength(2)
+  })
+
+  it('offers Claude 5.5, Kimi K3 and Grok 4.7 in the Kiro catalog', () => {
+    const mappings = getPresetMappingsByPlatform('kiro')
+    for (const [from, to] of [
+      ['claude-opus-5-5-thinking', 'claude-opus-5.5'],
+      ['claude-sonnet-5-5', 'claude-sonnet-5.5'],
+      ['claude-haiku-5-5', 'claude-haiku-5.5'],
+      ['kimi-k3', 'kimi-k3'],
+      ['grok-4.7', 'grok-4.7'],
+    ]) {
+      expect(getModelsByPlatform('kiro')).toContain(from)
+      expect(mappings).toEqual(expect.arrayContaining([expect.objectContaining({ from, to })]))
+    }
   })
 })
