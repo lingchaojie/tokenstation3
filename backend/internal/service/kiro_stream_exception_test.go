@@ -314,3 +314,67 @@ func TestKiroAWSWebSearchExceptionKeepsSyntheticEventsStaged(t *testing.T) {
 	require.Equal(t, nativeFrame, attempts[1].ResponseBytes())
 	require.Equal(t, []captureTerminalState{captureCommitted}, attempts[1].TerminalStates())
 }
+
+func TestKiroAWSWebSearchLaterExceptionRetainsEmittedUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const endpoint = "https://q.us-east-1.amazonaws.com/mcp"
+	kiroWebSearchDescCache.Store(endpoint, "Search the web")
+	t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+
+	account := newKiroCacheTransactionAccount(820, "WEBSEARCH-INTERIM-USAGE")
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"tools":[{"type":"web_search_20250305","name":"web_search"}],"messages":[{"role":"user","content":"search for current events"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	var accepted bytes.Buffer
+	accepted.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "Check a related source."}))
+	accepted.Write(buildKiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseId": "toolu_search_again",
+		"name":      "remote_web_search",
+		"input":     map[string]any{"query": "related news"},
+		"stop":      true,
+	}))
+	accepted.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"tokenUsage":  map[string]any{"uncachedInputTokens": 31, "outputTokens": 13, "cacheReadInputTokens": 7},
+		"creditsUsed": 0.4,
+	}))
+	accepted.Write(buildKiroEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "tool_use"}))
+
+	var rejected bytes.Buffer
+	rejected.Write(buildKiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "discarded buffered text"}))
+	rejected.Write(buildKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"tokenUsage":  map[string]any{"uncachedInputTokens": 91, "outputTokens": 51},
+		"creditsUsed": 1.5,
+	}))
+	rejected.Write(kiroAWSFailureFrame(t, "", [2]string{":message-type", "error"}, [2]string{":error-code", "ThrottlingException"}))
+
+	const mcpBody = `{"jsonrpc":"2.0","id":"test","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusOK, mcpBody),
+		{StatusCode: http.StatusOK, Body: io.NopCloser(&accepted)},
+		newJSONResponse(http.StatusOK, mcpBody),
+		{StatusCode: http.StatusOK, Body: io.NopCloser(&rejected)},
+	}}
+	cooldown := &kiroAWSExceptionCooldownStore{}
+	svc := &GatewayService{httpUpstream: upstream, kiroCooldownStore: cooldown, tlsFPProfileService: &TLSFingerprintProfileService{}}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, err := svc.Forward(c.Request.Context(), c, account, parsed)
+	require.Error(t, err)
+	var failover *UpstreamFailoverError
+	require.NotErrorAs(t, err, &failover)
+	require.NotNil(t, result)
+	require.True(t, result.CaptureTerminalError)
+	require.False(t, result.CaptureResponseComplete)
+	require.Contains(t, rec.Body.String(), "Check a related source.")
+	require.Contains(t, rec.Body.String(), "rate_limit_error")
+	require.NotContains(t, rec.Body.String(), "discarded buffered text")
+	require.Len(t, upstream.requests, 4)
+	require.Equal(t, 1, cooldown.marks)
+	require.Equal(t, 31, result.Usage.InputTokens)
+	require.Equal(t, 13, result.Usage.OutputTokens)
+	require.Equal(t, 7, result.Usage.CacheReadInputTokens)
+	require.InDelta(t, 0.4, result.Usage.KiroCredits, 1e-9)
+}

@@ -131,6 +131,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	}
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	nextContentBlockIndex := 0
+	var lastEmittedResult *kiropkg.StreamResult
 
 	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, cachePlan.result()); err != nil {
 		return nil, err
@@ -203,9 +204,9 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		}()
 		finishRawCapture()
 		if streamErr != nil {
-			// The current iteration's chunks are still buffered, so none of
-			// its partial usage can be attributed to downstream output.
-			if failure := s.observeKiroStreamFailure(ctx, account, streamErr, resp, nil); failure != nil {
+			// Only earlier accepted iterations could have sent model output.
+			// The current attempt still owns failure and capture metadata.
+			if failure := s.observeKiroStreamFailure(ctx, account, streamErr, resp, lastEmittedResult); failure != nil {
 				return nil, failure
 			}
 			return streamResult, streamErr
@@ -221,6 +222,8 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 				return streamResult, err
 			}
 			if maxIndex := kiropkg.MaxContentBlockIndex(filtered); maxIndex >= nextContentBlockIndex {
+				// The filter drops the usage event along with the search tool.
+				lastEmittedResult = streamResult
 				nextContentBlockIndex = maxIndex + 1
 			}
 			query = analysis.WebSearchQuery
