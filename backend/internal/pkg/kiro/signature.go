@@ -1,6 +1,7 @@
 package kiro
 
 import (
+	"bytes"
 	"container/list"
 	"crypto/hmac"
 	"crypto/rand"
@@ -8,6 +9,19 @@ import (
 	"encoding/base64"
 	"sync"
 )
+
+// Our compatibility signature uses a fixed protobuf layout. Older Claude
+// clients can send it back verbatim, but it is not an upstream signature.
+func isSyntheticThinkingSignature(value string) bool {
+	const syntheticSize = 167
+	if len(value) != base64.StdEncoding.EncodedLen(syntheticSize) {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(value)
+	return err == nil && len(raw) == syntheticSize &&
+		bytes.HasPrefix(raw, []byte{0x12, 0xa4, 0x01, 0x0a, 0x02, 0x18, 0x02, 0x12, 0x0c}) &&
+		raw[21] == 0x1a && raw[22] == 0x20 && raw[55] == 0x22 && raw[56] == 0x6e
+}
 
 const signatureCacheMaxSize = 1000
 

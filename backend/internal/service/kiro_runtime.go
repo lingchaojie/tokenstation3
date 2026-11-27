@@ -627,10 +627,12 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 		return nil, requestCtx, err
 	}
 	requestCtx = buildResult.Context
+	basePayload := buildResult.Payload
+	retriedThinkingSignature := false
 
 	for idx, endpoint := range endpoints {
 		profileArn := kiroProfileArnForEndpoint(account, endpoint)
-		payload, err := s.retargetKiroPayloadForProfile(account, parsed, anthropicBody, modelID, buildResult.Payload, baseProfileArn, profileArn)
+		payload, err := s.retargetKiroPayloadForProfile(account, parsed, anthropicBody, modelID, basePayload, baseProfileArn, profileArn)
 		if err != nil {
 			return nil, requestCtx, err
 		}
@@ -765,6 +767,25 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				_ = resp.Body.Close()
 				if readErr != nil {
 					return nil, requestCtx, newTerminalProviderHTTPError(account, resp, respBody)
+				}
+				if !retriedThinkingSignature && isKiroThinkingSignatureRejection(respBody) {
+					stripped, removedTokens, stripErr := kiropkg.DropReplayedReasoning(basePayload)
+					if stripErr != nil {
+						return nil, requestCtx, stripErr
+					}
+					if stripped != nil {
+						abortKiroNativeCaptureAttempt(ctx)
+						basePayload = stripped
+						payload, err = s.retargetKiroPayloadForProfile(account, parsed, anthropicBody, modelID, basePayload, baseProfileArn, profileArn)
+						if err != nil {
+							return nil, requestCtx, err
+						}
+						requestCtx.EstimatedInputTokens = max(1, requestCtx.EstimatedInputTokens-removedTokens)
+						retriedThinkingSignature = true
+						// Signature recovery is a separate, one-request retry budget.
+						attempt--
+						continue
+					}
 				}
 				classification := classifyKiroHTTPError(resp.StatusCode, string(respBody))
 				logKiroBadRequestClassification(classification, account, mappedModel, resp.Header, respBody)

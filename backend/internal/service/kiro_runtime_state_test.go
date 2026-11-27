@@ -1441,6 +1441,50 @@ func TestExecuteKiroUpstreamInvalidModelDoesNotRefreshProfileArnOrRetry(t *testi
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/STALE", account.GetCredential("profile_arn"))
 }
 
+func TestExecuteKiroUpstreamRetriesRejectedHistoryOnlyOnce(t *testing.T) {
+	account := &Account{
+		ID: 42, Platform: PlatformKiro, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test-token", "api_region": "us-east-1"},
+	}
+	body := []byte(`{
+		"model":"claude-opus-5-5","thinking":{"type":"adaptive"},
+		"messages":[{"role":"user","content":"first"},
+		{"role":"assistant","content":[{"type":"thinking","thinking":"prior","signature":"rejected"},
+		{"type":"text","text":"answer"}]},
+		{"role":"user","content":"followup"}]
+	}`)
+	rejection := `{"reason":"THINKING_SIGNATURE_INVALID","message":"Invalid signature"}`
+	for _, tc := range []struct {
+		name, errorBody, body string
+		wantCalls             int
+	}{
+		{"rejected signed history", rejection, string(body), 2},
+		{"unrelated validation failure", `{"reason":"REQUEST_BODY_INVALID","message":"THINKING_SIGNATURE_INVALID"}`, string(body), 1},
+		{"no replayed history", rejection, `{"model":"claude-opus-5-5","messages":[{"role":"user","content":"hi"}]}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{
+				newJSONResponse(http.StatusBadRequest, tc.errorBody),
+				newJSONResponse(http.StatusBadRequest, rejection),
+			}}
+			svc := &GatewayService{httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{}, tlsFPProfileService: &TLSFingerprintProfileService{}}
+			resp, _, err := svc.executeKiroUpstream(context.Background(), account, []byte(tc.body), "claude-opus-5.5", "claude-opus-5-5", "test-token", nil)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			require.Len(t, upstream.requests, tc.wantCalls)
+			if tc.wantCalls == 2 {
+				first := string(snapshotHTTPRequestBody(upstream.requests[0]))
+				second := string(snapshotHTTPRequestBody(upstream.requests[1]))
+				require.Contains(t, first, `"reasoningContent":`)
+				require.NotContains(t, second, `"reasoningContent":`)
+				require.Contains(t, second, `"content":"answer"`)
+				require.Contains(t, second, `"content":"followup"`)
+			}
+		})
+	}
+}
+
 func TestExecuteKiroUpstreamAutoFallsBackFromQ429ToKRS(t *testing.T) {
 	originalRetrySleep := kiroRetrySleep
 	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }

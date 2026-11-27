@@ -97,6 +97,24 @@ func TestAnthropicStreamingEndTurn_MapsToCompleted(t *testing.T) {
 	assert.Nil(t, completed.Response.IncompleteDetails)
 }
 
+func TestAnthropicRefusalSurvivesCompatibleResponses(t *testing.T) {
+	raw := &AnthropicResponse{ID: "msg_refusal", StopReason: AnthropicStopReasonPtr("refusal")}
+	response := AnthropicToResponsesResponse(raw)
+	require.Equal(t, "incomplete", response.Status)
+	require.NotNil(t, response.IncompleteDetails)
+	require.Equal(t, "content_filter", response.IncompleteDetails.Reason)
+	require.Equal(t, "content_filter", ResponsesToChatCompletions(response, "claude-opus-5-5").Choices[0].FinishReason)
+
+	state := NewAnthropicEventToResponsesState()
+	AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_start", Message: raw}, state)
+	AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_delta", Delta: &AnthropicDelta{StopReason: "refusal"}}, state)
+	events := AnthropicEventToResponsesEvents(&AnthropicStreamEvent{Type: "message_stop"}, state)
+	require.Len(t, events, 1)
+	require.Equal(t, "response.incomplete", events[0].Type)
+	require.NotNil(t, events[0].Response.IncompleteDetails)
+	require.Equal(t, "content_filter", events[0].Response.IncompleteDetails.Reason)
+}
+
 func TestResponsesToChatCompletions_ContentFilter(t *testing.T) {
 	resp := &ResponsesResponse{
 		ID:     "resp_cf",

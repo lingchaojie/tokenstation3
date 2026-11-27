@@ -139,11 +139,7 @@ func AnthropicToResponsesResponse(resp *AnthropicResponse) *ResponsesResponse {
 	}
 	out.Output = outputs
 
-	// Map stop_reason → status
-	out.Status = anthropicStopReasonToResponsesStatus(AnthropicStopReasonString(resp.StopReason), resp.Content)
-	if out.Status == "incomplete" {
-		out.IncompleteDetails = &ResponsesIncompleteDetails{Reason: "max_output_tokens"}
-	}
+	out.Status, out.IncompleteDetails = anthropicResponsesTerminalState(AnthropicStopReasonString(resp.StopReason))
 
 	// Usage
 	// Anthropic's input_tokens excludes cache_read/cache_creation, while OpenAI
@@ -166,18 +162,6 @@ func AnthropicToResponsesResponse(resp *AnthropicResponse) *ResponsesResponse {
 	}
 
 	return out
-}
-
-// anthropicStopReasonToResponsesStatus maps Anthropic stop_reason to Responses status.
-func anthropicStopReasonToResponsesStatus(stopReason string, blocks []AnthropicContentBlock) string {
-	switch stopReason {
-	case "max_tokens":
-		return "incomplete"
-	case "end_turn", "tool_use", "stop_sequence":
-		return "completed"
-	default:
-		return "completed"
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +309,7 @@ func FinalizeAnthropicResponsesStream(state *AnthropicEventToResponsesState) []R
 	// Close any open item
 	events = append(events, closeCurrentResponsesItem(state)...)
 
-	status, incompleteDetails := anthropicResponsesStreamTerminalState(state.StopReason)
+	status, incompleteDetails := anthropicResponsesTerminalState(state.StopReason)
 	events = append(events, makeResponsesCompletedEvent(state, status, incompleteDetails))
 	state.CompletedSent = true
 	return events
@@ -672,7 +656,7 @@ func anthToResHandleMessageStop(state *AnthropicEventToResponsesState) []Respons
 	var events []ResponsesStreamEvent
 	events = append(events, closeCurrentResponsesItem(state)...)
 
-	status, incompleteDetails := anthropicResponsesStreamTerminalState(state.StopReason)
+	status, incompleteDetails := anthropicResponsesTerminalState(state.StopReason)
 	events = append(events, makeResponsesCompletedEvent(state, status, incompleteDetails))
 	state.CompletedSent = true
 	return events
@@ -680,11 +664,15 @@ func anthToResHandleMessageStop(state *AnthropicEventToResponsesState) []Respons
 
 // --- helper functions ---
 
-func anthropicResponsesStreamTerminalState(stopReason string) (string, *ResponsesIncompleteDetails) {
-	if stopReason == "max_tokens" {
+func anthropicResponsesTerminalState(stopReason string) (string, *ResponsesIncompleteDetails) {
+	switch stopReason {
+	case "max_tokens":
 		return "incomplete", &ResponsesIncompleteDetails{Reason: "max_output_tokens"}
+	case "refusal":
+		return "incomplete", &ResponsesIncompleteDetails{Reason: "content_filter"}
+	default:
+		return "completed", nil
 	}
-	return "completed", nil
 }
 
 // seedToolArguments normalizes a tool_use content block's inline input into a

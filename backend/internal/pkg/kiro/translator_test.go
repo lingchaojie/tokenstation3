@@ -2851,8 +2851,8 @@ func TestStreamEventStreamAsAnthropicIgnoresReasoningContentWhenThinkingDisabled
 
 	var out bytes.Buffer
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
-	require.NoError(t, err)
-	require.Equal(t, "end_turn", result.StopReason)
+	require.ErrorIs(t, err, ErrEmptyProviderReply)
+	require.Nil(t, result)
 	require.NotContains(t, out.String(), "hidden reasoning")
 	require.NotContains(t, out.String(), `"type":"thinking"`)
 }
@@ -2865,14 +2865,14 @@ func TestBuildAssistantMessageStructUsesSpacePlaceholderForToolOnly(t *testing.T
 		]
 	}`)
 
-	result := buildAssistantMessageStruct(msg, nil)
+	result := buildAssistantMessageStruct(msg, nil, true)
 	require.Equal(t, " ", result.Content)
 	require.Len(t, result.ToolUses, 1)
 	require.Equal(t, "read_file", result.ToolUses[0].Name)
 	require.Equal(t, "/tmp/test.txt", result.ToolUses[0].Input["path"])
 }
 
-func TestBuildAssistantMessageStructPreservesThinkingStartingWithApostrophe(t *testing.T) {
+func TestBuildAssistantMessageStructDropsUnsignedAndInlineThinking(t *testing.T) {
 	msg := gjson.Parse(`{
 		"role":"assistant",
 		"content":[
@@ -2882,11 +2882,44 @@ func TestBuildAssistantMessageStructPreservesThinkingStartingWithApostrophe(t *t
 		]
 	}`)
 
-	result := buildAssistantMessageStruct(msg, nil)
-	require.Contains(t, result.Content, "<thinking>I should look at the project structure to get a sense of what we're working with.")
-	require.Contains(t, result.Content, "'re working with.</thinking>")
-	require.NotContains(t, result.Content, "\n\n<thinking>'re working with.</thinking>")
+	result := buildAssistantMessageStruct(msg, nil, true)
+	require.Equal(t, " ", result.Content)
 	require.Len(t, result.ToolUses, 1)
+}
+
+func TestKiroReplaysSignedHistoryInNativeField(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5-5","thinking":{"type":"adaptive"},
+		"messages":[
+			{"role":"user","content":"look up status"},
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"native thought","signature":"signed-fixture"},
+				{"type":"text","text":"<think>old thought</think>\n\nvisible prose"},
+				{"type":"tool_use","id":"toolu_status","name":"lookup","input":{}}
+			]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_status","content":"online"}]}
+		]
+	}`)
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	history := gjson.GetBytes(result.Payload, "conversationState.history")
+	assistant := history.Get(`#(assistantResponseMessage.toolUses.0.toolUseId=="toolu_status").assistantResponseMessage`)
+	require.Equal(t, "visible prose", assistant.Get("content").String())
+	require.Equal(t, "native thought", assistant.Get("reasoningContent.reasoningText.text").String())
+	require.Equal(t, "signed-fixture", assistant.Get("reasoningContent.reasoningText.signature").String())
+	require.Equal(t, "toolu_status", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+}
+
+func TestKiroDoesNotReplayGatewayGeneratedSignatures(t *testing.T) {
+	const text = "gateway thinking"
+	sig := thinkingSignature(text, "claude-opus-5-5", "message-fixture")
+	input := gjson.Parse(fmt.Sprintf(`{"role":"assistant","content":[
+		{"type":"thinking","thinking":%q,"signature":%q}, {"type":"text","text":"answer"}
+	]}`, text, sig))
+	response, err := json.Marshal(buildAssistantMessageStruct(input, &KiroRequestContext{ThinkingEnabled: true}, true))
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(response, "reasoningContent").Exists())
+	require.Equal(t, "answer", gjson.GetBytes(response, "content").String())
 }
 
 func TestBuildKiroPayloadAddsPlaceholderToolForHistoryToolUse(t *testing.T) {
@@ -3210,6 +3243,7 @@ func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponse(t *testing.T) {
 			},
 		},
 	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "reply"}))
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
 		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
 	}))
@@ -3241,7 +3275,8 @@ func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponseUsesEstimatedInp
 			CacheCreationInputTokens: 3_900_000,
 		},
 	}
-	stream := bytes.NewBuffer(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "reply"}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
 		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
 	}))
 	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", requestCtx)
@@ -3249,7 +3284,7 @@ func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponseUsesEstimatedInp
 	require.Equal(t, 30, result.Usage.InputTokens)
 	require.Equal(t, 60, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 30, result.Usage.CacheCreationInputTokens)
-	require.Equal(t, 120, result.Usage.TotalTokens)
+	require.Equal(t, 120+result.Usage.OutputTokens, result.Usage.TotalTokens)
 }
 
 func TestKiroEmptyOrUnrecognizedEventStreamDoesNotSynthesizeSuccess(t *testing.T) {
@@ -3278,20 +3313,56 @@ func TestKiroEmptyOrUnrecognizedEventStreamDoesNotSynthesizeSuccess(t *testing.T
 	}
 }
 
-func TestKiroExplicitProviderStopAllowsEmptySuccess(t *testing.T) {
-	body := buildEventStreamFrame(t, "messageStopEvent", map[string]any{
-		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
-	})
-	result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), "claude-sonnet-4-6", KiroRequestContext{})
-	require.NoError(t, err)
-	require.Equal(t, "end_turn", result.StopReason)
-
+func TestKiroWhitespaceOnlyThinkingNeverCommits(t *testing.T) {
+	body := bytes.Join([][]byte{
+		buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{"text": " \n"}),
+		buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "end_turn"}),
+	}, nil)
 	var out bytes.Buffer
-	streamResult, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body), &out, "claude-sonnet-4-6", 3, KiroRequestContext{})
-	require.NoError(t, err)
-	require.Equal(t, "end_turn", streamResult.StopReason)
-	require.True(t, streamResult.ProviderTerminalObserved)
-	require.Contains(t, out.String(), "event: message_stop")
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body), &out, "claude-opus-5-5", 3, KiroRequestContext{ThinkingEnabled: true})
+	require.ErrorIs(t, err, ErrEmptyProviderReply)
+	require.Nil(t, result)
+	require.Empty(t, out.String())
+}
+
+func TestKiroEmptyTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, stop string
+		signatureOnly     bool
+		wantError         bool
+	}{
+		{"empty end turn", "messageStopEvent", "end_turn", false, true},
+		{"opaque reasoning", "messageStopEvent", "end_turn", true, true},
+		{"refusal", "messageStopEvent", "refusal", false, false},
+		{"assistant refusal", "assistantResponseEvent", "refusal", false, false},
+		{"output limit", "messageStopEvent", "max_tokens", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body []byte
+			if tc.signatureOnly {
+				body = buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{"signature": "opaque"})
+			}
+			body = append(body, buildEventStreamFrame(t, tc.event, map[string]any{
+				tc.event: map[string]any{"stopReason": tc.stop},
+			})...)
+			requestCtx := KiroRequestContext{ThinkingEnabled: true}
+			result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), "claude-opus-5-5", requestCtx)
+			var out bytes.Buffer
+			streamResult, streamErr := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body), &out, "claude-opus-5-5", 3, requestCtx)
+			if tc.wantError {
+				require.Error(t, err)
+				require.Error(t, streamErr)
+				require.Empty(t, out.String())
+				return
+			}
+			require.NoError(t, err)
+			require.NoError(t, streamErr)
+			require.Equal(t, tc.stop, gjson.GetBytes(result.ResponseBody, "stop_reason").String())
+			require.Equal(t, tc.stop, streamResult.StopReason)
+			require.True(t, streamResult.ProviderTerminalObserved)
+			require.Contains(t, out.String(), "event: message_stop")
+		})
+	}
 }
 
 func TestKiroStreamingCleanEOFExposesMissingProviderTerminal(t *testing.T) {
@@ -3348,7 +3419,7 @@ func TestKiroTranslatorsAcceptUsageTrailersAfterTerminal(t *testing.T) {
 		result, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), "claude-sonnet-4-6", KiroRequestContext{})
 		require.NoError(t, err)
 		require.True(t, result.ProviderTerminalObserved)
-		require.Equal(t, "END_TURN", result.StopReason)
+		require.Equal(t, "end_turn", result.StopReason)
 		require.Equal(t, "Hello", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
 		require.Equal(t, 0.375, result.Usage.KiroCredits)
 	})
@@ -3546,6 +3617,7 @@ func TestParseNonStreamingResolvesTotalAndOutputWithoutInput(t *testing.T) {
 					"totalTokens": 127, "outputTokens": 7,
 				}},
 			}))
+			_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "reply"}))
 			_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
 				"messageStopEvent": map[string]any{"stopReason": "end_turn"},
 			}))
@@ -3569,6 +3641,7 @@ func TestParseNonStreamingOutputOnlyUsesTranslatedInputFallback(t *testing.T) {
 		stream := bytes.NewBuffer(buildEventStreamFrame(t, "metadataEvent", map[string]any{
 			"metadataEvent": map[string]any{"tokenUsage": map[string]any{"outputTokens": 7}},
 		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "reply"}))
 		_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
 			"messageStopEvent": map[string]any{"stopReason": "end_turn"},
 		}))
@@ -3659,6 +3732,7 @@ func TestStreamResolvesTotalAndOutputWithoutInputWithAndWithoutSimulation(t *tes
 				"totalTokens": 127, "outputTokens": 7,
 			}},
 		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "reply"}))
 		_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
 			"messageStopEvent": map[string]any{"stopReason": "end_turn"},
 		}))
@@ -3675,7 +3749,8 @@ func TestStreamResolvesTotalAndOutputWithoutInputWithAndWithoutSimulation(t *tes
 
 func TestKiroCacheEmulationUsageInjectedIntoStreamAtProviderStopKeepsSingleNormalization(t *testing.T) {
 	var out bytes.Buffer
-	stream := bytes.NewBuffer(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{"content": "reply"}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
 		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
 	}))
 	result, err := StreamEventStreamAsAnthropicWithContext(

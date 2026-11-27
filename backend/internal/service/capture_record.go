@@ -2089,9 +2089,9 @@ func extractResponseColumnsForPlatform(resp []byte, stream bool, platform string
 		}
 	}
 	if platform == PlatformKiro && len(resp) > 0 {
-		if parsed, err := kiropkg.ParseNonStreamingEventStreamWithContext(bytes.NewReader(resp), "capture", kiropkg.KiroRequestContext{}); err == nil && parsed != nil {
-			setStringValue(parsed.StopReason)
-			presence := parsed.Usage.ProviderUsagePresence()
+		if usage, stopReason, err := kiropkg.ReadEventStreamMetadata(bytes.NewReader(resp)); err == nil {
+			setStringValue(stopReason)
+			presence := usage.ProviderUsagePresence()
 			setObservedToken := func(value int, observed bool, target *int, present *bool) {
 				if !observed || value < 0 || uint64(value) > uint64(^uint32(0)) {
 					return
@@ -2099,10 +2099,10 @@ func extractResponseColumnsForPlatform(resp []byte, stream bool, platform string
 				*target = value
 				*present = true
 			}
-			setObservedToken(parsed.Usage.InputTokens, presence.InputTokens, &cols.InputTokens, &cols.inputTokensPresent)
-			setObservedToken(parsed.Usage.OutputTokens, presence.OutputTokens, &cols.OutputTokens, &cols.outputTokensPresent)
-			setObservedToken(parsed.Usage.CacheReadInputTokens, presence.CacheReadTokens, &cols.CacheReadTokens, &cols.cacheReadPresent)
-			setObservedToken(parsed.Usage.CacheCreationInputTokens, presence.CacheCreationTokens, &cols.CacheCreationTokens, &cols.cacheCreatePresent)
+			setObservedToken(usage.InputTokens, presence.InputTokens, &cols.InputTokens, &cols.inputTokensPresent)
+			setObservedToken(usage.OutputTokens, presence.OutputTokens, &cols.OutputTokens, &cols.outputTokensPresent)
+			setObservedToken(usage.CacheReadInputTokens, presence.CacheReadTokens, &cols.CacheReadTokens, &cols.cacheReadPresent)
+			setObservedToken(usage.CacheCreationInputTokens, presence.CacheCreationTokens, &cols.CacheCreationTokens, &cols.cacheCreatePresent)
 			return cols
 		}
 	}

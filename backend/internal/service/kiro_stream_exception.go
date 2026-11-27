@@ -24,6 +24,19 @@ const (
 	kiroInputTooLongMessage      = "Input is too long. Reduce the size of your messages."
 )
 
+func isKiroThinkingSignatureRejection(body []byte) bool {
+	if !gjson.ValidBytes(body) {
+		return false
+	}
+	event := gjson.ParseBytes(body)
+	for _, field := range []string{"reason", "code", "error.reason", "error.code"} {
+		if event.Get(field).String() == "THINKING_SIGNATURE_INVALID" {
+			return true
+		}
+	}
+	return false
+}
+
 func kiroContextLengthClientMessage(status int, body []byte) (string, bool) {
 	if status != http.StatusBadRequest {
 		return "", false
@@ -40,15 +53,19 @@ func kiroContextLengthClientMessage(status int, body []byte) (string, bool) {
 }
 
 type kiroStreamFailure struct {
-	exception *kiropkg.UpstreamException
-	response  *http.Response
-	admission *UpstreamFailoverError
-	partial   *kiropkg.StreamResult
+	exception  *kiropkg.UpstreamException
+	response   *http.Response
+	admission  *UpstreamFailoverError
+	partial    *kiropkg.StreamResult
+	emptyReply *kiropkg.EmptyProviderReplyError
 }
 
 func (f *kiroStreamFailure) Error() string {
 	if f.admission != nil {
 		return f.admission.ClientMessage
+	}
+	if f.emptyReply != nil {
+		return f.emptyReply.Error()
 	}
 	return f.exception.Error()
 }
@@ -56,6 +73,14 @@ func (f *kiroStreamFailure) Error() string {
 // observeKiroStreamFailure runs at the native parser boundary, before the
 // downstream decides whether it can retry, must terminate, or disconnected.
 func (s *GatewayService) observeKiroStreamFailure(ctx context.Context, account *Account, err error, resp *http.Response, partial *kiropkg.StreamResult) *kiroStreamFailure {
+	var emptyReply *kiropkg.EmptyProviderReplyError
+	if errors.As(err, &emptyReply) {
+		return &kiroStreamFailure{
+			response:   resp,
+			partial:    partial,
+			emptyReply: emptyReply,
+		}
+	}
 	var exc *kiropkg.UpstreamException
 	if !errors.As(err, &exc) {
 		return nil
@@ -120,6 +145,9 @@ func (f *kiroStreamFailure) statusAndReason() (int, string) {
 	if f.admission != nil {
 		return f.admission.StatusCode, string(f.admission.Reason)
 	}
+	if f.emptyReply != nil {
+		return http.StatusBadGateway, ""
+	}
 	exc := f.exception
 	if reason := kiroQuotaReason(exc.Type, exc.Reason, exc.Code); reason != "" {
 		return http.StatusPaymentRequired, reason
@@ -146,6 +174,9 @@ func kiroExceptionHasContextLengthCode(exc *kiropkg.UpstreamException) bool {
 func (f *kiroStreamFailure) normalizedMessage(status int) string {
 	if f.admission != nil {
 		return f.admission.ClientMessage
+	}
+	if f.emptyReply != nil {
+		return "Kiro ended the turn without any output"
 	}
 	switch status {
 	case http.StatusBadRequest:
@@ -185,6 +216,24 @@ func (s *GatewayService) handleKiroStreamFailure(ctx context.Context, c *gin.Con
 		_, _ = takeCaptureResult(c)
 		clearUncommittedKiroSSEHeaders(c)
 		return failure.admission
+	}
+	if failure.emptyReply != nil {
+		message := failure.normalizedMessage(http.StatusBadGateway)
+		failover := newInvalidProviderResponseFailover(failure.response, message)
+		failover.Platform = PlatformKiro
+		failover.CaptureResponseIncomplete = !failure.emptyReply.ProviderTerminalObserved
+		setOpsUpstreamError(c, failover.HTTPStatusForCapture(), message, "")
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: failover.HTTPStatusForCapture(),
+			UpstreamRequestID:  buildKiroRequestID(failure.response),
+			Kind:               "failover",
+			Message:            message,
+		})
+		clearUncommittedKiroSSEHeaders(c)
+		return failover
 	}
 	status, reason := failure.statusAndReason()
 	message := failure.normalizedMessage(status)

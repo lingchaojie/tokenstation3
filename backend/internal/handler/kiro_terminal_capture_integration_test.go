@@ -400,13 +400,15 @@ func TestKiroRoutersFailOverEmptyOrUsageOnlyEventStreamWithoutCapturingOrBilling
 			handle:      func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
 		},
 		{
-			name:        "direct_stream_usage_only",
+			name:        "direct_stream_usage_only_with_terminal",
 			path:        EndpointMessages,
 			requestBody: `{"model":"claude-sonnet-4-6","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
 			firstBody: func(t *testing.T) []byte {
-				return buildHandlerKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+				usage := buildHandlerKiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 					"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"inputTokens": 2, "outputTokens": 0}},
 				})
+				stop := buildHandlerKiroEventStreamFrame(t, "messageStopEvent", map[string]any{"messageStopEvent": map[string]any{"stopReason": "end_turn"}})
+				return append(usage, stop...)
 			},
 			handle: func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
 		},

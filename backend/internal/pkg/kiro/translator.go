@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,6 +66,18 @@ const (
 )
 
 var ErrNoRecognizableProviderPayload = errors.New("kiro event stream contained no recognizable provider payload")
+
+var ErrEmptyProviderReply = errors.New("kiro ended the turn without any output")
+
+// EmptyProviderReplyError distinguishes a completed but empty provider turn
+// from a stream whose native terminal frame was never observed.
+type EmptyProviderReplyError struct {
+	ProviderTerminalObserved bool
+}
+
+func (*EmptyProviderReplyError) Error() string { return ErrEmptyProviderReply.Error() }
+
+func (*EmptyProviderReplyError) Unwrap() error { return ErrEmptyProviderReply }
 
 var (
 	requiredToolFields = map[string][][]string{
@@ -247,8 +260,9 @@ type KiroInputSchema struct {
 }
 
 type KiroAssistantResponseMessage struct {
-	Content  string        `json:"content"`
-	ToolUses []KiroToolUse `json:"toolUses,omitempty"`
+	Content          string                `json:"content"`
+	ToolUses         []KiroToolUse         `json:"toolUses,omitempty"`
+	ReasoningContent *kiroReasoningContent `json:"reasoningContent,omitempty"`
 }
 
 type KiroToolUse struct {
@@ -312,7 +326,6 @@ type kiroSemanticEvent struct {
 	ToolUse                *KiroToolUse
 	SourceEventType        string
 	RawEvent               map[string]any
-	SourceStopReason       string
 	IsDuplicateContent     bool
 	ContextUsagePercentage float64
 }
@@ -522,7 +535,7 @@ func BuildKiroPayloadWithRequestContext(ctx context.Context, claudeBody []byte, 
 	}
 	systemPrompt := buildInjectedSystemPrompt(extractSystemPrompt(claudeBody), promptThinking, toolChoiceHint)
 
-	history, currentUserMsg, currentToolResults := processMessages(ctx, normalizeInlineSystemMessages(messages), modelID, normalizeOrigin(origin), &requestCtx)
+	history, currentUserMsg, currentToolResults := processMessages(ctx, normalizeInlineSystemMessages(messages), modelID, normalizeOrigin(origin), &requestCtx, thinking != nil)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
 	var tools gjson.Result
 	if !isToolChoiceNone(claudeBody) {
@@ -604,6 +617,13 @@ func EstimateClaudeInputTokens(ctx context.Context, claudeBody []byte, modelID, 
 	return result.Context.EstimatedInputTokens, nil
 }
 
+// ReadEventStreamMetadata retains provider usage and the stop reason for
+// capture, even when the response is unusable as a client completion.
+func ReadEventStreamMetadata(body io.Reader) (Usage, string, error) {
+	_, _, usage, stopReason, _, err := parseEventStream(body)
+	return resolveKiroUsage(usage, 0), stopReason, err
+}
+
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
 	content, toolUses, usage, stopReason, providerTerminalObserved, err := parseEventStream(body)
 	if err != nil {
@@ -611,8 +631,15 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	}
 	usage = resolveKiroUsage(usage, requestCtx.EstimatedInputTokens)
 	usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
+	responseBody, stopReason, err := buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx)
+	if err != nil {
+		if errors.Is(err, ErrEmptyProviderReply) {
+			return nil, &EmptyProviderReplyError{ProviderTerminalObserved: providerTerminalObserved}
+		}
+		return nil, err
+	}
 	return &ParseResult{
-		ResponseBody:             buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
+		ResponseBody:             responseBody,
 		Usage:                    usage,
 		StopReason:               stopReason,
 		ProviderTerminalObserved: providerTerminalObserved,
@@ -639,6 +666,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	streamingToolBufferedBytes := 0
 	currentStreamingToolID := ""
 	toolBlockEmitted := false
+	contentEmitted := false
 	var pendingAssistantText strings.Builder
 	var pendingEmbeddedScan embeddedToolPendingScan
 	lastContentFragment := ""
@@ -648,6 +676,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	stopSequencePendingText := ""
 	thinkingBuffer := ""
 	var currentThinking strings.Builder
+	var leadingThinkingWhitespace strings.Builder
 	inThinkingBlock := false
 	stripThinkingLeadingNewline := false
 	currentMessageID := ""
@@ -731,6 +760,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": contentBlockIndex})
 	}
 	closeThinking := func() error {
+		leadingThinkingWhitespace.Reset()
 		if !thinkingBlockOpen {
 			return nil
 		}
@@ -1023,7 +1053,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return closeStreamingTool(toolUseID)
 	}
 	writeTextDelta := func(text string, allowWhitespace bool) error {
-		if text == "" {
+		if text == "" || (!textBlockOpen && strings.TrimSpace(text) == "") {
 			return nil
 		}
 		if !allowWhitespace {
@@ -1074,6 +1104,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := observeOutputForEstimate(text); err != nil {
 			return err
 		}
+		contentEmitted = contentEmitted || strings.TrimSpace(text) != ""
 		return writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": contentBlockIndex,
@@ -1274,7 +1305,21 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		})
 	}
 	emitThinkingDelta := func(text string) error {
+		if text == "" {
+			return nil
+		}
 		if !thinkingBlockOpen {
+			if strings.TrimSpace(text) == "" {
+				if len(text) > maxStreamingToolInputBytes-leadingThinkingWhitespace.Len() {
+					return errors.New("KIRO thinking block exceeded the bounded retained-content limit")
+				}
+				leadingThinkingWhitespace.WriteString(text)
+				return nil
+			}
+			if leadingThinkingWhitespace.Len() != 0 {
+				text = leadingThinkingWhitespace.String() + text
+				leadingThinkingWhitespace.Reset()
+			}
 			if err := startThinkingBlock(); err != nil {
 				return err
 			}
@@ -1287,6 +1332,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 				return err
 			}
 			_, _ = currentThinking.WriteString(text)
+			contentEmitted = contentEmitted || strings.TrimSpace(text) != ""
 		}
 		return writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
@@ -1318,9 +1364,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 					inThinkingBlock = true
 					stripThinkingLeadingNewline = true
 					thinkingBuffer = thinkingBuffer[startPos+len(thinkingStartTag):]
-					if err := startThinkingBlock(); err != nil {
-						return err
-					}
 					continue
 				}
 				safeLen := safeThinkingStreamFlushLen(thinkingBuffer, len(thinkingStartTag))
@@ -1410,22 +1453,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	applySemanticEvent := func(evt *kiroSemanticEvent) error {
 		if evt == nil {
 			return nil
-		}
-		// 仅接受 Anthropic 协议规定的 stop_reason 白名单值
-		// 上游中间帧若透传 pause_turn/refusal/stop_sequence 等新值会让客户端误判为终态
-		// 其余值忽略,等流真正 EOF 时由后续兜底分支按 tool_use/end_turn 处理
-		if evt.SourceStopReason != "" {
-			sourceStopReason := strings.ToLower(strings.TrimSpace(evt.SourceStopReason))
-			switch sourceStopReason {
-			case "max_tokens":
-				if stopReason != "stop_sequence" {
-					stopReason = sourceStopReason
-				}
-			case "end_turn", "tool_use":
-				if stopReason != "max_tokens" && stopReason != "stop_sequence" {
-					stopReason = sourceStopReason
-				}
-			}
 		}
 		switch evt.Type {
 		case kiroSemanticContent:
@@ -1547,6 +1574,21 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		if terminalEvent {
 			providerTerminalObserved = true
+			switch reason := kiroEventStopReason(msg.EventType, event); reason {
+			case "refusal":
+				stopReason = reason
+				stopSequenceMatched = ""
+			case "stop_sequence":
+				stopReason = reason
+			case "max_tokens":
+				if stopReason != "stop_sequence" {
+					stopReason = reason
+				}
+			case "end_turn", "tool_use":
+				if stopReason != "max_tokens" && stopReason != "stop_sequence" {
+					stopReason = reason
+				}
+			}
 		}
 	}
 	if !providerPayloadObserved && !outputLimitObserved {
@@ -1587,11 +1629,14 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return nil, err
 	}
 	usage = resolveKiroStreamUsage(usage, inputTokens, outputTextBuf.String(), nil)
-	if outputLimitObserved && stopReason != "stop_sequence" {
+	if outputLimitObserved && stopReason != "stop_sequence" && stopReason != "refusal" {
 		stopReason = "max_tokens"
 	}
+	if !contentEmitted && !toolBlockEmitted && !kiroCanFinishWithoutContent(stopReason) {
+		return nil, &EmptyProviderReplyError{ProviderTerminalObserved: providerTerminalObserved}
+	}
 	switch stopReason {
-	case "max_tokens", "stop_sequence":
+	case "max_tokens", "stop_sequence", "refusal":
 	case "":
 		if toolBlockEmitted {
 			stopReason = "tool_use"
@@ -2404,8 +2449,13 @@ func normalizeSchemaChild(key string, value any) any {
 	return value
 }
 
-func processMessages(ctx context.Context, messages []gjson.Result, modelID, origin string, requestCtx *KiroRequestContext) ([]KiroHistoryMessage, *KiroUserInputMessage, []KiroToolResult) {
+func processMessages(ctx context.Context, messages []gjson.Result, modelID, origin string, requestCtx *KiroRequestContext, replayReasoning bool) ([]KiroHistoryMessage, *KiroUserInputMessage, []KiroToolResult) {
 	messagesArray := mergeAdjacentMessages(messages)
+	replayReasoning = replayReasoning && strings.HasPrefix(modelID, "claude-")
+	reasoningFrom := 0
+	if replayReasoning && !keepsPriorKiroThinking(modelID) {
+		reasoningFrom = currentKiroTurnStart(messagesArray)
+	}
 
 	var history []KiroHistoryMessage
 	var currentUserMsg *KiroUserInputMessage
@@ -2428,7 +2478,7 @@ func processMessages(ctx context.Context, messages []gjson.Result, modelID, orig
 				history = append(history, KiroHistoryMessage{UserInputMessage: &userMsg})
 			}
 		case "assistant":
-			assistantMsg := buildAssistantMessageStruct(msg, requestCtx)
+			assistantMsg := buildAssistantMessageStruct(msg, requestCtx, replayReasoning && i >= reasoningFrom)
 			if last {
 				history = append(history, KiroHistoryMessage{AssistantResponseMessage: &assistantMsg})
 				currentUserMsg = &KiroUserInputMessage{
@@ -3027,24 +3077,29 @@ func kiroDocumentFormat(mediaType string) string {
 	return ""
 }
 
-func buildAssistantMessageStruct(msg gjson.Result, requestCtx *KiroRequestContext) KiroAssistantResponseMessage {
+func buildAssistantMessageStruct(msg gjson.Result, requestCtx *KiroRequestContext, replayReasoning bool) KiroAssistantResponseMessage {
 	content := msg.Get("content")
 	var contentBuilder strings.Builder
-	var thinkingBuilder strings.Builder
 	var toolUses []KiroToolUse
+	var reasoning *kiroReasoningContent
 
 	if content.IsArray() {
 		for _, part := range content.Array() {
 			switch part.Get("type").String() {
 			case "text":
-				appendAssistantTextPart(part.Get("text").String(), &contentBuilder, &thinkingBuilder)
-			case "thinking":
-				text := part.Get("thinking").String()
-				if text == "" {
-					text = part.Get("text").String()
-				}
-				if text != "" {
-					_, _ = thinkingBuilder.WriteString(text)
+				contentBuilder.WriteString(stripReplayedInlineThinking(part.Get("text").String()))
+			case "thinking", "redacted_thinking":
+				if replayReasoning {
+					if block := replayedKiroReasoning(part); block != nil {
+						if reasoning == nil {
+							reasoning = block
+						} else {
+							// generateAssistantResponse accepts one block per history message.
+							// Sending part of the signed reasoning can invalidate the chain.
+							reasoning = nil
+							replayReasoning = false
+						}
+					}
 				}
 			case "tool_use":
 				toolName := mapKiroToolName(part.Get("name").String(), requestCtx)
@@ -3064,57 +3119,17 @@ func buildAssistantMessageStruct(msg gjson.Result, requestCtx *KiroRequestContex
 			}
 		}
 	} else {
-		appendAssistantTextPart(content.String(), &contentBuilder, &thinkingBuilder)
+		contentBuilder.WriteString(stripReplayedInlineThinking(content.String()))
 	}
 
 	finalContent := contentBuilder.String()
-	if thinkingText := thinkingBuilder.String(); thinkingText != "" {
-		if strings.TrimSpace(finalContent) != "" {
-			finalContent = thinkingStartTag + thinkingText + thinkingEndTag + "\n\n" + finalContent
-		} else {
-			finalContent = thinkingStartTag + thinkingText + thinkingEndTag
-		}
-	}
 	if strings.TrimSpace(finalContent) == "" {
 		finalContent = " "
 	}
 	return KiroAssistantResponseMessage{
-		Content:  finalContent,
-		ToolUses: toolUses,
-	}
-}
-
-func appendAssistantTextPart(text string, contentBuilder, thinkingBuilder *strings.Builder) {
-	if text == "" {
-		return
-	}
-	if findRealThinkingStartTag(text, 0) == -1 {
-		_, _ = contentBuilder.WriteString(text)
-		return
-	}
-	pos := 0
-	for pos < len(text) {
-		start := findRealThinkingStartTag(text, pos)
-		if start == -1 {
-			_, _ = contentBuilder.WriteString(text[pos:])
-			return
-		}
-		if start > pos {
-			_, _ = contentBuilder.WriteString(text[pos:start])
-		}
-		end := findRealThinkingEndTag(text, start+len(thinkingStartTag))
-		if end == -1 {
-			_, _ = contentBuilder.WriteString(text[start:])
-			return
-		}
-		thinking := strings.TrimPrefix(text[start+len(thinkingStartTag):end], "\n")
-		if thinking != "" {
-			_, _ = thinkingBuilder.WriteString(thinking)
-		}
-		pos = end + len(thinkingEndTag)
-		if strings.HasPrefix(text[pos:], "\n\n") {
-			pos += len("\n\n")
-		}
+		Content:          finalContent,
+		ToolUses:         toolUses,
+		ReasoningContent: reasoning,
 	}
 }
 
@@ -3314,7 +3329,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 		if kiroProviderPayloadRecognized(msg.EventType, event, semanticEvents) {
 			providerPayloadObserved = true
 		}
-		if sr := readStopReason(event); sr != "" {
+		if sr := kiroEventStopReason(msg.EventType, event); sr != "" {
 			stopReason = sr
 		}
 		switch msg.EventType {
@@ -3325,9 +3340,6 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 				_, _ = content.WriteString(text)
 			} else if text := getString(event, "content"); text != "" {
 				_, _ = content.WriteString(text)
-			}
-			if sr := readStopReason(assistant); sr != "" {
-				stopReason = sr
 			}
 			for _, tool := range readToolUses(assistant, event) {
 				if err := appendToolUse(tool, toolUseSourceAggregate); err != nil {
@@ -3411,11 +3423,11 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, boo
 			usage.TotalTokens = total
 		}
 	}
-	if outputLimitObserved && stopReason != "stop_sequence" {
+	if outputLimitObserved && stopReason != "stop_sequence" && stopReason != "refusal" {
 		stopReason = "max_tokens"
 	}
 	switch stopReason {
-	case "max_tokens", "stop_sequence":
+	case "max_tokens", "stop_sequence", "refusal":
 	default:
 		if hasUsableToolUses(toolUses) {
 			stopReason = "tool_use"
@@ -3462,7 +3474,30 @@ func kiroProviderTerminalEvent(eventType string, event map[string]any) bool {
 	if eventType == "messageStopEvent" || eventType == "message_stop" {
 		return true
 	}
-	return readStopReason(event) != "" || readStopReason(nestedEvent(event, eventType)) != ""
+	return kiroEventStopReason(eventType, event) != ""
+}
+
+func kiroEventStopReason(eventType string, event map[string]any) string {
+	reason := readStopReason(nestedEvent(event, eventType))
+	if reason == "" {
+		reason = readStopReason(event)
+	}
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	switch reason {
+	case "content_filter", "content_filtered", "guardrail_intervened":
+		return "refusal"
+	default:
+		return reason
+	}
+}
+
+func kiroCanFinishWithoutContent(stopReason string) bool {
+	switch stopReason {
+	case "refusal", "max_tokens", "stop_sequence":
+		return true
+	default:
+		return false
+	}
 }
 
 // Kiro can send context telemetry and credit metering after the terminal response.
@@ -3890,12 +3925,12 @@ func validateKiroTokenCounters(values map[string]any) error {
 	return nil
 }
 
-func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, requestCtx KiroRequestContext) []byte {
+func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, requestCtx KiroRequestContext) ([]byte, string, error) {
 	msgID := newClaudeMessageID()
 	var blocks []map[string]any
 	blocks = append(blocks, extractThinkingBlocksWithSignature(content, model, msgID)...)
 	stopSequence := ""
-	if len(toolUses) == 0 {
+	if len(toolUses) == 0 && stopReason != "refusal" {
 		if nextBlocks, matched := applyStopSequencesToTextBlocks(blocks, requestCtx.StopSequences); matched != "" {
 			blocks = nextBlocks
 			stopReason = "stop_sequence"
@@ -3920,8 +3955,10 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 		}
 		toolUses = remainingTools
 		blocks = append(blocks, map[string]any{"type": "text", "text": structuredText})
-		stopReason = "end_turn"
-		stopSequence = ""
+		if stopReason != "refusal" {
+			stopReason = "end_turn"
+			stopSequence = ""
+		}
 	}
 	usableTools := 0
 	for _, tool := range toolUses {
@@ -3936,6 +3973,14 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 			"input": tool.Input,
 		})
 	}
+	if usableTools == 0 && !kiroCanFinishWithoutContent(stopReason) {
+		hasContent := slices.ContainsFunc(blocks, func(block map[string]any) bool {
+			return strings.TrimSpace(getString(block, "text")) != "" || strings.TrimSpace(getString(block, "thinking")) != ""
+		})
+		if !hasContent {
+			return nil, "", ErrEmptyProviderReply
+		}
+	}
 	// 移除"thinking-only 强制 max_tokens"误判分支(与流式路径同步)
 	// 非流式响应若仅有 thinking 块,补一个空 text 块保证协议完整性,但不强设 stop_reason
 	if hasThinkingBlocksOnly(blocks) && usableTools == 0 {
@@ -3945,7 +3990,7 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 		blocks = append(blocks, map[string]any{"type": "text", "text": ""})
 	}
 	switch stopReason {
-	case "max_tokens", "stop_sequence":
+	case "max_tokens", "stop_sequence", "refusal":
 	default:
 		if usableTools > 0 {
 			stopReason = "tool_use"
@@ -3963,8 +4008,8 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 		"usage":       buildKiroClaudeUsageMap(usage),
 	}
 	response["stop_sequence"] = nullableStopSequence(stopSequence)
-	result, _ := json.Marshal(response)
-	return result
+	result, err := json.Marshal(response)
+	return result, stopReason, err
 }
 
 func nullableStopSequence(stopSequence string) any {
@@ -4582,20 +4627,15 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		return nil
 	}
 	var out []kiroSemanticEvent
-	sourceStopReason := readStopReason(event)
 
 	switch eventType {
 	case "assistantResponseEvent":
 		assistant := nestedEvent(event, "assistantResponseEvent")
-		if sr := readStopReason(assistant); sr != "" {
-			sourceStopReason = sr
-		}
 		if text := getString(assistant, "content"); text != "" {
 			dup := lastContentFragment != nil && *lastContentFragment == text
 			out = append(out, kiroSemanticEvent{
 				Type:               kiroSemanticContent,
 				Content:            text,
-				SourceStopReason:   sourceStopReason,
 				IsDuplicateContent: dup,
 			})
 		} else if text := getString(event, "content"); text != "" {
@@ -4603,16 +4643,14 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 			out = append(out, kiroSemanticEvent{
 				Type:               kiroSemanticContent,
 				Content:            text,
-				SourceStopReason:   sourceStopReason,
 				IsDuplicateContent: dup,
 			})
 		}
 		for _, tool := range readToolUses(assistant, event) {
 			toolCopy := tool
 			out = append(out, kiroSemanticEvent{
-				Type:             kiroSemanticAssistantTU,
-				ToolUse:          &toolCopy,
-				SourceStopReason: sourceStopReason,
+				Type:    kiroSemanticAssistantTU,
+				ToolUse: &toolCopy,
 			})
 		}
 	case "reasoningContentEvent":
@@ -4623,9 +4661,8 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		}
 		if text != "" {
 			out = append(out, kiroSemanticEvent{
-				Type:             kiroSemanticReasoning,
-				Reasoning:        text,
-				SourceStopReason: sourceStopReason,
+				Type:      kiroSemanticReasoning,
+				Reasoning: text,
 			})
 		}
 	case "toolUseEvent":
@@ -4640,74 +4677,66 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 				inputSeen = true
 				if toolUseID != "" && name != "" {
 					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolUse,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInput:        v,
-						ToolStop:         isStop,
-						SourceStopReason: sourceStopReason,
+						Type:      kiroSemanticToolUse,
+						ToolUseID: toolUseID,
+						ToolName:  name,
+						ToolInput: v,
+						ToolStop:  isStop,
 					})
 				} else if toolUseID != "" {
 					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolInput,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInput:        v,
-						SourceStopReason: sourceStopReason,
+						Type:      kiroSemanticToolInput,
+						ToolUseID: toolUseID,
+						ToolName:  name,
+						ToolInput: v,
 					})
 				}
 			case map[string]any:
 				inputSeen = true
 				if toolUseID != "" && name != "" {
 					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolUse,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInputMap:     v,
-						ToolStop:         isStop,
-						SourceStopReason: sourceStopReason,
+						Type:         kiroSemanticToolUse,
+						ToolUseID:    toolUseID,
+						ToolName:     name,
+						ToolInputMap: v,
+						ToolStop:     isStop,
 					})
 				} else if toolUseID != "" {
 					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolInput,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInputMap:     v,
-						SourceStopReason: sourceStopReason,
+						Type:         kiroSemanticToolInput,
+						ToolUseID:    toolUseID,
+						ToolName:     name,
+						ToolInputMap: v,
 					})
 				}
 			}
 		}
 		if !inputSeen && toolUseID != "" && name != "" {
 			out = append(out, kiroSemanticEvent{
-				Type:             kiroSemanticToolUse,
-				ToolUseID:        toolUseID,
-				ToolName:         name,
-				SourceStopReason: sourceStopReason,
+				Type:      kiroSemanticToolUse,
+				ToolUseID: toolUseID,
+				ToolName:  name,
 			})
 		}
 		if isStop {
 			out = append(out, kiroSemanticEvent{
-				Type:             kiroSemanticToolStop,
-				ToolUseID:        toolUseID,
-				ToolName:         name,
-				ToolStop:         true,
-				SourceStopReason: sourceStopReason,
+				Type:      kiroSemanticToolStop,
+				ToolUseID: toolUseID,
+				ToolName:  name,
+				ToolStop:  true,
 			})
 		}
 	case "messageMetadataEvent", "metadataEvent", "supplementaryWebLinksEvent", "usageEvent", "messageStopEvent", "message_stop", "meteringEvent":
 		out = append(out, kiroSemanticEvent{
-			Type:             kiroSemanticUsage,
-			SourceEventType:  eventType,
-			RawEvent:         event,
-			SourceStopReason: sourceStopReason,
+			Type:            kiroSemanticUsage,
+			SourceEventType: eventType,
+			RawEvent:        event,
 		})
 	default:
 		out = append(out, kiroSemanticEvent{
-			Type:             kiroSemanticUsage,
-			SourceEventType:  eventType,
-			RawEvent:         event,
-			SourceStopReason: sourceStopReason,
+			Type:            kiroSemanticUsage,
+			SourceEventType: eventType,
+			RawEvent:        event,
 		})
 	}
 

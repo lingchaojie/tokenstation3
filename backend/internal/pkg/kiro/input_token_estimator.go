@@ -61,6 +61,9 @@ func estimateKiroUserMessageTokens(ctx context.Context, message KiroUserInputMes
 
 func estimateKiroAssistantMessageTokens(message KiroAssistantResponseMessage) int {
 	total := kiroEstimatedTokensPerMessage + anthropictokenizer.CountTokens(message.Content)
+	if message.ReasoningContent != nil && message.ReasoningContent.ReasoningText != nil {
+		total += anthropictokenizer.CountTokens(message.ReasoningContent.ReasoningText.Text)
+	}
 	for _, toolUse := range message.ToolUses {
 		total += kiroEstimatedTokensPerTool
 		total += anthropictokenizer.CountTokens(toolUse.Name)

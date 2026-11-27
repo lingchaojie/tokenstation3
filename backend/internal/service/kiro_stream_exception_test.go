@@ -122,6 +122,49 @@ func TestKiroAWSStreamExceptionBeforeOutputUsesEndpointValidationFormat(t *testi
 	}
 }
 
+func TestKiroRejectsEmptyTerminalAcrossGatewayEndpoints(t *testing.T) {
+	frame := kiroAWSFailureFrame(t, `{"messageStopEvent":{"stopReason":"end_turn"}}`,
+		[2]string{":message-type", "event"}, [2]string{":event-type", "messageStopEvent"})
+	for _, endpoint := range []string{"messages", "chat", "responses"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream_%t", endpoint, stream), func(t *testing.T) {
+				result, err, rec, repo, cooldown := forwardKiroAWSFrames(t, endpoint, stream, http.StatusOK, frame)
+				require.Nil(t, result)
+				var failure *UpstreamFailoverError
+				require.ErrorAs(t, err, &failure)
+				require.True(t, failure.ShouldRetryNextAccount())
+				require.False(t, failure.RetryableOnSameAccount)
+				require.Equal(t, http.StatusBadGateway, failure.StatusCode)
+				require.Equal(t, http.StatusOK, failure.HTTPStatusForCapture())
+				require.False(t, failure.CaptureResponseIncomplete)
+				require.Empty(t, rec.Body.String())
+				require.False(t, repo.rateCalled)
+				require.Zero(t, cooldown.marks)
+			})
+		}
+	}
+}
+
+func TestKiroPreservesAnExplicitRefusalAcrossGatewayEndpoints(t *testing.T) {
+	frame := kiroAWSFailureFrame(t, `{"messageStopEvent":{"stopReason":"refusal"}}`,
+		[2]string{":message-type", "event"}, [2]string{":event-type", "messageStopEvent"})
+	for _, endpoint := range []string{"messages", "chat", "responses"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream_%t", endpoint, stream), func(t *testing.T) {
+				result, err, rec, _, _ := forwardKiroAWSFrames(t, endpoint, stream, http.StatusOK, frame)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, http.StatusOK, rec.Code)
+				if endpoint == "messages" {
+					require.Contains(t, rec.Body.String(), `"stop_reason":"refusal"`)
+				} else {
+					require.Contains(t, rec.Body.String(), "content_filter")
+				}
+			})
+		}
+	}
+}
+
 func TestKiroAWSStreamExceptionAfterOutputKeepsPartialUsage(t *testing.T) {
 	for _, endpoint := range []string{"messages", "chat", "responses"} {
 		t.Run(endpoint, func(t *testing.T) {
