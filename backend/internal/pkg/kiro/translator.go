@@ -1313,7 +1313,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 				if len(text) > maxStreamingToolInputBytes-leadingThinkingWhitespace.Len() {
 					return errors.New("KIRO thinking block exceeded the bounded retained-content limit")
 				}
-				leadingThinkingWhitespace.WriteString(text)
+				_, _ = leadingThinkingWhitespace.WriteString(text)
 				return nil
 			}
 			if leadingThinkingWhitespace.Len() != 0 {
@@ -3087,7 +3087,7 @@ func buildAssistantMessageStruct(msg gjson.Result, requestCtx *KiroRequestContex
 		for _, part := range content.Array() {
 			switch part.Get("type").String() {
 			case "text":
-				contentBuilder.WriteString(stripReplayedInlineThinking(part.Get("text").String()))
+				_, _ = contentBuilder.WriteString(stripReplayedInlineThinking(part.Get("text").String()))
 			case "thinking", "redacted_thinking":
 				if replayReasoning {
 					if block := replayedKiroReasoning(part); block != nil {
@@ -3119,7 +3119,7 @@ func buildAssistantMessageStruct(msg gjson.Result, requestCtx *KiroRequestContex
 			}
 		}
 	} else {
-		contentBuilder.WriteString(stripReplayedInlineThinking(content.String()))
+		_, _ = contentBuilder.WriteString(stripReplayedInlineThinking(content.String()))
 	}
 
 	finalContent := contentBuilder.String()

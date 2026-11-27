@@ -58,7 +58,7 @@ func currentKiroTurnStart(messages []gjson.Result) int {
 
 func startsKiroTextTurn(text string) bool {
 	text = strings.TrimSpace(text)
-	return text != "" && !(strings.HasPrefix(text, "<system-reminder>") && strings.HasSuffix(text, "</system-reminder>"))
+	return text != "" && (!strings.HasPrefix(text, "<system-reminder>") || !strings.HasSuffix(text, "</system-reminder>"))
 }
 
 // generateAssistantResponse carries one native reasoning block per assistant message.
