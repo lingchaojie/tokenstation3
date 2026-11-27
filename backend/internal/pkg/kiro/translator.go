@@ -3534,7 +3534,8 @@ func kiroUsageTrailerPayload(msg *eventStreamMessage) gjson.Result {
 }
 
 var kiroNarrowEventFields = map[string]struct{}{
-	"content": {}, "text": {}, "toolUses": {}, "toolUseId": {}, "name": {},
+	"content": {}, "text": {}, "signature": {}, "redactedContent": {},
+	"toolUses": {}, "toolUseId": {}, "name": {},
 	"input": {}, "stop": {}, "stop_reason": {}, "stopReason": {},
 	"tokenUsage": {}, "usage": {},
 	"inputTokens": {}, "uncachedInputTokens": {}, "outputTokens": {}, "totalTokens": {},
@@ -3757,7 +3758,12 @@ func validateKiroKnownEventShape(eventType string, event map[string]any) error {
 			return errors.New("assistant response event omitted content, toolUses, and stop reason")
 		}
 	case "reasoningContentEvent":
-		if _, ok := payload["text"].(string); !ok {
+		text := payload["text"]
+		// Kiro can deliver a signature or redacted chunk separately from visible reasoning.
+		if text == nil && (nonEmptyKiroString(payload, "signature") || nonEmptyKiroString(payload, "redactedContent")) {
+			break
+		}
+		if _, ok := text.(string); !ok {
 			return errors.New("reasoning content text must be a string")
 		}
 	case "toolUseEvent":

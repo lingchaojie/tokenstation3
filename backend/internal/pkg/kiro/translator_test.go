@@ -1819,7 +1819,12 @@ func TestKiroTranslatorsRejectMalformedKnownEventsBeforeLaterStop(t *testing.T) 
 		{
 			name:      "reasoning text type",
 			eventType: "reasoningContentEvent",
-			payload:   map[string]any{"reasoningContentEvent": map[string]any{"text": []any{"bad"}}},
+			payload:   map[string]any{"reasoningContentEvent": map[string]any{"text": []any{"bad"}, "signature": "synthetic"}},
+		},
+		{
+			name:      "reasoning metadata type",
+			eventType: "reasoningContentEvent",
+			payload:   map[string]any{"reasoningContentEvent": map[string]any{"signature": 123, "redactedContent": []any{"bad"}}},
 		},
 		{
 			name:      "aggregate tool shape",
@@ -1856,6 +1861,49 @@ func TestKiroTranslatorsRejectMalformedKnownEventsBeforeLaterStop(t *testing.T) 
 			require.Error(t, err)
 			require.Nil(t, streamResult)
 			require.Empty(t, out.Bytes())
+		})
+	}
+}
+
+func TestKiroReasoningMetadataDoesNotInterruptToolUse(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		payload map[string]any
+	}{
+		{"signature", map[string]any{"signature": "synthetic-signature"}},
+		{"wrapped_redacted", map[string]any{"reasoningContentEvent": map[string]any{"redactedContent": "dGVzdA=="}}},
+		{"null_text", map[string]any{"text": nil, "signature": "synthetic-signature"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := bytes.Join([][]byte{
+				buildEventStreamFrame(t, "reasoningContentEvent", tt.payload),
+				buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+					"toolUseId": "toolu_probe", "name": "read_probe_status", "input": map[string]any{"value": 7}, "stop": true,
+				}),
+				buildEventStreamFrame(t, "messageStopEvent", map[string]any{"stopReason": "tool_use"}),
+				buildEventStreamFrame(t, "meteringEvent", map[string]any{"unit": "credit", "unitPlural": "credits", "usage": 0.125}),
+			}, nil)
+
+			const model = "claude-haiku-5-5"
+			nonstream, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader(body), model, KiroRequestContext{})
+			require.NoError(t, err)
+			require.Equal(t, "tool_use", nonstream.StopReason)
+			require.Equal(t, "read_probe_status", gjson.GetBytes(nonstream.ResponseBody, "content.0.name").String())
+			require.Equal(t, int64(7), gjson.GetBytes(nonstream.ResponseBody, "content.0.input.value").Int())
+			require.Equal(t, 0.125, nonstream.Usage.KiroCredits)
+			require.NotContains(t, string(nonstream.ResponseBody), "synthetic-signature")
+			require.NotContains(t, string(nonstream.ResponseBody), "dGVzdA==")
+
+			var out bytes.Buffer
+			stream, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(body), &out, model, 3, KiroRequestContext{})
+			require.NoError(t, err)
+			require.Equal(t, "tool_use", stream.StopReason)
+			require.Equal(t, 0.125, stream.Usage.KiroCredits)
+			require.Contains(t, out.String(), `"name":"read_probe_status"`)
+			require.Contains(t, out.String(), `\"value\":7`)
+			require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+			require.NotContains(t, out.String(), "synthetic-signature")
+			require.NotContains(t, out.String(), "dGVzdA==")
 		})
 	}
 }
@@ -3212,6 +3260,7 @@ func TestKiroEmptyOrUnrecognizedEventStreamDoesNotSynthesizeSuccess(t *testing.T
 		{name: "empty"},
 		{name: "unrecognized", body: buildEventStreamFrame(t, "unknownEvent", map[string]any{"unknownEvent": map[string]any{}})},
 		{name: "usage_only", body: buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"inputTokens": 3, "outputTokens": 0}}})},
+		{name: "opaque_reasoning_only", body: buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{"signature": "synthetic-signature"})},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"_nonstream", func(t *testing.T) {
