@@ -657,13 +657,13 @@ func TestKiroRoutersFailOverEmptyOrUsageOnlyEventStreamWithoutCapturingOrBilling
 			handle: func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
 		},
 		{
-			name:        "direct_stream_metering_after_stop",
+			name:        "direct_stream_invalid_metering_after_stop",
 			path:        EndpointMessages,
 			requestBody: `{"model":"claude-sonnet-4-6","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
 			firstBody: func(t *testing.T) []byte {
 				return append(
 					buildHandlerKiroEventStreamFrame(t, "messageStopEvent", map[string]any{"messageStopEvent": map[string]any{"stopReason": "end_turn"}}),
-					buildHandlerKiroEventStreamFrame(t, "meteringEvent", map[string]any{"meteringEvent": map[string]any{"usage": 999.0}})...,
+					buildHandlerKiroEventStreamFrame(t, "meteringEvent", map[string]any{"meteringEvent": map[string]any{"usage": 999.0, "content": "first-leak"}})...,
 				)
 			},
 			handle: func(h *GatewayHandler, c *gin.Context) { h.Messages(c) },
